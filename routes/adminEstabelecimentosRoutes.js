@@ -1,4 +1,3 @@
-
 const express = require("express");
 const router = express.Router();
 const db = require("../db/supabaseAdmin"); // Cliente SUPABASE ADMIN (service_role)
@@ -111,7 +110,8 @@ router.put("/:id", async (req, res) => {
       endereco_completo,
       status_assinatura,
       data_vencimento,
-      logo_url
+      logo_url,
+      tipo_estabelecimento
     } = req.body;
 
     const { data, error } = await db
@@ -124,7 +124,8 @@ router.put("/:id", async (req, res) => {
         endereco_completo,
         status_assinatura,
         data_vencimento,
-        logo_url
+        logo_url,
+        tipo_estabelecimento
       })
       .eq("id", id)
       .select()
@@ -145,7 +146,7 @@ router.put("/:id", async (req, res) => {
 // =======================================================
 router.post("/criar", async (req, res) => {
   try {
-    const { nome, cnpj, telefone, email, senha } = req.body;
+    const { nome, cnpj, telefone, email, senha, tipo_estabelecimento } = req.body;
 
     // Criar usuário no Auth
     const { data: userData, error: userErr } = await db.auth.admin.createUser({
@@ -170,6 +171,7 @@ router.post("/criar", async (req, res) => {
         logo_url: null,
         endereco_completo: null,
         data_vencimento: null,
+        tipo_estabelecimento: tipo_estabelecimento || "mercearia"
       })
       .select()
       .single();
@@ -285,7 +287,6 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-
 // =======================================================
 // EXCLUSÃO PERMANENTE (BACKUP + REMOÇÃO DEFINITIVA)
 // =======================================================
@@ -293,7 +294,6 @@ router.delete("/:id/apagar-definitivo", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // 1) Buscar registro
     const { data: merc, error: errBusca } = await db
       .from("mercearias")
       .select("*")
@@ -303,7 +303,6 @@ router.delete("/:id/apagar-definitivo", async (req, res) => {
     if (errBusca || !merc)
       return res.status(400).json({ error: "Mercearia não encontrada" });
 
-    // 2) Salvar backup
     const { error: backupErr } = await db
       .from("mercearias_backup")
       .insert({
@@ -313,7 +312,6 @@ router.delete("/:id/apagar-definitivo", async (req, res) => {
 
     if (backupErr) return res.status(400).json({ error: "Erro ao salvar backup" });
 
-    // 3) Remover logo, se existir
     if (merc.logo_url) {
       const baseUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/logos/`;
       const path = merc.logo_url.replace(baseUrl, "");
@@ -321,7 +319,6 @@ router.delete("/:id/apagar-definitivo", async (req, res) => {
       await db.storage.from("logos").remove([path]);
     }
 
-    // 4) Remover definitivamente
     const { error: delErr } = await db
       .from("mercearias")
       .delete()
