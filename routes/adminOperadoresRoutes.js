@@ -7,16 +7,16 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 /* ============================================================
    LISTAR OPERADORES DE UMA MERCEARIA
-   GET /admin/operadores/:merceariaId
+   GET /admin/operadores/:estabelecimentoId
 ============================================================ */
-router.get("/:merceariaId", async (req, res) => {
+router.get("/:estabelecimentoId", async (req, res) => {
   try {
-    const { merceariaId } = req.params;
+    const { estabelecimentoId } = req.params;
 
     const { data, error } = await db
       .from("operadores")
       .select("*")
-      .eq("mercearia_id", merceariaId)
+      .eq("mercearia_id", estabelecimentoId)
       .neq("status", "excluido")
       .order("created_at", { ascending: false });
 
@@ -324,3 +324,4 @@ router.put("/:id/status", async (req, res) => {
 });
 
 module.exports = router;
+    

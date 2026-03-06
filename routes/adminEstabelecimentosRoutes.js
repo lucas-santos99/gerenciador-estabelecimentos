@@ -1,4 +1,4 @@
-// ===== routes/adminMerceariasRoutes.js =====
+
 const express = require("express");
 const router = express.Router();
 const db = require("../db/supabaseAdmin"); // Cliente SUPABASE ADMIN (service_role)
@@ -6,7 +6,7 @@ const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage() });
 
 // =======================================================
-// LISTAR TODAS AS MERCEARIAS (ATIVAS)
+// LISTAR TODAS OS ESTABELECIMENTOS (ATIVAS)
 // =======================================================
 router.get("/listar", async (req, res) => {
   try {
@@ -21,12 +21,12 @@ router.get("/listar", async (req, res) => {
     res.json(data);
   } catch (e) {
     console.error("Exception listar:", e);
-    res.status(500).json({ error: "Erro ao listar mercearias" });
+    res.status(500).json({ error: "Erro ao listar estabelecimnento" });
   }
 });
 
 // =======================================================
-// LISTAR MERCEARIAS EXCLUÍDAS
+// LISTAR ESTABELECIMENTOS EXCLUÍDAS
 // =======================================================
 router.get("/excluidas", async (req, res) => {
   try {
@@ -54,7 +54,7 @@ router.get("/excluidas", async (req, res) => {
 });
 
 // =======================================================
-// RESTAURAR MERCEARIA EXCLUÍDA
+// RESTAURAR ESTABELECIMENTO EXCLUÍDA
 // =======================================================
 router.put("/:id/restaurar", async (req, res) => {
   try {
@@ -75,7 +75,7 @@ router.put("/:id/restaurar", async (req, res) => {
 });
 
 // =======================================================
-// OBTER UMA MERCEARIA ESPECÍFICA
+// OBTER UM ESTABELECIMENTO ESPECÍFICA
 // =======================================================
 router.get("/:id", async (req, res) => {
   try {
@@ -97,7 +97,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // =======================================================
-// ATUALIZAR MERCEARIA
+// ATUALIZAR ESTABELECIMENTO
 // =======================================================
 router.put("/:id", async (req, res) => {
   try {
@@ -141,7 +141,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // =======================================================
-// CRIAR MERCEARIA + USER
+// CRIAR ESTABELECIMENTO + USER
 // =======================================================
 router.post("/criar", async (req, res) => {
   try {
@@ -158,7 +158,7 @@ router.post("/criar", async (req, res) => {
 
     const userId = userData.user.id;
 
-    // Criar mercearia
+    // Criar ESTABELECIMENTO
     const { data: mercData, error: mercErr } = await db
       .from("mercearias")
       .insert({
@@ -189,7 +189,7 @@ router.post("/criar", async (req, res) => {
 
     if (profErr) return res.status(400).json({ error: profErr.message });
 
-    res.json({ success: true, merceariaId: mercData.id });
+    res.json({ success: true, estabelecimentoId: mercData.id });
 
   } catch (err) {
     console.error("POST criar error:", err);

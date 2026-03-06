@@ -5,16 +5,16 @@ const router = express.Router();
 
 // --- 1. Rota GET: Listar Contas a Pagar ---
 // (Código existente, sem alteração)
-router.get('/:merceariaId', async (req, res) => {
+router.get('/:estabelecimentoId', async (req, res) => {
     // ... (seu código de listar contas)
-    const { merceariaId } = req.params;
+    const { estabelecimentoId } = req.params;
     const { status } = req.query; 
 
-    if (!merceariaId) {
+    if (!estabelecimentoId) {
         return res.status(400).json({ error: 'ID da Mercearia obrigatório.' });
     }
     try {
-        let query = db.from('contas_a_pagar').select('*').eq('mercearia_id', merceariaId);
+        let query = db.from('contas_a_pagar').select('*').eq('mercearia_id', estabelecimentoId);
 
         if (status === 'pendente') {
             query = query.eq('status', 'pendente').gte('data_vencimento', new Date().toISOString());
@@ -35,16 +35,16 @@ router.get('/:merceariaId', async (req, res) => {
         });
         res.status(200).json(contas);
     } catch (error) {
-        console.error(`[ERRO] GET /api/financeiro/${merceariaId}?status=${status}:`, error.message);
+        console.error(`[ERRO] GET /api/financeiro/${estabelecimentoId}?status=${status}:`, error.message);
         res.status(500).json({ error: 'Erro ao buscar contas a pagar.' });
     }
 });
 
 // --- 2. Rota GET: Resumo do Caixa (Dia) ---
 // (Código existente, sem alteração)
-router.get('/resumo/:merceariaId', async (req, res) => {
+router.get('/resumo/:estabelecimentoId', async (req, res) => {
     // ... (seu código de resumo)
-    const { merceariaId } = req.params;
+    const { estabelecimentoId } = req.params;
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0); 
     
@@ -52,7 +52,7 @@ router.get('/resumo/:merceariaId', async (req, res) => {
         const { data: transacoes, error } = await db
             .from('transacoes_caixa')
             .select('tipo, meio_pagamento, valor')
-            .eq('mercearia_id', merceariaId)
+            .eq('mercearia_id', estabelecimentoId)
             .eq('tipo', 'entrada') 
             .gte('data_transacao', todayStart.toISOString());
         if (error) throw error;
@@ -68,7 +68,7 @@ router.get('/resumo/:merceariaId', async (req, res) => {
         });
         res.status(200).json(resumo);
     } catch (error) {
-        console.error(`[ERRO] GET /api/financeiro/resumo/${merceariaId}:`, error.message);
+        console.error(`[ERRO] GET /api/financeiro/resumo/${estabelecimentoId}:`, error.message);
         res.status(500).json({ error: 'Erro ao gerar resumo financeiro.' });
     }
 });
@@ -77,15 +77,15 @@ router.get('/resumo/:merceariaId', async (req, res) => {
 // (Código existente, sem alteração)
 router.post('/', async (req, res) => {
     // ... (seu código de adicionar conta)
-    const { merceariaId, descricao, valor, data_vencimento } = req.body;
-    if (!merceariaId || !descricao || !valor || !data_vencimento) {
+    const { estabelecimentoId, descricao, valor, data_vencimento } = req.body;
+    if (!estabelecimentoId || !descricao || !valor || !data_vencimento) {
         return res.status(400).json({ error: 'Todos os campos obrigatórios devem ser preenchidos.' });
     }
     try {
         const { data, error } = await db
             .from('contas_a_pagar')
             .insert({
-                mercearia_id: merceariaId,
+                mercearia_id: estabelecimentoId,
                 descricao: descricao,
                 valor: parseFloat(valor), 
                 data_vencimento: data_vencimento,
@@ -107,8 +107,8 @@ router.post('/', async (req, res) => {
 router.put('/:contaId/pagar', async (req, res) => {
     // ... (seu código de pagar conta)
     const { contaId } = req.params;
-    const { merceariaId } = req.body;
-    if (!merceariaId) {
+    const { estabelecimentoId } = req.body;
+    if (!estabelecimentoId) {
         return res.status(400).json({ error: 'ID da Mercearia obrigatório.' });
     }
     try {
@@ -116,7 +116,7 @@ router.put('/:contaId/pagar', async (req, res) => {
             .from('contas_a_pagar')
             .update({ status: 'paga', data_pagamento: new Date().toISOString() })
             .eq('id', contaId)
-            .eq('mercearia_id', merceariaId) 
+            .eq('mercearia_id', estabelecimentoId) 
             .select()
             .single();
             
@@ -137,9 +137,9 @@ router.put('/:contaId/pagar', async (req, res) => {
 
 // --- 5. Rota GET: Relatório DRE ---
 // (Código existente, sem alteração)
-router.get('/relatorio_dre/:merceariaId', async (req, res) => {
+router.get('/relatorio_dre/:estabelecimentoId', async (req, res) => {
     // ... (seu código do DRE)
-    const { merceariaId } = req.params;
+    const { estabelecimentoId } = req.params;
     const { data_inicio, data_fim } = req.query; 
 
     if (!data_inicio || !data_fim) {
@@ -148,7 +148,7 @@ router.get('/relatorio_dre/:merceariaId', async (req, res) => {
 
     try {
         const { data, error } = await db.rpc('gerar_relatorio_dre', {
-            p_mercearia_id: merceariaId,
+            p_mercearia_id: estabelecimentoId,
             p_data_inicio: data_inicio,
             p_data_fim: data_fim
         });
@@ -168,9 +168,9 @@ router.get('/relatorio_dre/:merceariaId', async (req, res) => {
 router.delete('/:contaId', async (req, res) => {
     // ... (seu código de excluir conta)
     const { contaId } = req.params;
-    const { merceariaId } = req.body; 
+    const { estabelecimentoId } = req.body; 
 
-    if (!merceariaId) {
+    if (!estabelecimentoId) {
         return res.status(400).json({ error: 'ID da Mercearia obrigatório.' });
     }
 
@@ -179,7 +179,7 @@ router.delete('/:contaId', async (req, res) => {
             .from('contas_a_pagar')
             .delete()
             .eq('id', contaId)
-            .eq('mercearia_id', merceariaId)
+            .eq('mercearia_id', estabelecimentoId)
             .eq('status', 'pendente') 
             .select() 
             .single(); 
@@ -205,9 +205,9 @@ router.delete('/:contaId', async (req, res) => {
 router.put('/:contaId', async (req, res) => {
     // ... (seu código de editar conta)
     const { contaId } = req.params;
-    const { merceariaId, descricao, valor, data_vencimento } = req.body;
+    const { estabelecimentoId, descricao, valor, data_vencimento } = req.body;
 
-    if (!merceariaId || !descricao || !valor || !data_vencimento) {
+    if (!estabelecimentoId || !descricao || !valor || !data_vencimento) {
         return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
     }
 
@@ -220,7 +220,7 @@ router.put('/:contaId', async (req, res) => {
                 data_vencimento: data_vencimento
             })
             .eq('id', contaId)
-            .eq('mercearia_id', merceariaId)
+            .eq('mercearia_id', estabelecimentoId)
             .eq('status', 'pendente')
             .select()
             .single();
@@ -241,8 +241,8 @@ router.put('/:contaId', async (req, res) => {
 });
 
 // --- 8. Rota GET: Relatório de Produtos Vendidos (NOVO) ---
-router.get('/relatorio_produtos/:merceariaId', async (req, res) => {
-    const { merceariaId } = req.params;
+router.get('/relatorio_produtos/:estabelecimentoId', async (req, res) => {
+    const { estabelecimentoId } = req.params;
     const { data_inicio, data_fim, categoria_id } = req.query;
 
     if (!data_inicio || !data_fim) {
@@ -251,7 +251,7 @@ router.get('/relatorio_produtos/:merceariaId', async (req, res) => {
 
     try {
         const { data, error } = await db.rpc('gerar_relatorio_produtos', {
-            p_mercearia_id: merceariaId,
+            p_mercearia_id: estabelecimentoId,
             p_data_inicio: data_inicio,
             p_data_fim: data_fim,
             p_categoria_id: categoria_id || null // Envia null se for "Todas"

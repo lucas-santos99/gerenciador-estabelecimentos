@@ -5,11 +5,11 @@ const router = express.Router();
 // --- Rota POST /finalizar (Atualizada para RPC - Transação Segura) ---
 router.post('/finalizar', async (req, res) => {
     
-    const { merceariaId, valor_total, meio_pagamento, carrinho, clienteId } = req.body;
+    const { estabelecimentoId, valor_total, meio_pagamento, carrinho, clienteId } = req.body;
     
     const totalVendaFloat = parseFloat(valor_total); 
 
-    if (!merceariaId || isNaN(totalVendaFloat) || totalVendaFloat <= 0 || !meio_pagamento || !carrinho || carrinho.length === 0) {
+    if (!estabelecimentoId || isNaN(totalVendaFloat) || totalVendaFloat <= 0 || !meio_pagamento || !carrinho || carrinho.length === 0) {
         return res.status(400).json({ error: 'Dados da venda incompletos ou valor total inválido.' });
     }
     if (meio_pagamento === 'Fiado' && (!clienteId || typeof clienteId !== 'string')) {
@@ -23,7 +23,7 @@ router.post('/finalizar', async (req, res) => {
         
         const { data: vendaId, error } = await db
             .rpc('finalizar_venda', {
-                p_mercearia_id: merceariaId,
+                p_mercearia_id: estabelecimentoId,
                 p_valor_total: totalVendaFloat,
                 p_meio_pagamento: meio_pagamento,
                 p_carrinho_itens: carrinho, // Envia o JSON do carrinho

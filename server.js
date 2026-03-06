@@ -9,15 +9,15 @@ const express = require('express');
 const cors = require('cors');
 const db = require('./db/supabaseAdmin');
 
-// --- IMPORTAÇÃO DAS ROTAS DO SISTEMA (PAINEL MERCEARIA/OPERADOR) ---
-const merceariaRoutes = require('./routes/merceariaRoutes');
+// --- IMPORTAÇÃO DAS ROTAS DO SISTEMA (PAINEL ESTABELECIMENTO/OPERADOR) ---
+const estabelecimentoRoutes = require('./routes/estabelecimentoRoutes');
 const categoriaRoutes = require('./routes/categoriaRoutes');
 const vendaRoutes = require('./routes/vendaRoutes');
 const clienteRoutes = require('./routes/clienteRoutes');
 const financeiroRoutes = require('./routes/financeiroRoutes');
 
 // --- IMPORTAÇÃO DAS ROTAS DO ADMIN ---
-const adminMerceariasRoutes = require("./routes/adminMerceariasRoutes");
+const adminEstabelecimentosRoutes = require("./routes/adminEstabelecimentosRoutes");
 const adminOperadoresRoutes = require("./routes/adminOperadoresRoutes");
 
 // Criar app
@@ -32,18 +32,18 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173",  // Para local
-      "https://gerenciador-mercearia-frontend.onrender.com"  // Para produção
+      "https://gerenciador-estabelecimentos-frontend.onrender.com"  // Para produção
     ],
     credentials: true,  // Permite o envio de cookies (importante!)
   })
 );
 
 // --- ROTAS DO ADMIN (super_admin) ---
-app.use("/admin/mercearias", adminMerceariasRoutes);
+app.use("/admin/estabelecimentos", adminEstabelecimentosRoutes);
 app.use("/admin/operadores", adminOperadoresRoutes);
 
-// --- ROTAS DO SISTEMA (mercearia / operador) ---
-app.use('/api/mercearias', merceariaRoutes);
+// --- ROTAS DO SISTEMA (estabelecimento / operador) ---
+app.use('/api/estabelecimentos', estabelecimentoRoutes);
 app.use('/api/categorias', categoriaRoutes);
 app.use('/api/vendas', vendaRoutes);
 app.use('/api/clientes', clienteRoutes);
@@ -51,7 +51,7 @@ app.use('/api/financeiro', financeiroRoutes);
 
 // --- ROTA INICIAL / TESTE ---
 app.get('/', (req, res) => {
-  res.status(200).send('Servidor do Gerenciador de Mercearias online!');
+  res.status(200).send('Servidor do Gerenciador de Estabelecimentos online!');
 });
 
 // --- HEAD para uptime robot ---

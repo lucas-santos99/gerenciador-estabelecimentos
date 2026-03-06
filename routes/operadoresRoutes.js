@@ -15,15 +15,15 @@ async function buscarOperadorPorId(id) {
 /* ============================================================
    1) LISTAR OPERADORES DE UMA MERCEARIA (ADMIN + MERCHANT)
    ============================================================ */
-router.get("/admin/operadores/:merceariaId", async (req, res) => {
-  const { merceariaId } = req.params;
+router.get("/admin/operadores/:estabelecimentoId", async (req, res) => {
+  const { estabelecimentoId } = req.params;
   try {
     const q = await db.query(
       `SELECT id, mercearia_id, nome, email, telefone, status, created_at
        FROM operadores
        WHERE mercearia_id = $1
        ORDER BY nome`,
-      [merceariaId]
+      [estabelecimentoId]
     );
     res.json(q.rows);
   } catch (err) {
@@ -176,8 +176,8 @@ router.delete("/admin/operadores/:id", async (req, res) => {
    ============================================================ */
 
 // Listar operadores dentro da própria mercearia
-router.get("/mercearia/:id/operadores", async (req, res) => {
-  const { id: merceariaId } = req.params;
+router.get("/estabelecimentos/:id/operadores", async (req, res) => {
+  const { id: estabelecimentoId } = req.params;
 
   try {
     const q = await db.query(
@@ -185,7 +185,7 @@ router.get("/mercearia/:id/operadores", async (req, res) => {
        FROM operadores
        WHERE mercearia_id = $1
        ORDER BY nome`,
-      [merceariaId]
+      [estabelecimentoId]
     );
 
     res.json(q.rows);
@@ -196,8 +196,8 @@ router.get("/mercearia/:id/operadores", async (req, res) => {
 });
 
 // Criar operador (merchant)
-router.post("/mercearia/:id/operadores/criar", async (req, res) => {
-  const { id: merceariaId } = req.params;
+router.post("/estabelecimentos/:id/operadores/criar", async (req, res) => {
+  const { id: estabelecimentoId } = req.params;
   const { nome, email, telefone } = req.body;
 
   if (!nome || !email)
@@ -209,7 +209,7 @@ router.post("/mercearia/:id/operadores/criar", async (req, res) => {
     await db.query(
       `INSERT INTO operadores (id, mercearia_id, nome, email, telefone, status, created_at)
        VALUES ($1,$2,$3,$4,$5,'ativo',NOW())`,
-      [newId, merceariaId, nome, email, telefone || null]
+      [newId, estabelecimentoId, nome, email, telefone || null]
     );
 
     res.status(201).json({ sucesso: true, id: newId });

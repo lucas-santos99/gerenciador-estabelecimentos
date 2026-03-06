@@ -10,8 +10,8 @@ const router = express.Router();
 // ============================================================
 // 1) BUSCAR CLIENTES POR TERMO (PDV / BUSCA RÁPIDA)
 // ============================================================
-router.get('/buscar/:merceariaId', async (req, res) => {
-    const { merceariaId } = req.params;
+router.get('/buscar/:estabelecimentoId', async (req, res) => {
+    const { estabelecimentoId } = req.params;
     const { termo } = req.query;
 
     if (!termo) return res.status(400).json({ error: 'Termo de busca é obrigatório.' });
@@ -20,7 +20,7 @@ router.get('/buscar/:merceariaId', async (req, res) => {
         const { data, error } = await db
             .from('clientes')
             .select('id, nome, telefone, saldo_devedor, limite_credito')
-            .eq('mercearia_id', merceariaId)
+            .eq('mercearia_id', estabelecimentoId)
             .or(`nome.ilike.${termo}%,telefone.ilike.${termo}%`)
             .limit(10);
 
@@ -39,14 +39,14 @@ router.get('/buscar/:merceariaId', async (req, res) => {
 // 2) ROTA PRINCIPAL — LISTAR CLIENTES (TELA CLIENTES / FIADO)
 // ============================================================
 // ❗ ESSA É A ROTA QUE SEU FRONTEND CHAMA EM "/Clientes"
-router.get('/:merceariaId', async (req, res) => {
-    const { merceariaId } = req.params;
+router.get('/:estabelecimentoId', async (req, res) => {
+    const { estabelecimentoId } = req.params;
 
     try {
         const { data, error } = await db
             .from('clientes')
             .select('id, nome, telefone, saldo_devedor, limite_credito, data_vencimento')
-            .eq('mercearia_id', merceariaId)
+            .eq('mercearia_id', estabelecimentoId)
             .order('nome', { ascending: true });
 
         if (error) throw error;
@@ -54,7 +54,7 @@ router.get('/:merceariaId', async (req, res) => {
         res.status(200).json(data);
 
     } catch (error) {
-        console.error(`[ERRO] GET /api/clientes/${merceariaId}:`, error.message);
+        console.error(`[ERRO] GET /api/clientes/${estabelecimentoId}:`, error.message);
         res.status(500).json({ error: 'Erro ao carregar clientes.' });
     }
 });
@@ -63,14 +63,14 @@ router.get('/:merceariaId', async (req, res) => {
 // ============================================================
 // 3) LISTAR APENAS CLIENTES COM DÍVIDA (FIADO)
 // ============================================================
-router.get('/:merceariaId/dividas', async (req, res) => {
-    const { merceariaId } = req.params;
+router.get('/:estabelecimentoId/dividas', async (req, res) => {
+    const { estabelecimentoId } = req.params;
 
     try {
         const { data, error } = await db
             .from('clientes')
             .select('id, nome, telefone, saldo_devedor, limite_credito, data_vencimento')
-            .eq('mercearia_id', merceariaId)
+            .eq('mercearia_id', estabelecimentoId)
             .gt('saldo_devedor', 0.01)
             .order('saldo_devedor', { ascending: false });
 
@@ -89,16 +89,16 @@ router.get('/:merceariaId/dividas', async (req, res) => {
 // 4) CRIAR CLIENTE
 // ============================================================
 router.post('/criar', async (req, res) => {
-    const { merceariaId, nome, telefone } = req.body;
+    const { estabelecimentoId, nome, telefone } = req.body;
 
-    if (!merceariaId || !nome)
+    if (!estabelecimentoId || !nome)
         return res.status(400).json({ error: 'Mercearia ID e Nome são obrigatórios.' });
 
     try {
         const { data, error } = await db
             .from('clientes')
             .insert({
-                mercearia_id: merceariaId,
+                mercearia_id: estabelecimentoId,
                 nome: nome,
                 telefone: telefone || null
             })
@@ -161,15 +161,15 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 // 6) LIQUIDAR FIADO (RPC NOVA LIQUIDAR_FIADO)
 // ============================================================
 router.post('/liquidar', async (req, res) => {
-    const { clienteId, merceariaId, valorPago, meioPagamento } = req.body;
+    const { clienteId, estabelecimentoId, valorPago, meioPagamento } = req.body;
 
-    if (!clienteId || !merceariaId || !valorPago || !meioPagamento)
+    if (!clienteId || !estabelecimentoId || !valorPago || !meioPagamento)
         return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
 
     try {
         const { data: novoSaldo, error } = await db.rpc('liquidar_fiado', {
             p_cliente_id: clienteId,
-            p_mercearia_id: merceariaId,
+            p_mercearia_id: estabelecimentoId,
             p_valor_pago: parseFloat(valorPago),
             p_meio_pagamento: meioPagamento
         });
@@ -227,15 +227,15 @@ router.put('/atualizar/:clienteId', async (req, res) => {
 // ============================================================
 router.delete('/deletar/:clienteId', async (req, res) => {
     const { clienteId } = req.params;
-    const { merceariaId } = req.query;
+    const { estabelecimentoId } = req.query;
 
-    if (!merceariaId)
+    if (!estabelecimentoId)
         return res.status(400).json({ error: 'Mercearia ID é obrigatório.' });
 
     try {
         const { data, error } = await db.rpc('deletar_cliente_seguro', {
             p_cliente_id: clienteId,
-            p_mercearia_id: merceariaId
+            p_mercearia_id: estabelecimentoId
         });
 
         if (error) throw error;
@@ -258,14 +258,14 @@ router.delete('/deletar/:clienteId', async (req, res) => {
 // ============================================================
 // 9) LISTAR TODOS OS CLIENTES (CADERNINHO)
 // ============================================================
-router.get('/:merceariaId/todos-clientes', async (req, res) => {
-    const { merceariaId } = req.params;
+router.get('/:estabelecimentoId/todos-clientes', async (req, res) => {
+    const { estabelecimentoId } = req.params;
 
     try {
         const { data, error } = await db
             .from('clientes')
             .select('id, nome, telefone, saldo_devedor, limite_credito, data_vencimento')
-            .eq('mercearia_id', merceariaId)
+            .eq('mercearia_id', estabelecimentoId)
             .order('nome', { ascending: true });
 
         if (error) throw error;
