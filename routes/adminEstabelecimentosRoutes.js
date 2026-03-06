@@ -146,12 +146,12 @@ router.put("/:id", async (req, res) => {
 // =======================================================
 router.post("/criar", async (req, res) => {
   try {
-    const { nome, cnpj, telefone, email, senha, tipo_estabelecimento } = req.body;
+   const { nome_fantasia, cnpj, telefone, email_contato, tipo_estabelecimento } = req.body;
 
     // Criar usuário no Auth
     const { data: userData, error: userErr } = await db.auth.admin.createUser({
-      email,
-      password: senha,
+      email: email_contato,
+      password: "12345678",
       email_confirm: true,
     });
 
@@ -163,10 +163,10 @@ router.post("/criar", async (req, res) => {
     const { data: mercData, error: mercErr } = await db
       .from("mercearias")
       .insert({
-        nome_fantasia: nome,
+        nome_fantasia,
         cnpj,
         telefone,
-        email_contato: email,
+        email_contato,
         status_assinatura: "ativa",
         logo_url: null,
         endereco_completo: null,
@@ -184,8 +184,8 @@ router.post("/criar", async (req, res) => {
       .update({
         role: "merchant",
         mercearia_id: mercData.id,
-        email,
-        nome,
+        email: email_contato,
+        nome: nome_fantasia,
       })
       .eq("id", userId);
 
