@@ -146,20 +146,38 @@ router.put("/:id", async (req, res) => {
 // =======================================================
 router.post("/criar", async (req, res) => {
   try {
-   const { nome_fantasia, cnpj, telefone, email_contato, tipo_estabelecimento } = req.body;
 
-    // Criar usuário no Auth
-    const { data: userData, error: userErr } = await db.auth.admin.createUser({
-      email: email_contato,
-      password: "12345678",
-      email_confirm: true,
-    });
+    const {
+      nome_fantasia,
+      cnpj,
+      telefone,
+      email_contato,
+      tipo_estabelecimento,
+      senha
+    } = req.body;
 
-    if (userErr) return res.status(400).json({ error: userErr.message });
+    // validação da senha
+    if (!senha || senha.length < 6) {
+      return res.status(400).json({
+        error: "Senha deve ter no mínimo 6 caracteres."
+      });
+    }
+
+    // 1️⃣ Criar usuário no Auth
+    const { data: userData, error: userErr } =
+      await db.auth.admin.createUser({
+        email: email_contato,
+        password: senha,
+        email_confirm: true
+      });
+
+    if (userErr) {
+      return res.status(400).json({ error: userErr.message });
+    }
 
     const userId = userData.user.id;
 
-    // Criar ESTABELECIMENTO
+    // 2️⃣ Criar estabelecimento
     const { data: mercData, error: mercErr } = await db
       .from("mercearias")
       .insert({
@@ -176,9 +194,11 @@ router.post("/criar", async (req, res) => {
       .select()
       .single();
 
-    if (mercErr) return res.status(400).json({ error: mercErr.message });
+    if (mercErr) {
+      return res.status(400).json({ error: mercErr.message });
+    }
 
-    // 3️⃣ Atualizar JWT do usuário
+    // 3️⃣ Atualizar JWT (app_metadata)
     await db.auth.admin.updateUserById(userId, {
       app_metadata: {
         mercearia_id: mercData.id,
@@ -186,27 +206,31 @@ router.post("/criar", async (req, res) => {
       }
     });
 
-    // Atualizar profile
+    // 4️⃣ Atualizar profile
     const { error: profErr } = await db
       .from("profiles")
       .update({
         role: "merchant",
         mercearia_id: mercData.id,
         email: email_contato,
-        nome: nome_fantasia,
+        nome: nome_fantasia
       })
       .eq("id", userId);
 
-    if (profErr) return res.status(400).json({ error: profErr.message });
+    if (profErr) {
+      return res.status(400).json({ error: profErr.message });
+    }
 
-    res.json({ success: true, estabelecimentoId: mercData.id });
+    res.json({
+      success: true,
+      estabelecimentoId: mercData.id
+    });
 
   } catch (err) {
     console.error("POST criar error:", err);
     res.status(500).json({ error: "Erro interno ao criar mercearia" });
   }
 });
-
 // =======================================================
 // UPLOAD DE LOGO
 // =======================================================
