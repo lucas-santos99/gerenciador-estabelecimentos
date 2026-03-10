@@ -178,6 +178,14 @@ router.post("/criar", async (req, res) => {
 
     if (mercErr) return res.status(400).json({ error: mercErr.message });
 
+    // 3️⃣ Atualizar JWT do usuário
+    await db.auth.admin.updateUserById(userId, {
+      app_metadata: {
+        mercearia_id: mercData.id,
+        role: "merchant"
+      }
+    });
+
     // Atualizar profile
     const { error: profErr } = await db
       .from("profiles")
