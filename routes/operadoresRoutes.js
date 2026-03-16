@@ -1,277 +1,387 @@
-// routes/operadoresRoutes.js
 const express = require("express");
 const router = express.Router();
-const db = require("../db/supabaseAdmin"); // seu cliente PostgreSQL
+
+const db = require("../db/supabaseAdmin"); // usado para rotas ADMIN
+const authUser = require("../middlewares/authUser");
+const createSupabaseUserClient = require("../db/supabaseUser");
+
 const { v4: uuidv4 } = require("uuid");
 
 /* ============================================================
    FUNÇÕES AUXILIARES
    ============================================================ */
+
 async function buscarOperadorPorId(id) {
-  const q = await db.query("SELECT * FROM operadores WHERE id = $1", [id]);
-  return q.rows[0];
+  const { data, error } = await db
+    .from("operadores")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) throw error;
+
+  return data;
 }
 
 /* ============================================================
-   1) LISTAR OPERADORES DE UMA MERCEARIA (ADMIN + MERCHANT)
+   1) LISTAR OPERADORES (ADMIN)
    ============================================================ */
+
 router.get("/admin/operadores/:estabelecimentoId", async (req, res) => {
+
   const { estabelecimentoId } = req.params;
+
   try {
-    const q = await db.query(
-      `SELECT id, mercearia_id, nome, email, telefone, status, created_at
-       FROM operadores
-       WHERE mercearia_id = $1
-       ORDER BY nome`,
-      [estabelecimentoId]
-    );
-    res.json(q.rows);
+
+    const { data, error } = await db
+      .from("operadores")
+      .select("id, mercearia_id, nome, email, telefone, status, created_at")
+      .eq("mercearia_id", estabelecimentoId)
+      .order("nome", { ascending: true });
+
+    if (error) throw error;
+
+    res.json(data);
+
   } catch (err) {
+
     console.error(err);
-    res.status(500).json({ error: "Erro ao listar operadores" });
+
+    res.status(500).json({
+      error: "Erro ao listar operadores"
+    });
+
   }
+
 });
 
 /* ============================================================
-   2) DETALHES DO OPERADOR
+   2) DETALHES OPERADOR
    ============================================================ */
+
 router.get("/admin/operadores/detalhes/:id", async (req, res) => {
+
   const { id } = req.params;
+
   try {
+
     const op = await buscarOperadorPorId(id);
-    if (!op) return res.status(404).json({ error: "Operador não encontrado" });
+
+    if (!op) {
+      return res.status(404).json({
+        error: "Operador não encontrado"
+      });
+    }
 
     res.json(op);
+
   } catch (err) {
+
     console.error(err);
-    res.status(500).json({ error: "Erro ao buscar operador" });
+
+    res.status(500).json({
+      error: "Erro ao buscar operador"
+    });
+
   }
+
 });
 
 /* ============================================================
    3) CRIAR OPERADOR (ADMIN)
    ============================================================ */
-router.post("/admin/operadores/criar", async (req, res) => {
-  const { mercearia_id, nome, email, telefone, senha } = req.body;
 
-  if (!nome || !email)
-    return res.status(400).json({ error: "Nome e email são obrigatórios" });
+router.post("/admin/operadores/criar", async (req, res) => {
+
+  const { mercearia_id, nome, email, telefone } = req.body;
+
+  if (!nome || !email) {
+    return res.status(400).json({
+      error: "Nome e email são obrigatórios"
+    });
+  }
 
   try {
-    // Se usar Supabase Auth — ADAPTAR
-    // const { data: user, error } = await supabaseAdmin.auth.api.createUser({
-    //   email, password: senha
-    // });
 
     const newId = uuidv4();
 
-    await db.query(
-      `INSERT INTO operadores (id, mercearia_id, nome, email, telefone, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, 'ativo', NOW())`,
-      [newId, mercearia_id, nome, email, telefone || null]
-    );
+    const { error } = await db
+      .from("operadores")
+      .insert({
+        id: newId,
+        mercearia_id,
+        nome,
+        email,
+        telefone: telefone || null,
+        status: "ativo"
+      });
 
-    res.status(201).json({ sucesso: true, id: newId });
+    if (error) throw error;
+
+    res.status(201).json({
+      sucesso: true,
+      id: newId
+    });
+
   } catch (err) {
+
     console.error(err);
-    res.status(500).json({ error: "Erro ao criar operador" });
+
+    res.status(500).json({
+      error: "Erro ao criar operador"
+    });
+
   }
+
 });
 
 /* ============================================================
-   4) EDITAR OPERADOR
+   4) EDITAR OPERADOR (ADMIN)
    ============================================================ */
+
 router.put("/admin/operadores/:id", async (req, res) => {
+
   const { id } = req.params;
   const { nome, email, telefone, status } = req.body;
 
   try {
-    const op = await buscarOperadorPorId(id);
-    if (!op) return res.status(404).json({ error: "Operador não encontrado" });
 
-    await db.query(
-      `UPDATE operadores
-       SET nome=$1, email=$2, telefone=$3, status=$4, updated_at = NOW()
-       WHERE id=$5`,
-      [nome, email, telefone || null, status, id]
-    );
+    const { error } = await db
+      .from("operadores")
+      .update({
+        nome,
+        email,
+        telefone,
+        status
+      })
+      .eq("id", id);
 
-    res.json({ sucesso: true });
+    if (error) throw error;
+
+    res.json({
+      sucesso: true
+    });
+
   } catch (err) {
+
     console.error(err);
-    res.status(500).json({ error: "Erro ao editar operador" });
+
+    res.status(500).json({
+      error: "Erro ao editar operador"
+    });
+
   }
+
 });
 
 /* ============================================================
-   5) ALTERAR STATUS: ATIVAR / INATIVAR
+   5) ALTERAR STATUS (ADMIN)
    ============================================================ */
+
 router.put("/admin/operadores/:id/status", async (req, res) => {
+
   const { id } = req.params;
   const { status } = req.body;
 
-  if (!["ativo", "inativo"].includes(status))
-    return res.status(400).json({ error: "Status inválido" });
-
-  try {
-    await db.query(
-      `UPDATE operadores
-       SET status=$1, updated_at = NOW()
-       WHERE id=$2`,
-      [status, id]
-    );
-
-    res.json({ sucesso: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erro ao atualizar status" });
+  if (!["ativo", "inativo"].includes(status)) {
+    return res.status(400).json({
+      error: "Status inválido"
+    });
   }
-});
-
-/* ============================================================
-   6) RESETAR SENHA (ADMIN — MANUAL)
-   ============================================================ */
-router.put("/admin/operadores/:id/resetar-senha", async (req, res) => {
-  const { id } = req.params;
-  const { novaSenha } = req.body;
-
-  if (!novaSenha || novaSenha.length < 6)
-    return res
-      .status(400)
-      .json({ error: "Senha deve ter no mínimo 6 caracteres" });
 
   try {
-    // ADAPTAR PARA SUPABASE AUTH → implementar aqui.
-    // Exemplo:
-    // const op = await buscarOperadorPorId(id);
-    // await supabaseAdmin.auth.api.updateUserById(op.auth_id, { password: novaSenha })
+
+    const { error } = await db
+      .from("operadores")
+      .update({ status })
+      .eq("id", id);
+
+    if (error) throw error;
 
     res.json({
-      sucesso: true,
-      msg: "Senha alterada — implemente a integração com o Auth",
+      sucesso: true
     });
+
   } catch (err) {
+
     console.error(err);
-    res.status(500).json({ error: "Erro ao resetar senha" });
+
+    res.status(500).json({
+      error: "Erro ao atualizar status"
+    });
+
   }
+
 });
 
 /* ============================================================
-   7) EXCLUIR OPERADOR
+   6) EXCLUIR OPERADOR (ADMIN)
    ============================================================ */
+
 router.delete("/admin/operadores/:id", async (req, res) => {
+
   const { id } = req.params;
 
   try {
-    await db.query("DELETE FROM operadores WHERE id = $1", [id]);
-    res.json({ sucesso: true });
+
+    const { error } = await db
+      .from("operadores")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+
+    res.json({
+      sucesso: true
+    });
+
   } catch (err) {
+
     console.error(err);
-    res.status(500).json({ error: "Erro ao excluir operador" });
+
+    res.status(500).json({
+      error: "Erro ao excluir operador"
+    });
+
   }
+
 });
 
 /* ============================================================
-   8) ROTAS PARA MERCHANT
+   7) LISTAR OPERADORES DA MERCEARIA (MERCHANT)
    ============================================================ */
 
-// Listar operadores dentro da própria mercearia
-router.get("/estabelecimentos/:id/operadores", async (req, res) => {
-  const { id: estabelecimentoId } = req.params;
+router.get("/operadores", authUser, async (req, res) => {
+
+  const supabase = createSupabaseUserClient(req.userToken);
 
   try {
-    const q = await db.query(
-      `SELECT id, nome, email, telefone, status, created_at
-       FROM operadores
-       WHERE mercearia_id = $1
-       ORDER BY nome`,
-      [estabelecimentoId]
-    );
 
-    res.json(q.rows);
+    const { data, error } = await supabase
+      .from("operadores")
+      .select("id, nome, email, telefone, status, created_at")
+      .order("nome", { ascending: true });
+
+    if (error) throw error;
+
+    res.json(data);
+
   } catch (err) {
+
     console.error(err);
-    res.status(500).json({ error: "Erro ao listar operadores da mercearia" });
+
+    res.status(500).json({
+      error: "Erro ao listar operadores da mercearia"
+    });
+
   }
-});
 
-// Criar operador (merchant)
-router.post("/estabelecimentos/:id/operadores/criar", async (req, res) => {
-  const { id: estabelecimentoId } = req.params;
-  const { nome, email, telefone } = req.body;
-
-  if (!nome || !email)
-    return res.status(400).json({ error: "Nome e email são obrigatórios" });
-
-  try {
-    const newId = uuidv4();
-
-    await db.query(
-      `INSERT INTO operadores (id, mercearia_id, nome, email, telefone, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,'ativo',NOW())`,
-      [newId, estabelecimentoId, nome, email, telefone || null]
-    );
-
-    res.status(201).json({ sucesso: true, id: newId });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erro ao criar operador (merchant)" });
-  }
 });
 
 /* ============================================================
-   🔍 DIAGNÓSTICO DE USUÁRIO (SEM BLOQUEIO)
-   POST /operadores/diagnostico
-============================================================ */
+   8) CRIAR OPERADOR (MERCHANT)
+   ============================================================ */
+
+router.post("/operadores/criar", authUser, async (req, res) => {
+
+  const supabase = createSupabaseUserClient(req.userToken);
+
+  const { nome, email, telefone } = req.body;
+
+  if (!nome || !email) {
+    return res.status(400).json({
+      error: "Nome e email são obrigatórios"
+    });
+  }
+
+  try {
+
+    const newId = uuidv4();
+
+    const { error } = await supabase
+      .from("operadores")
+      .insert({
+        id: newId,
+        nome,
+        email,
+        telefone: telefone || null,
+        status: "ativo"
+      });
+
+    if (error) throw error;
+
+    res.status(201).json({
+      sucesso: true,
+      id: newId
+    });
+
+  } catch (err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      error: "Erro ao criar operador"
+    });
+
+  }
+
+});
+
+/* ============================================================
+   DIAGNÓSTICO USUÁRIO
+   ============================================================ */
+
 router.post("/diagnostico", async (req, res) => {
+
   const { email } = req.body;
 
   if (!email) {
-    return res.status(400).json({ error: "E-mail não informado" });
+    return res.status(400).json({
+      error: "E-mail não informado"
+    });
   }
 
   try {
-    /* ===============================
-       1️⃣ VERIFICA OPERADOR
-    =============================== */
-    const operadorQ = await db.query(
-      `SELECT status FROM operadores WHERE email = $1`,
-      [email]
-    );
 
-    if (operadorQ.rows.length > 0) {
+    const { data: operador } = await db
+      .from("operadores")
+      .select("status")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (operador) {
       return res.json({
         tipo: "operador",
-        status: operadorQ.rows[0].status,
+        status: operador.status
       });
     }
 
-    /* ===============================
-       2️⃣ VERIFICA MERCEARIA
-    =============================== */
-    const merceariaQ = await db.query(
-      `SELECT id FROM mercearias WHERE email = $1`,
-      [email]
-    );
+    const { data: mercearia } = await db
+      .from("mercearias")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
 
-    if (merceariaQ.rows.length > 0) {
+    if (mercearia) {
       return res.json({
-        tipo: "mercearia",
+        tipo: "mercearia"
       });
     }
 
-    /* ===============================
-       3️⃣ SE NÃO FOR NENHUM → ADMIN
-    =============================== */
     return res.json({
-      tipo: "admin",
+      tipo: "admin"
     });
 
   } catch (err) {
-    console.error("Erro diagnóstico usuário:", err);
-    res.status(500).json({ error: "Erro interno no diagnóstico" });
-  }
-});
 
+    console.error("Erro diagnóstico usuário:", err);
+
+    res.status(500).json({
+      error: "Erro interno no diagnóstico"
+    });
+
+  }
+
+});
 
 module.exports = router;
