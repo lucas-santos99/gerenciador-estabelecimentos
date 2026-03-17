@@ -1,4 +1,4 @@
-// ===== routes/financeiroRoutes.js (VERSÃO RLS + JWT) =====
+// ===== routes/financeiroRoutes.js (VERSÃO RLS + JWT + PERMISSÕES) =====
 
 const express = require('express');
 const router = express.Router();
@@ -6,12 +6,19 @@ const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 
+// 🔥 NOVO
+const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { PERMISSOES } = require('../utils/permissoes');
+
 
 // ============================================================
 // 1) LISTAR CONTAS A PAGAR
 // ============================================================
 
-router.get('/', authUser, async (req, res) => {
+router.get('/',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
     const { status } = req.query;
@@ -71,7 +78,10 @@ router.get('/', authUser, async (req, res) => {
 // 2) RESUMO DO CAIXA (DIA)
 // ============================================================
 
-router.get('/resumo', authUser, async (req, res) => {
+router.get('/resumo',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -129,7 +139,10 @@ router.get('/resumo', authUser, async (req, res) => {
 // 3) CRIAR CONTA A PAGAR
 // ============================================================
 
-router.post('/', authUser, async (req, res) => {
+router.post('/',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -179,7 +192,10 @@ router.post('/', authUser, async (req, res) => {
 // 4) MARCAR CONTA COMO PAGA
 // ============================================================
 
-router.put('/:contaId/pagar', authUser, async (req, res) => {
+router.put('/:contaId/pagar',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
     const { contaId } = req.params;
@@ -225,7 +241,10 @@ router.put('/:contaId/pagar', authUser, async (req, res) => {
 // 5) RELATÓRIO DRE
 // ============================================================
 
-router.get('/relatorio_dre', authUser, async (req, res) => {
+router.get('/relatorio_dre',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_RELATORIOS),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -267,7 +286,10 @@ router.get('/relatorio_dre', authUser, async (req, res) => {
 // 6) EXCLUIR CONTA
 // ============================================================
 
-router.delete('/:contaId', authUser, async (req, res) => {
+router.delete('/:contaId',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
     const { contaId } = req.params;
@@ -311,7 +333,10 @@ router.delete('/:contaId', authUser, async (req, res) => {
 // 7) EDITAR CONTA
 // ============================================================
 
-router.put('/:contaId', authUser, async (req, res) => {
+router.put('/:contaId',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
     const { contaId } = req.params;
@@ -369,7 +394,10 @@ router.put('/:contaId', authUser, async (req, res) => {
 // 8) RELATÓRIO PRODUTOS VENDIDOS
 // ============================================================
 
-router.get('/relatorio_produtos', authUser, async (req, res) => {
+router.get('/relatorio_produtos',
+    authUser,
+    verificarPermissao(PERMISSOES.VER_RELATORIOS),
+    async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
