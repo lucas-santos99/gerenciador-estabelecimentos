@@ -65,9 +65,10 @@ router.get('/',
 
         console.error('[ERRO] GET /api/financeiro:', error.message);
 
-        res.status(500).json({
-            error: 'Erro ao buscar contas a pagar.'
-        });
+       res.status(500).json({
+  error: error.message,
+  detalhe: error
+});
 
     }
 
@@ -127,8 +128,9 @@ router.get('/resumo',
         console.error('[ERRO] GET /api/financeiro/resumo:', error.message);
 
         res.status(500).json({
-            error: 'Erro ao gerar resumo financeiro.'
-        });
+  error: error.message,
+  detalhe: error
+});
 
     }
 
@@ -179,9 +181,10 @@ router.post('/',
 
         console.error('[ERRO] POST /api/financeiro:', error.message);
 
-        res.status(500).json({
-            error: 'Erro ao registrar a conta.'
-        });
+       res.status(500).json({
+  error: error.message,
+  detalhe: error
+});
 
     }
 
@@ -228,10 +231,10 @@ router.put('/:contaId/pagar',
 
         console.error(`[ERRO] PUT /api/financeiro/${contaId}/pagar:`, error.message);
 
-        res.status(500).json({
-            error: 'Erro ao marcar conta como paga.'
-        });
-
+       res.status(500).json({
+  error: error.message,
+  detalhe: error
+});
     }
 
 });
@@ -273,10 +276,10 @@ router.get('/relatorio_dre',
 
         console.error('[ERRO] Relatório DRE:', error.message);
 
-        res.status(500).json({
-            error: 'Erro ao gerar relatório.'
-        });
-
+       res.status(500).json({
+  error: error.message,
+  detalhe: error
+});
     }
 
 });
@@ -320,10 +323,10 @@ router.delete('/:contaId',
 
         console.error('[ERRO] DELETE conta:', error.message);
 
-        res.status(500).json({
-            error: 'Erro ao excluir conta.'
-        });
-
+       res.status(500).json({
+  error: error.message,
+  detalhe: error
+});
     }
 
 });
@@ -381,10 +384,10 @@ router.put('/:contaId',
 
         console.error('[ERRO] PUT conta:', error.message);
 
-        res.status(500).json({
-            error: 'Erro ao atualizar conta.'
-        });
-
+       res.status(500).json({
+  error: error.message,
+  detalhe: error
+});
     }
 
 });
@@ -427,10 +430,10 @@ router.get('/relatorio_produtos',
 
         console.error('[ERRO] Relatório produtos:', error.message);
 
-        res.status(500).json({
-            error: 'Erro ao gerar relatório.'
-        });
-
+       res.status(500).json({
+  error: error.message,
+  detalhe: error
+});
     }
 
 });
