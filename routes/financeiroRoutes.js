@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 const authUser = require('../middlewares/authUser');
-const createSupabaseUserClient = require('../db/supabaseUser');
+//const createSupabaseUserClient = require('../db/supabaseUser');
 
 // 🔥 NOVO
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
@@ -20,7 +20,7 @@ router.get('/',
     //verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
     const { status } = req.query;
 
     try {
@@ -83,7 +83,7 @@ router.get('/resumo',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
 
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -144,7 +144,7 @@ router.post('/',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
 
     const { descricao, valor, data_vencimento } = req.body;
 
@@ -197,7 +197,7 @@ router.put('/:contaId/pagar',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
     const { contaId } = req.params;
 
     try {
@@ -246,7 +246,7 @@ router.get('/relatorio_dre',
     verificarPermissao(PERMISSOES.VER_RELATORIOS),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
 
     const { data_inicio, data_fim } = req.query;
 
@@ -291,7 +291,7 @@ router.delete('/:contaId',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
     const { contaId } = req.params;
 
     try {
@@ -338,7 +338,7 @@ router.put('/:contaId',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
     const { contaId } = req.params;
 
     const { descricao, valor, data_vencimento } = req.body;
@@ -399,7 +399,7 @@ router.get('/relatorio_produtos',
     verificarPermissao(PERMISSOES.VER_RELATORIOS),
     async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
+    const supabase = req.supabase;
 
     const { data_inicio, data_fim, categoria_id } = req.query;
 
