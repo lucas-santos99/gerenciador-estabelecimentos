@@ -26,18 +26,22 @@ const verificarPermissao = (permissaoCodigo) => {
       if (!req.permissoes) {
         const { data: permissoes, error: permError } = await supabase
           .from("permissoes_operador")
-          .select(`
-            permissoes (
-              codigo
-            )
-          `)
+          .select("permissao_id")
           .eq("operador_id", operador.id);
 
         if (permError) {
           return res.status(500).json({ error: "Erro ao buscar permissões" });
         }
 
-        req.permissoes = permissoes.map(p => p.permissoes.codigo);
+        const permissoesIds = permissoes.map(p => p.permissao_id);
+
+// 🔥 buscar códigos manualmente
+const { data: permissoesDetalhes } = await supabase
+  .from("permissoes")
+  .select("codigo")
+  .in("id", permissoesIds);
+
+req.permissoes = permissoesDetalhes.map(p => p.codigo);
       }
 
       if (!req.permissoes.includes(permissaoCodigo)) {
