@@ -1,3 +1,4 @@
+console.log("🔥 FINANCEIRO ROUTES ATUALIZADO 🔥");
 // ===== routes/financeiroRoutes.js (VERSÃO RLS + JWT + PERMISSÕES) =====
 
 const express = require('express');
@@ -9,6 +10,7 @@ const authUser = require('../middlewares/authUser');
 // 🔥 NOVO
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
+
 
 
 // ============================================================
