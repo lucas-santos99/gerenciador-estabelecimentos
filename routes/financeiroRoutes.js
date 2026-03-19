@@ -17,7 +17,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 
 router.get('/',
     authUser,
-    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    //verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
