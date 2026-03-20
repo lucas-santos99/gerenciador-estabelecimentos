@@ -142,7 +142,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // =======================================================
-// CRIAR ESTABELECIMENTO + USER
+// CRIAR ESTABELECIMENTO + USER (🔥 CORRIGIDO)
 // =======================================================
 router.post("/criar", async (req, res) => {
   try {
@@ -152,6 +152,9 @@ router.post("/criar", async (req, res) => {
       cnpj,
       telefone,
       email_contato,
+      endereco_completo,
+      data_vencimento,
+      status_assinatura,
       tipo_estabelecimento,
       senha
     } = req.body;
@@ -177,7 +180,7 @@ router.post("/criar", async (req, res) => {
 
     const userId = userData.user.id;
 
-    // 2️⃣ Criar estabelecimento
+    // 2️⃣ Criar estabelecimento (✅ AGORA SALVA ENDEREÇO)
     const { data: mercData, error: mercErr } = await db
       .from("mercearias")
       .insert({
@@ -185,10 +188,10 @@ router.post("/criar", async (req, res) => {
         cnpj,
         telefone,
         email_contato,
-        status_assinatura: "ativa",
+        endereco_completo: endereco_completo || null,
+        status_assinatura: status_assinatura || "ativa",
         logo_url: null,
-        endereco_completo: null,
-        data_vencimento: null,
+        data_vencimento: data_vencimento || null,
         tipo_estabelecimento: tipo_estabelecimento || "mercearia"
       })
       .select()
@@ -231,6 +234,7 @@ router.post("/criar", async (req, res) => {
     res.status(500).json({ error: "Erro interno ao criar mercearia" });
   }
 });
+
 // =======================================================
 // UPLOAD DE LOGO
 // =======================================================
@@ -298,7 +302,7 @@ router.delete("/:id/remover-logo", async (req, res) => {
 });
 
 // =======================================================
-// SOFT DELETE (enviar para "excluída")
+// SOFT DELETE
 // =======================================================
 router.delete("/:id", async (req, res) => {
   try {
@@ -320,7 +324,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // =======================================================
-// EXCLUSÃO PERMANENTE (BACKUP + REMOÇÃO DEFINITIVA)
+// EXCLUSÃO PERMANENTE
 // =======================================================
 router.delete("/:id/apagar-definitivo", async (req, res) => {
   try {
