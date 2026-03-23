@@ -5,10 +5,42 @@ const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage() });
 
 // =======================================================
+// 🔴 FUNÇÃO: BLOQUEAR VENCIDOS AUTOMATICAMENTE
+// =======================================================
+async function verificarVencimentos() {
+  try {
+    const { data, error } = await db
+      .from("mercearias")
+      .select("id, data_vencimento, status_assinatura");
+
+    if (error) return;
+
+    const hoje = new Date();
+
+    for (const m of data) {
+      if (!m.data_vencimento) continue;
+
+      const venc = new Date(m.data_vencimento);
+
+      if (venc < hoje && m.status_assinatura === "ativa") {
+        await db
+          .from("mercearias")
+          .update({ status_assinatura: "bloqueada" })
+          .eq("id", m.id);
+      }
+    }
+  } catch (err) {
+    console.error("Erro verificar vencimentos:", err);
+  }
+}
+
+// =======================================================
 // LISTAR TODAS OS ESTABELECIMENTOS (ATIVAS)
 // =======================================================
 router.get("/listar", async (req, res) => {
   try {
+    await verificarVencimentos(); // ✅ LINHA NOVA
+    
     const { data, error } = await db
       .from("mercearias")
       .select("*")
