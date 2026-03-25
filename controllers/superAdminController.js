@@ -1,10 +1,10 @@
-const { supabaseAdmin } = require('../db/supabaseAdmin');
+const supabaseAdmin = require('../db/supabaseAdmin');
 
 const criarSuperAdmin = async (req, res) => {
   const { email, senha, nome } = req.body;
 
   try {
-    // 🔥 cria no auth
+    // 🔥 cria usuário no auth
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password: senha,
@@ -13,7 +13,7 @@ const criarSuperAdmin = async (req, res) => {
 
     if (error) throw error;
 
-    // 🔥 salva no profiles (CORRETO NO TEU CASO)
+    // 🔥 salva no profiles
     const { error: insertError } = await supabaseAdmin
       .from('profiles')
       .insert([
