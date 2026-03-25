@@ -14,18 +14,18 @@ const criarSuperAdmin = async (req, res) => {
     if (error) throw error;
 
     // 🔥 salva no profiles
-    const { error: insertError } = await supabaseAdmin
-      .from('profiles')
-      .insert([
-        {
-          id: data.user.id,
-          email,
-          nome,
-          role: 'super_admin'
-        }
-      ]);
+  const { error: upsertError } = await supabaseAdmin
+  .from('profiles')
+  .upsert([
+    {
+      id: data.user.id,
+      email,
+      nome,
+      role: 'super_admin'
+    }
+  ]);
 
-    if (insertError) throw insertError;
+if (upsertError) throw upsertError;
 
     return res.json({ success: true });
 
