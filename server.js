@@ -19,6 +19,7 @@ const financeiroRoutes = require("./routes/financeiroRoutes");
 // --- IMPORTAÇÃO DAS ROTAS DO ADMIN ---
 const adminEstabelecimentosRoutes = require("./routes/adminEstabelecimentosRoutes");
 const adminOperadoresRoutes = require("./routes/adminOperadoresRoutes");
+const superAdminRoutes = require("./routes/superAdminRoutes");
 
 // Criar app
 const app = express();
@@ -53,6 +54,8 @@ app.use("/api/categorias", categoriaRoutes);
 app.use("/api/vendas", vendaRoutes);
 app.use("/api/clientes", clienteRoutes);
 app.use("/api/financeiro", financeiroRoutes);
+
+app.use("/superadmin", superAdminRoutes);
 
 // --- ROTA INICIAL / TESTE ---
 app.get("/", (req, res) => {

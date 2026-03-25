@@ -26,11 +26,26 @@ module.exports = async function authUser(req, res, next) {
 
     console.log("USER ID:", decoded.sub);
 
-    req.user = {
-      id: decoded.sub,
-      email: decoded.email,
-      role: decoded.role,
-    };
+  // 🔥 cria client com token
+req.supabase = createSupabaseUserClient(token);
+
+// 🔍 busca profile no banco
+const { data: profile, error } = await req.supabase
+  .from('profiles')
+  .select('role')
+  .eq('id', decoded.sub)
+  .single();
+
+if (error || !profile) {
+  return res.status(403).json({ error: "Perfil não encontrado" });
+}
+
+// 🔥 agora sim user completo
+req.user = {
+  id: decoded.sub,
+  email: decoded.email,
+  role: profile.role,
+};
 
     req.userToken = token;
 

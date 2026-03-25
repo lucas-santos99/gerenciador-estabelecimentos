@@ -7,7 +7,7 @@ const verificarPermissao = (permissaoCodigo) => {
         return res.status(401).json({ error: "Usuário não autenticado" });
       }
 
-      if (user.is_superadmin) {
+      if (user.role === 'super_admin') {
         return next();
       }
 
