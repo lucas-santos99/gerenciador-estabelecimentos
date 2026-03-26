@@ -26,35 +26,35 @@ module.exports = async function authUser(req, res, next) {
 
     console.log("USER ID:", decoded.sub);
 
-  // 🔥 cria client com token
-req.supabase = createSupabaseUserClient(token);
+    // 🔥 cria client com token
+    req.supabase = createSupabaseUserClient(token);
 
-// 🔍 busca profile no banco
-const { data: profile, error } = await req.supabase
-  .from('profiles')
-  .select('role')
-  .eq('id', decoded.sub)
-  .single();
+    // 🔍 busca profile no banco (AGORA COM is_active)
+    const { data: profile, error } = await req.supabase
+      .from("profiles")
+      .select("role, is_active")
+      .eq("id", decoded.sub)
+      .single();
 
-if (error || !profile) {
-  return res.status(403).json({ error: "Perfil não encontrado" });
-}
+    if (error || !profile) {
+      return res.status(403).json({ error: "Perfil não encontrado" });
+    }
 
-// 🔥 agora sim user completo
-req.user = {
-  id: decoded.sub,
-  email: decoded.email,
-  role: profile.role,
-};
+    // 🔥 BLOQUEIO DE USUÁRIO INATIVO
+    if (profile.is_active === false) {
+      return res.status(403).json({
+        error: "Usuário inativo. Contate o administrador."
+      });
+    }
+
+    // 🔥 monta usuário
+    req.user = {
+      id: decoded.sub,
+      email: decoded.email,
+      role: profile.role,
+    };
 
     req.userToken = token;
-
-    try {
-      req.supabase = createSupabaseUserClient(token);
-    } catch (e) {
-      console.error("Erro ao criar supabase client:", e);
-      return res.status(500).json({ error: "Erro interno (supabase)" });
-    }
 
     next();
 
@@ -63,18 +63,3 @@ req.user = {
     return res.status(500).json({ error: "Erro interno geral" });
   }
 };
-
-const { data: profile, error } = await supabaseAdmin
-  .from("profiles")
-  .select("is_active")
-  .eq("id", user.id)
-  .single();
-
-if (error) throw error;
-
-// 🔥 BLOQUEIO
-if (profile?.is_active === false) {
-  return res.status(403).json({
-    error: "Usuário inativo. Contate o administrador."
-  });
-}
