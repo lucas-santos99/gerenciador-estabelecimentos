@@ -1,21 +1,36 @@
 const express = require('express');
 const router = express.Router();
-const { verificarPermissao } = require('../middlewares/verificarPermissao');
-const { criarSuperAdmin } = require('../controllers/superAdminController');
-const authUser = require('../middlewares/authUser');
 
-// 🔥 só super admin acessa
+const authUser = require('../middlewares/authUser');
+const { verificarPermissao } = require('../middlewares/verificarPermissao');
+
+const {
+  criarSuperAdmin,
+  listarSuperAdmins,
+  excluirSuperAdmin
+} = require('../controllers/superAdminController');
+
+// 🔥 CRIAR SUPER ADMIN
 router.post(
   '/criar',
-  authUser, // 🔥 ESSENCIAL
-  verificarPermissao('qualquer_coisa'),
+  authUser,
+  verificarPermissao('super_admin'),
   criarSuperAdmin
 );
 
-router.delete(
-  "/:id",
+// 🔥 LISTAR SUPER ADMINS
+router.get(
+  '/listar',
   authUser,
-  verificarPermissao("super_admin"),
+  verificarPermissao('super_admin'),
+  listarSuperAdmins
+);
+
+// 🔥 EXCLUIR SUPER ADMIN
+router.delete(
+  '/:id',
+  authUser,
+  verificarPermissao('super_admin'),
   excluirSuperAdmin
 );
 
