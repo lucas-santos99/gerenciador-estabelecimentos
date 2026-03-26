@@ -87,8 +87,43 @@ const excluirSuperAdmin = async (req, res) => {
   }
 };
 
+async function toggleAtivo(req, res) {
+  try {
+    const { id } = req.params;
+
+    const { data: user, error: erroBusca } = await supabaseAdmin
+      .from("profiles")
+      .select("is_master, is_active")
+      .eq("id", id)
+      .single();
+
+    if (erroBusca) throw erroBusca;
+
+    if (user.is_master) {
+      return res.status(403).json({
+        error: "Não pode desativar um master"
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from("profiles")
+      .update({ is_active: !user.is_active })
+      .eq("id", id);
+
+    if (error) throw error;
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error("ERRO TOGGLE ATIVO:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+}
+
+
 module.exports = {
   criarSuperAdmin,
   listarSuperAdmins,
-  excluirSuperAdmin
+  excluirSuperAdmin,
+  toggleAtivo
 };

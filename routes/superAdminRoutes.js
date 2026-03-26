@@ -34,4 +34,11 @@ router.delete(
   excluirSuperAdmin
 );
 
+router.patch(
+  "/:id/ativo",
+  authUser,
+  verificarPermissao("super_admin"),
+  toggleAtivo
+);
+
 module.exports = router;
