@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const createSupabaseUserClient = require("../db/supabaseUser");
+const supabaseAdmin = require("../db/supabaseAdmin");
 
 module.exports = async function authUser(req, res, next) {
   try {
@@ -24,34 +25,35 @@ module.exports = async function authUser(req, res, next) {
       return res.status(401).json({ error: "Token inválido" });
     }
 
-    console.log("USER ID:", decoded.sub);
+    const userId = decoded.sub;
 
-    // 🔥 cria client com token
+    // 🔥 cria client com token (para uso nas rotas)
     req.supabase = createSupabaseUserClient(token);
 
-    // 🔍 busca profile no banco (AGORA COM is_active)
-    const { data: profile, error } = await req.supabase
+    // 🔥 BUSCA PROFILE COM ADMIN (IGNORA RLS)
+    const { data: profile, error } = await supabaseAdmin
       .from("profiles")
-      .select("role, is_active")
-      .eq("id", decoded.sub)
+      .select("*")
+      .eq("id", userId)
       .single();
 
     if (error || !profile) {
       return res.status(403).json({ error: "Perfil não encontrado" });
     }
 
-    // 🔥 BLOQUEIO DE USUÁRIO INATIVO
-    if (profile.is_active === false) {
+    // 🚨 BLOQUEIO REAL DE USUÁRIO INATIVO
+    if (!profile.is_active) {
       return res.status(403).json({
         error: "Usuário inativo. Contate o administrador."
       });
     }
 
-    // 🔥 monta usuário
+    // 🔥 monta usuário completo
     req.user = {
-      id: decoded.sub,
-      email: decoded.email,
+      id: profile.id,
+      email: profile.email,
       role: profile.role,
+      is_master: profile.is_master,
     };
 
     req.userToken = token;
