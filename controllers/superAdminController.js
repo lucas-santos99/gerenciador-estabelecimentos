@@ -131,6 +131,20 @@ async function alterarSenha(req, res) {
       });
     }
 
+    // 🔍 verifica se usuário existe
+    const { data: user, error: erroBusca } = await supabaseAdmin
+      .from("profiles")
+      .select("id")
+      .eq("id", id)
+      .single();
+
+    if (erroBusca || !user) {
+      return res.status(404).json({
+        error: "Usuário não encontrado"
+      });
+    }
+
+    // 🔥 atualiza senha
     const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
       password: senha
     });
@@ -141,14 +155,14 @@ async function alterarSenha(req, res) {
 
   } catch (err) {
     console.error("ERRO ALTERAR SENHA:", err);
-    res.status(500).json({ error: "Erro interno" });
+    res.status(500).json({ error: err.message });
   }
 }
-
 
 module.exports = {
   criarSuperAdmin,
   listarSuperAdmins,
   excluirSuperAdmin,
-  toggleAtivo
+  toggleAtivo,
+  alterarSenha
 };

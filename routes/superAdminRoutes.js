@@ -8,7 +8,8 @@ const {
   criarSuperAdmin,
   listarSuperAdmins,
   excluirSuperAdmin,
-  toggleAtivo // 🔥 ADICIONADO AQUI
+  toggleAtivo,
+  alterarSenha // ✅ agora sim importado corretamente
 } = require('../controllers/superAdminController');
 
 // 🔥 CRIAR SUPER ADMIN
@@ -37,10 +38,17 @@ router.delete(
 
 // 🔥 ATIVAR / DESATIVAR
 router.patch(
-  "/:id/ativo",
+  '/:id/ativo',
   authUser,
-  verificarPermissao("super_admin"),
-  toggleAtivo,
+  verificarPermissao('super_admin'),
+  toggleAtivo
+);
+
+// 🔥 ALTERAR SENHA (ROTA CORRETA SEPARADA)
+router.patch(
+  '/:id/senha',
+  authUser,
+  verificarPermissao('super_admin'),
   alterarSenha
 );
 
