@@ -7,7 +7,8 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const {
   criarSuperAdmin,
   listarSuperAdmins,
-  excluirSuperAdmin
+  excluirSuperAdmin,
+  toggleAtivo // 🔥 ADICIONADO AQUI
 } = require('../controllers/superAdminController');
 
 // 🔥 CRIAR SUPER ADMIN
@@ -34,6 +35,7 @@ router.delete(
   excluirSuperAdmin
 );
 
+// 🔥 ATIVAR / DESATIVAR
 router.patch(
   "/:id/ativo",
   authUser,
