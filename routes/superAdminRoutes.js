@@ -40,7 +40,8 @@ router.patch(
   "/:id/ativo",
   authUser,
   verificarPermissao("super_admin"),
-  toggleAtivo
+  toggleAtivo,
+  alterarSenha
 );
 
 module.exports = router;

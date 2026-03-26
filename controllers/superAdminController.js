@@ -120,6 +120,31 @@ async function toggleAtivo(req, res) {
   }
 }
 
+async function alterarSenha(req, res) {
+  try {
+    const { id } = req.params;
+    const { senha } = req.body;
+
+    if (!senha || senha.length < 6) {
+      return res.status(400).json({
+        error: "Senha deve ter pelo menos 6 caracteres"
+      });
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
+      password: senha
+    });
+
+    if (error) throw error;
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error("ERRO ALTERAR SENHA:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+}
+
 
 module.exports = {
   criarSuperAdmin,

@@ -63,3 +63,18 @@ req.user = {
     return res.status(500).json({ error: "Erro interno geral" });
   }
 };
+
+const { data: profile, error } = await supabaseAdmin
+  .from("profiles")
+  .select("is_active")
+  .eq("id", user.id)
+  .single();
+
+if (error) throw error;
+
+// 🔥 BLOQUEIO
+if (profile?.is_active === false) {
+  return res.status(403).json({
+    error: "Usuário inativo. Contate o administrador."
+  });
+}
