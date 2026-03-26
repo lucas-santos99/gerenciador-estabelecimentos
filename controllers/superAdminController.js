@@ -1,10 +1,10 @@
 const supabaseAdmin = require('../db/supabaseAdmin');
 
+// 🔥 CRIAR SUPERADMIN
 const criarSuperAdmin = async (req, res) => {
   const { email, senha, nome } = req.body;
 
   try {
-    // 🔥 cria usuário no auth
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password: senha,
@@ -13,23 +13,51 @@ const criarSuperAdmin = async (req, res) => {
 
     if (error) throw error;
 
-    // 🔥 salva no profiles
-  const { error: upsertError } = await supabaseAdmin
-  .from('profiles')
-  .upsert([
-    {
-      id: data.user.id,
-      email,
-      nome,
-      role: 'super_admin'
-    }
-  ]);
+    const { error: upsertError } = await supabaseAdmin
+      .from('profiles')
+      .upsert([
+        {
+          id: data.user.id,
+          email,
+          nome,
+          role: 'super_admin',
+          is_master: false
+        }
+      ]);
 
-  const excluirSuperAdmin = async (req, res) => {
+    if (upsertError) throw upsertError;
+
+    return res.json({ success: true });
+
+  } catch (err) {
+    console.error("ERRO CRIAR SUPERADMIN:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+// 🔥 LISTAR SUPERADMINS
+const listarSuperAdmins = async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('role', 'super_admin');
+
+    if (error) throw error;
+
+    res.json(data);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// 🔥 EXCLUIR SUPERADMIN
+const excluirSuperAdmin = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // 🔍 buscar usuário alvo
     const { data: user, error } = await supabaseAdmin
       .from("profiles")
       .select("*")
@@ -38,17 +66,14 @@ const criarSuperAdmin = async (req, res) => {
 
     if (error) throw error;
 
-    // 🚫 PROTEÇÃO MASTER
     if (user.is_master) {
       return res.status(403).json({
         error: "Não é permitido excluir o SuperAdmin principal"
       });
     }
 
-    // 🗑️ deletar do auth
     await supabaseAdmin.auth.admin.deleteUser(id);
 
-    // 🗑️ deletar do profiles
     await supabaseAdmin
       .from("profiles")
       .delete()
@@ -59,16 +84,6 @@ const criarSuperAdmin = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
-  }
-};
-
-if (upsertError) throw upsertError;
-
-    return res.json({ success: true });
-
-  } catch (err) {
-    console.error("ERRO CRIAR SUPERADMIN:", err);
-    return res.status(500).json({ error: err.message });
   }
 };
 
