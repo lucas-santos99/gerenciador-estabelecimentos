@@ -25,6 +25,43 @@ const criarSuperAdmin = async (req, res) => {
     }
   ]);
 
+  const excluirSuperAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 🔍 buscar usuário alvo
+    const { data: user, error } = await supabaseAdmin
+      .from("profiles")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error) throw error;
+
+    // 🚫 PROTEÇÃO MASTER
+    if (user.is_master) {
+      return res.status(403).json({
+        error: "Não é permitido excluir o SuperAdmin principal"
+      });
+    }
+
+    // 🗑️ deletar do auth
+    await supabaseAdmin.auth.admin.deleteUser(id);
+
+    // 🗑️ deletar do profiles
+    await supabaseAdmin
+      .from("profiles")
+      .delete()
+      .eq("id", id);
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 if (upsertError) throw upsertError;
 
     return res.json({ success: true });
@@ -35,4 +72,8 @@ if (upsertError) throw upsertError;
   }
 };
 
-module.exports = { criarSuperAdmin };
+module.exports = {
+  criarSuperAdmin,
+  listarSuperAdmins,
+  excluirSuperAdmin
+};

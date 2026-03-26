@@ -12,4 +12,11 @@ router.post(
   criarSuperAdmin
 );
 
+router.delete(
+  "/:id",
+  authUser,
+  verificarPermissao("super_admin"),
+  excluirSuperAdmin
+);
+
 module.exports = router;
