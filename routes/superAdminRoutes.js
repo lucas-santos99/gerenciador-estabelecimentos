@@ -12,39 +12,11 @@ const {
   alterarSenha
 } = require('../controllers/superAdminController');
 
-// 🔥 TODAS ROTAS PROTEGIDAS
+// 🔥 TODAS ROTAS PRECISAM ESTAR AUTENTICADAS
 router.use(authUser);
 
-// 🔒 APENAS MASTER PODE ACESSAR
-router.use(onlyMaster);
-
 // ============================================================
-// 🔥 CRIAR SUPER ADMIN
-// ============================================================
-router.post('/criar', criarSuperAdmin);
-
-// ============================================================
-// 🔥 LISTAR SUPER ADMINS
-// ============================================================
-router.get('/listar', listarSuperAdmins);
-
-// ============================================================
-// 🔥 EXCLUIR SUPER ADMIN
-// ============================================================
-router.delete('/:id', excluirSuperAdmin);
-
-// ============================================================
-// 🔥 ATIVAR / DESATIVAR
-// ============================================================
-router.patch('/:id/ativo', toggleAtivo);
-
-// ============================================================
-// 🔥 ALTERAR SENHA
-// ============================================================
-router.patch('/:id/senha', alterarSenha);
-
-// ============================================================
-// 🔥 PERFIL DO USUÁRIO LOGADO (USADO NO LOGIN)
+// 🔥 PERFIL (IMPORTANTE PRO LOGIN) — NÃO PODE SER MASTER ONLY
 // ============================================================
 router.get('/perfil', (req, res) => {
   try {
@@ -53,5 +25,24 @@ router.get('/perfil', (req, res) => {
     return res.status(500).json({ error: 'Erro ao buscar perfil' });
   }
 });
+
+// ============================================================
+// 🔒 APENAS MASTER DAQUI PRA BAIXO
+// ============================================================
+
+// CRIAR
+router.post('/criar', onlyMaster, criarSuperAdmin);
+
+// LISTAR
+router.get('/listar', onlyMaster, listarSuperAdmins);
+
+// EXCLUIR
+router.delete('/:id', onlyMaster, excluirSuperAdmin);
+
+// ATIVAR/DESATIVAR
+router.patch('/:id/ativo', onlyMaster, toggleAtivo);
+
+// ALTERAR SENHA
+router.patch('/:id/senha', onlyMaster, alterarSenha);
 
 module.exports = router;
