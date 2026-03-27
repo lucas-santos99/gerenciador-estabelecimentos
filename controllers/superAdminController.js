@@ -21,7 +21,8 @@ const criarSuperAdmin = async (req, res) => {
           email,
           nome,
           role: 'super_admin',
-          is_master: false
+          is_master: false,
+          is_active: true
         }
       ]);
 
@@ -68,7 +69,7 @@ const excluirSuperAdmin = async (req, res) => {
 
     if (user.is_master) {
       return res.status(403).json({
-        error: "Não é permitido excluir o SuperAdmin principal"
+        error: "Não é permitido excluir um usuário master"
       });
     }
 
@@ -87,6 +88,7 @@ const excluirSuperAdmin = async (req, res) => {
   }
 };
 
+// 🔥 ATIVAR/DESATIVAR
 async function toggleAtivo(req, res) {
   try {
     const { id } = req.params;
@@ -120,18 +122,20 @@ async function toggleAtivo(req, res) {
   }
 }
 
+// 🔥 ALTERAR SENHA (CORRIGIDO)
 async function alterarSenha(req, res) {
   try {
     const { id } = req.params;
     const { senha } = req.body;
 
+    // 🔒 valida senha
     if (!senha || senha.length < 6) {
       return res.status(400).json({
         error: "Senha deve ter pelo menos 6 caracteres"
       });
     }
 
-    // 🔍 verifica se usuário existe
+    // 🔍 buscar usuário alvo
     const { data: user, error: erroBusca } = await supabaseAdmin
       .from("profiles")
       .select("id")
@@ -144,14 +148,24 @@ async function alterarSenha(req, res) {
       });
     }
 
-    // 🔥 atualiza senha
+    // 🔒 REGRA DE PERMISSÃO
+    const isMaster = req.user?.is_master;
+    const isOwnUser = req.user?.id === id;
+
+    if (!isMaster && !isOwnUser) {
+      return res.status(403).json({
+        error: "Sem permissão para alterar esta senha"
+      });
+    }
+
+    // 🔥 atualizar senha no Supabase
     const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
       password: senha
     });
 
     if (error) throw error;
 
-    res.json({ success: true });
+    return res.json({ success: true });
 
   } catch (err) {
     console.error("ERRO ALTERAR SENHA:", err);
@@ -159,11 +173,11 @@ async function alterarSenha(req, res) {
   }
 }
 
+// 🔥 TORNAR MASTER
 async function tornarMaster(req, res) {
   try {
     const { id } = req.params;
 
-    // 🔍 BUSCAR USUÁRIO
     const { data: user, error: erroBusca } = await supabaseAdmin
       .from('profiles')
       .select('*')
@@ -174,12 +188,10 @@ async function tornarMaster(req, res) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    // 🚨 JÁ É MASTER?
     if (user.is_master) {
       return res.status(400).json({ error: "Usuário já é master" });
     }
 
-    // 🔥 ATUALIZA
     const { error } = await supabaseAdmin
       .from('profiles')
       .update({ is_master: true })
