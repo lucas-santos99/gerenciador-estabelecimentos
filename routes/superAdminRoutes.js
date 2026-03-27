@@ -52,4 +52,17 @@ router.patch(
   alterarSenha
 );
 
+// 🔥 PERFIL DO USUÁRIO LOGADO
+router.get(
+  '/perfil',
+  authUser,
+  async (req, res) => {
+    try {
+      return res.json(req.user);
+    } catch (err) {
+      return res.status(500).json({ error: 'Erro ao buscar perfil' });
+    }
+  }
+);
+
 module.exports = router;

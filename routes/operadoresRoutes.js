@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+// 🔥 PROTEGE TODAS AS ROTAS
+router.use(authUser);
 
 const db = require("../db/supabaseAdmin"); // usado para rotas ADMIN
 const authUser = require("../middlewares/authUser");

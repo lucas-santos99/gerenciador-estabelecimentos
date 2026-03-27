@@ -8,12 +8,15 @@ const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 
+// 🔥 PROTEGE TODAS AS ROTAS
+router.use(authUser);
+
 
 // ============================================================
 // 1) BUSCAR CLIENTES POR TERMO (PDV / BUSCA RÁPIDA)
 // ============================================================
 
-router.get('/buscar', authUser, async (req, res) => {
+router.get('/buscar', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -51,7 +54,7 @@ router.get('/buscar', authUser, async (req, res) => {
 // 2) LISTAR CLIENTES (TELA CLIENTES / FIADO)
 // ============================================================
 
-router.get('/', authUser, async (req, res) => {
+router.get('/', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -83,7 +86,7 @@ router.get('/', authUser, async (req, res) => {
 // 3) LISTAR CLIENTES COM DÍVIDA
 // ============================================================
 
-router.get('/dividas', authUser, async (req, res) => {
+router.get('/dividas', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -116,7 +119,7 @@ router.get('/dividas', authUser, async (req, res) => {
 // 4) CRIAR CLIENTE
 // ============================================================
 
-router.post('/criar', authUser, async (req, res) => {
+router.post('/criar', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -159,7 +162,7 @@ router.post('/criar', authUser, async (req, res) => {
 // 5) LISTAR ITENS DO FIADO
 // ============================================================
 
-router.get('/:clienteId/itens-fiado', authUser, async (req, res) => {
+router.get('/:clienteId/itens-fiado', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -219,7 +222,7 @@ router.get('/:clienteId/itens-fiado', authUser, async (req, res) => {
 // 6) LIQUIDAR FIADO
 // ============================================================
 
-router.post('/liquidar', authUser, async (req, res) => {
+router.post('/liquidar', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -262,7 +265,7 @@ router.post('/liquidar', authUser, async (req, res) => {
 // 7) ATUALIZAR CLIENTE
 // ============================================================
 
-router.put('/atualizar/:clienteId', authUser, async (req, res) => {
+router.put('/atualizar/:clienteId', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -310,7 +313,7 @@ router.put('/atualizar/:clienteId', authUser, async (req, res) => {
 // 8) EXCLUIR CLIENTE
 // ============================================================
 
-router.delete('/deletar/:clienteId', authUser, async (req, res) => {
+router.delete('/deletar/:clienteId', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 

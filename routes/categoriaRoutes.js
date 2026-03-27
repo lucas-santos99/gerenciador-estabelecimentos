@@ -4,9 +4,11 @@ const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 
+// 🔥 PROTEGE TODAS AS ROTAS
+router.use(authUser);
 
 // --- Rota GET: Buscar categorias ---
-router.get('/', authUser, async (req, res) => {
+router.get('/', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 
@@ -35,7 +37,7 @@ router.get('/', authUser, async (req, res) => {
 
 
 // --- Rota POST: Criar categoria ---
-router.post('/', authUser, async (req, res) => {
+router.post('/', async (req, res) => {
 
     const { nome } = req.body;
 
@@ -81,7 +83,7 @@ router.post('/', authUser, async (req, res) => {
 
 
 // --- Rota PUT: Atualizar categoria ---
-router.put('/:id', authUser, async (req, res) => {
+router.put('/:id', async (req, res) => {
 
     const { id } = req.params;
     const { nome } = req.body;
@@ -135,7 +137,7 @@ router.put('/:id', authUser, async (req, res) => {
 
 
 // --- Rota DELETE: Excluir categoria ---
-router.delete('/:id', authUser, async (req, res) => {
+router.delete('/:id', async (req, res) => {
 
     const { id } = req.params;
 

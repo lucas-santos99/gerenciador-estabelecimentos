@@ -4,12 +4,14 @@ const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 
+// 🔥 PROTEGE TODAS AS ROTAS
+router.use(authUser);
 
 // ============================================================
 // FINALIZAR VENDA (PDV)
 // ============================================================
 
-router.post('/finalizar', authUser, async (req, res) => {
+router.post('/finalizar', async (req, res) => {
 
     const supabase = createSupabaseUserClient(req.userToken);
 

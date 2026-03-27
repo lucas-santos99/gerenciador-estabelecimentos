@@ -1,6 +1,8 @@
 const express = require('express');
 const db = require('../db/supabaseAdmin');
 const router = express.Router();
+const authUser = require('../middlewares/authUser');
+router.use(authUser);
 
 // --- Rota GET: /:id/produtos/buscar-global ---
 router.get('/:id/produtos/buscar-global', async (req, res) => {

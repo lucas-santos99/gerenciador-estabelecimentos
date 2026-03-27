@@ -7,6 +7,9 @@ const router = express.Router();
 const authUser = require('../middlewares/authUser');
 //const createSupabaseUserClient = require('../db/supabaseUser');
 
+// 🔥 PROTEGE TODAS AS ROTAS
+router.use(authUser);
+
 // 🔥 NOVO
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
@@ -18,7 +21,6 @@ const { PERMISSOES } = require('../utils/permissoes');
 // ============================================================
 
 router.get('/',
-    authUser,
     //verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
@@ -82,7 +84,6 @@ router.get('/',
 // ============================================================
 
 router.get('/resumo',
-    authUser,
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
@@ -144,7 +145,6 @@ router.get('/resumo',
 // ============================================================
 
 router.post('/',
-    authUser,
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
@@ -198,7 +198,6 @@ router.post('/',
 // ============================================================
 
 router.put('/:contaId/pagar',
-    authUser,
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
@@ -247,7 +246,6 @@ router.put('/:contaId/pagar',
 // ============================================================
 
 router.get('/relatorio_dre',
-    authUser,
     verificarPermissao(PERMISSOES.VER_RELATORIOS),
     async (req, res) => {
 
@@ -292,7 +290,6 @@ router.get('/relatorio_dre',
 // ============================================================
 
 router.delete('/:contaId',
-    authUser,
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
@@ -339,7 +336,6 @@ router.delete('/:contaId',
 // ============================================================
 
 router.put('/:contaId',
-    authUser,
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
@@ -400,7 +396,6 @@ router.put('/:contaId',
 // ============================================================
 
 router.get('/relatorio_produtos',
-    authUser,
     verificarPermissao(PERMISSOES.VER_RELATORIOS),
     async (req, res) => {
 
