@@ -2,67 +2,56 @@ const express = require('express');
 const router = express.Router();
 
 const authUser = require('../middlewares/authUser');
-const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const onlyMaster = require('../middlewares/onlyMaster');
 
 const {
   criarSuperAdmin,
   listarSuperAdmins,
   excluirSuperAdmin,
   toggleAtivo,
-  alterarSenha // ✅ agora sim importado corretamente
+  alterarSenha
 } = require('../controllers/superAdminController');
 
+// 🔥 TODAS ROTAS PROTEGIDAS
+router.use(authUser);
+
+// 🔒 APENAS MASTER PODE ACESSAR
+router.use(onlyMaster);
+
+// ============================================================
 // 🔥 CRIAR SUPER ADMIN
-router.post(
-  '/criar',
-  authUser,
-  verificarPermissao('super_admin'),
-  criarSuperAdmin
-);
+// ============================================================
+router.post('/criar', criarSuperAdmin);
 
+// ============================================================
 // 🔥 LISTAR SUPER ADMINS
-router.get(
-  '/listar',
-  authUser,
-  verificarPermissao('super_admin'),
-  listarSuperAdmins
-);
+// ============================================================
+router.get('/listar', listarSuperAdmins);
 
+// ============================================================
 // 🔥 EXCLUIR SUPER ADMIN
-router.delete(
-  '/:id',
-  authUser,
-  verificarPermissao('super_admin'),
-  excluirSuperAdmin
-);
+// ============================================================
+router.delete('/:id', excluirSuperAdmin);
 
+// ============================================================
 // 🔥 ATIVAR / DESATIVAR
-router.patch(
-  '/:id/ativo',
-  authUser,
-  verificarPermissao('super_admin'),
-  toggleAtivo
-);
+// ============================================================
+router.patch('/:id/ativo', toggleAtivo);
 
-// 🔥 ALTERAR SENHA (ROTA CORRETA SEPARADA)
-router.patch(
-  '/:id/senha',
-  authUser,
-  verificarPermissao('super_admin'),
-  alterarSenha
-);
+// ============================================================
+// 🔥 ALTERAR SENHA
+// ============================================================
+router.patch('/:id/senha', alterarSenha);
 
-// 🔥 PERFIL DO USUÁRIO LOGADO
-router.get(
-  '/perfil',
-  authUser,
-  async (req, res) => {
-    try {
-      return res.json(req.user);
-    } catch (err) {
-      return res.status(500).json({ error: 'Erro ao buscar perfil' });
-    }
+// ============================================================
+// 🔥 PERFIL DO USUÁRIO LOGADO (USADO NO LOGIN)
+// ============================================================
+router.get('/perfil', (req, res) => {
+  try {
+    return res.json(req.user);
+  } catch (err) {
+    return res.status(500).json({ error: 'Erro ao buscar perfil' });
   }
-);
+});
 
 module.exports = router;
