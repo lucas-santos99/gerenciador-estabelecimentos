@@ -159,11 +159,49 @@ async function alterarSenha(req, res) {
   }
 }
 
+async function tornarMaster(req, res) {
+  try {
+    const { id } = req.params;
+
+    // 🔍 BUSCAR USUÁRIO
+    const { data: user, error: erroBusca } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (erroBusca || !user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    // 🚨 JÁ É MASTER?
+    if (user.is_master) {
+      return res.status(400).json({ error: "Usuário já é master" });
+    }
+
+    // 🔥 ATUALIZA
+    const { error } = await supabaseAdmin
+      .from('profiles')
+      .update({ is_master: true })
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({ error: 'Erro ao definir como master' });
+    }
+
+    return res.json({ success: true });
+
+  } catch (err) {
+    console.error("ERRO TORNAR MASTER:", err);
+    return res.status(500).json({ error: "Erro interno" });
+  }
+}
+
 module.exports = {
   criarSuperAdmin,
   listarSuperAdmins,
   excluirSuperAdmin,
   toggleAtivo,
-  alterarSenha
-  //corrigido
+  alterarSenha,
+  tornarMaster
 };

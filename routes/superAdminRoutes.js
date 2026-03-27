@@ -9,14 +9,15 @@ const {
   listarSuperAdmins,
   excluirSuperAdmin,
   toggleAtivo,
-  alterarSenha
+  alterarSenha,
+  tornarMaster // 🔥 ADICIONADO
 } = require('../controllers/superAdminController');
 
 // 🔥 TODAS ROTAS PRECISAM ESTAR AUTENTICADAS
 router.use(authUser);
 
 // ============================================================
-// 🔥 PERFIL (IMPORTANTE PRO LOGIN) — NÃO PODE SER MASTER ONLY
+// 🔥 PERFIL (IMPORTANTE PRO LOGIN)
 // ============================================================
 router.get('/perfil', (req, res) => {
   try {
@@ -27,7 +28,7 @@ router.get('/perfil', (req, res) => {
 });
 
 // ============================================================
-// 🔒 APENAS MASTER DAQUI PRA BAIXO
+// 🔒 APENAS MASTER
 // ============================================================
 
 // CRIAR
@@ -44,5 +45,8 @@ router.patch('/:id/ativo', onlyMaster, toggleAtivo);
 
 // ALTERAR SENHA
 router.patch('/:id/senha', onlyMaster, alterarSenha);
+
+// 🔥 TORNAR MASTER (NOVO)
+router.patch('/:id/master', onlyMaster, tornarMaster);
 
 module.exports = router;
