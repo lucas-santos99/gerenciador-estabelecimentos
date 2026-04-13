@@ -39,6 +39,9 @@ app.use(
 
       // FRONTEND NOVO
       "https://gerenciador-estabelecimentos-frontend.onrender.com",
+
+      // VERCEL
+      "https://gerenciador-estabelecimentos-fronte.vercel.app",
     ],
     credentials: true,
   })
