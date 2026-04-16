@@ -55,7 +55,7 @@ router.post('/', async (req, res) => {
             .from('categorias')
             .insert({ nome, mercearia_id: req.user.id })
             .select()
-            .single();
+            .single(); 
 
         if (error) throw error;
 
