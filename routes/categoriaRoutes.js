@@ -52,7 +52,7 @@ router.post('/', async (req, res) => {
 
         const { data, error } = await supabase
             .from('categorias')
-            .insert({ nome, mercearia_id: req.user.id })
+            .insert({ nome, mercearia_id: req.user.mercearia_id })
             .select()
             .single(); 
 
