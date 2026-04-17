@@ -36,34 +36,29 @@ router.get('/', async (req, res) => {
 });
 
 
+const supabaseAdmin = require('../db/supabaseAdmin'); // ← adiciona no topo
+
 // --- Rota POST: Criar categoria ---
 router.post('/', async (req, res) => {
-    const supabase = createSupabaseUserClient(req.userToken);
     const { nome } = req.body;
-
-    // 🔍 DEBUG — remover depois
-    console.log('[DEBUG] req.user:', req.user);
 
     if (!nome) {
         return res.status(400).json({ error: 'Nome da categoria é obrigatório.' });
     }
 
     try {
-
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin  // ← usa admin aqui
             .from('categorias')
             .insert({ nome, mercearia_id: req.user.mercearia_id })
             .select()
-            .single(); 
+            .single();
 
         if (error) throw error;
 
         console.log(`[INFO] Nova categoria criada: ${data.nome}`);
-
         res.status(201).json(data);
 
     } catch (error) {
-
         console.error('[ERRO] POST /api/categorias:', error.message);
 
         if (error.code === '23505') {
@@ -72,14 +67,9 @@ router.post('/', async (req, res) => {
             });
         }
 
-        res.status(500).json({
-            error: 'Erro ao criar categoria.'
-        });
-
+        res.status(500).json({ error: 'Erro ao criar categoria.' });
     }
-
 });
-
 
 // --- Rota PUT: Atualizar categoria ---
 router.put('/:id', async (req, res) => {
