@@ -54,6 +54,7 @@ module.exports = async function authUser(req, res, next) {
       email: profile.email,
       role: profile.role,
       is_master: profile.is_master,
+      mercearia_id: profile.mercearia_id,
     };
 
     req.userToken = token;
