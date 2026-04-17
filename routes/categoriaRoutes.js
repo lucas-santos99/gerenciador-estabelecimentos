@@ -48,8 +48,6 @@ router.post('/', async (req, res) => {
         return res.status(400).json({ error: 'Nome da categoria é obrigatório.' });
     }
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     try {
 
         const { data, error } = await supabase
