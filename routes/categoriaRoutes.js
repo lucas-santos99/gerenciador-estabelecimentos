@@ -38,13 +38,14 @@ router.get('/', async (req, res) => {
 
 // --- Rota POST: Criar categoria ---
 router.post('/', async (req, res) => {
-
+    const supabase = createSupabaseUserClient(req.userToken);
     const { nome } = req.body;
 
+    // 🔍 DEBUG — remover depois
+    console.log('[DEBUG] req.user:', req.user);
+
     if (!nome) {
-        return res.status(400).json({
-            error: 'Nome da categoria é obrigatório.'
-        });
+        return res.status(400).json({ error: 'Nome da categoria é obrigatório.' });
     }
 
     const supabase = createSupabaseUserClient(req.userToken);
