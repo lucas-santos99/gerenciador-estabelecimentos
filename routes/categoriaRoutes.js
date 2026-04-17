@@ -10,13 +10,11 @@ router.use(authUser);
 // --- Rota GET: Buscar categorias ---
 router.get('/', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     try {
-
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin  // ← troca aqui
             .from('categorias')
             .select('id, nome')
+            .eq('mercearia_id', req.user.mercearia_id)  // ← filtra pela mercearia
             .order('nome', { ascending: true });
 
         if (error) throw error;
@@ -24,15 +22,9 @@ router.get('/', async (req, res) => {
         res.status(200).json(data);
 
     } catch (error) {
-
         console.error('[ERRO] GET /api/categorias:', error.message);
-
-        res.status(500).json({
-            error: 'Erro ao buscar categorias.'
-        });
-
+        res.status(500).json({ error: 'Erro ao buscar categorias.' });
     }
-
 });
 
 
