@@ -305,5 +305,70 @@ router.get('/:id/produtos/buscar', async (req, res) => {
     }
 });
 
+// ============================================================
+// COLAR NO FINAL de estabelecimentoRoutes.js, ANTES de module.exports = router
+// Rotas do módulo Configurações do painel do estabelecimento
+// ============================================================
+
+
+// GET /api/estabelecimentos/dados/:id
+router.get('/dados/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+
+    if (parseInt(id) !== user.mercearia_id) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
+    const { data, error } = await db
+      .from('mercearias')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) return res.status(404).json({ error: 'Estabelecimento não encontrado' });
+
+    res.json(data);
+
+  } catch (err) {
+    console.error('[ERRO] GET /api/estabelecimentos/dados/:id', err);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+
+// PUT /api/estabelecimentos/dados/:id
+router.put('/dados/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+
+    if (user.role !== 'merchant') {
+      return res.status(403).json({ error: 'Apenas o dono do estabelecimento pode editar as configurações' });
+    }
+
+    if (parseInt(id) !== user.mercearia_id) {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+
+    const { nome_fantasia, telefone, endereco_completo, logo_url } = req.body;
+
+    const { data, error } = await db
+      .from('mercearias')
+      .update({ nome_fantasia, telefone, endereco_completo, logo_url })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ success: true, mercearia: data });
+
+  } catch (err) {
+    console.error('[ERRO] PUT /api/estabelecimentos/dados/:id', err);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
 
 module.exports = router;

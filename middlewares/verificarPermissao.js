@@ -1,3 +1,5 @@
+// middlewares/verificarPermissao.js
+
 const verificarPermissao = (permissaoCodigo) => {
   return async (req, res, next) => {
     try {
@@ -7,10 +9,17 @@ const verificarPermissao = (permissaoCodigo) => {
         return res.status(401).json({ error: "Usuário não autenticado" });
       }
 
+      // ✅ super_admin passa sempre
       if (user.role === 'super_admin') {
         return next();
       }
 
+      // ✅ merchant passa sempre (dono do estabelecimento tem acesso total ao próprio painel)
+      if (user.role === 'merchant') {
+        return next();
+      }
+
+      // A partir daqui só operadores
       const supabase = req.supabase;
 
       // 🔍 BUSCAR OPERADOR
@@ -29,7 +38,7 @@ const verificarPermissao = (permissaoCodigo) => {
         return res.status(403).json({ error: "Operador não encontrado" });
       }
 
-      // 🔍 BUSCAR PERMISSÕES (CACHE)
+      // 🔍 BUSCAR PERMISSÕES (CACHE na requisição)
       if (!req.permissoes) {
         const { data: permissoes, error: permError } = await supabase
           .from("permissoes_operador")
@@ -43,7 +52,7 @@ const verificarPermissao = (permissaoCodigo) => {
 
         const permissoesIds = permissoes.map(p => p.permissao_id);
 
-        // 🔥 EVITA QUERY VAZIA (IMPORTANTE)
+        // 🔥 EVITA QUERY VAZIA
         if (permissoesIds.length === 0) {
           req.permissoes = [];
         } else {
@@ -72,7 +81,7 @@ const verificarPermissao = (permissaoCodigo) => {
       next();
 
     } catch (err) {
-      console.error("ERRO GERAL:", err);
+      console.error("ERRO GERAL verificarPermissao:", err);
       return res.status(500).json({ error: "Erro interno" });
     }
   };
