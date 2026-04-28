@@ -100,10 +100,12 @@ router.get('/resumo',
     ));
 
     try {
+        const supabaseAdmin = require('../db/supabaseAdmin');
 
-        const { data: transacoes, error } = await supabase
+        const { data: transacoes, error } = await supabaseAdmin
             .from('transacoes_caixa')
             .select('tipo, meio_pagamento, valor')
+            .eq('mercearia_id', req.user.mercearia_id)
             .eq('tipo', 'entrada')
             .gte('data_transacao', todayStart.toISOString());
 
