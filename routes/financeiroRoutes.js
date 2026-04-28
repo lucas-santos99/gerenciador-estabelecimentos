@@ -89,8 +89,15 @@ router.get('/resumo',
 
     const supabase = req.supabase;
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // Início do dia no timezone de Brasília (UTC-3)
+    // Usa a data atual em UTC e subtrai 3 horas para alinhar com BRT
+    const now = new Date();
+    const todayStart = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      0, 0, 0, 0
+    ));
 
     try {
 
