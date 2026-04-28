@@ -43,7 +43,8 @@ router.post('/finalizar', async (req, res) => {
             p_valor_total: totalVendaFloat,
             p_meio_pagamento: meio_pagamento,
             p_carrinho_itens: carrinho,
-            p_cliente_id: clienteId || null
+            p_cliente_id: clienteId || null,
+            p_operador_id: null
         });
 
         if (error) throw error;
