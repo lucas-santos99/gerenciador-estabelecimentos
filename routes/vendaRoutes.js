@@ -39,7 +39,7 @@ router.post('/finalizar', async (req, res) => {
 
     try {
 
-        const { data: vendaId, error } = await supabase.rpc('finalizar_venda', {
+    const { data: vendaId, error } = await supabase.rpc('finalizar_venda', {
             p_valor_total: totalVendaFloat,
             p_meio_pagamento: meio_pagamento,
             p_carrinho_itens: carrinho,
@@ -47,7 +47,11 @@ router.post('/finalizar', async (req, res) => {
             p_operador_id: null
         });
 
-        if (error) throw error;
+        if (error) {
+            console.error('[ERRO RPC] finalizar_venda:', JSON.stringify(error));
+            console.error('[PAYLOAD]', JSON.stringify({ totalVendaFloat, meio_pagamento, carrinho, clienteId }));
+            throw error;
+        }
 
         console.log(`[INFO] Venda finalizada. ID: ${vendaId}`);
 
