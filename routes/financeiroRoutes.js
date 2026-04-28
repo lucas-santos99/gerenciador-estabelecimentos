@@ -271,10 +271,12 @@ router.get('/relatorio_dre',
     }
 
     try {
+        const supabaseAdmin = require('../db/supabaseAdmin');
 
-        const { data, error } = await supabase.rpc('gerar_relatorio_dre', {
+        const { data, error } = await supabaseAdmin.rpc('gerar_relatorio_dre', {
             p_data_inicio: data_inicio,
-            p_data_fim: data_fim
+            p_data_fim: data_fim,
+            p_mercearia_id: req.user.mercearia_id
         });
 
         if (error) throw error;
@@ -421,11 +423,13 @@ router.get('/relatorio_produtos',
     }
 
     try {
+        const supabaseAdmin = require('../db/supabaseAdmin');
 
-        const { data, error } = await supabase.rpc('gerar_relatorio_produtos', {
+        const { data, error } = await supabaseAdmin.rpc('gerar_relatorio_produtos', {
             p_data_inicio: data_inicio,
             p_data_fim: data_fim,
-            p_categoria_id: categoria_id || null
+            p_categoria_id: categoria_id || null,
+            p_mercearia_id: req.user.mercearia_id
         });
 
         if (error) throw error;
