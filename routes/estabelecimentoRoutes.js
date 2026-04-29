@@ -99,6 +99,7 @@ router.get('/:id/produtos', async (req, res) => {
             .select(`
                 id,
                 nome,
+                marca,
                 estoque_atual,
                 estoque_minimo,
                 preco_venda,
@@ -136,6 +137,7 @@ router.post('/:id/produtos', async (req, res) => {
 
     const {
         nome,
+        marca,
         codigo_barras,
         estoque_atual,
         estoque_minimo,
@@ -156,6 +158,7 @@ router.post('/:id/produtos', async (req, res) => {
             .insert({
                 mercearia_id: estabelecimentoId,
                 nome: nome,
+                marca: marca || null,
                 codigo_barras: codigo_barras || null,
                 estoque_atual: parseFloat(estoque_atual) || 0,
                 estoque_minimo: parseFloat(estoque_minimo) || 10,
@@ -189,6 +192,7 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
 
     const {
         nome,
+        marca,
         codigo_barras,
         estoque_atual,
         estoque_minimo,
@@ -208,6 +212,7 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
             .from('produtos')
             .update({
                 nome: nome,
+                marca: marca || null,
                 codigo_barras: codigo_barras || null,
                 estoque_atual: parseFloat(estoque_atual) || 0,
                 estoque_minimo: parseFloat(estoque_minimo) || 10,
@@ -288,7 +293,7 @@ router.get('/:id/produtos/buscar', async (req, res) => {
 
         const { data, error } = await db
             .from('produtos')
-            .select('id, nome, preco_venda, estoque_atual, unidade_medida')
+            .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo')
             .eq('mercearia_id', estabelecimentoId)
             .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
             .limit(10);
