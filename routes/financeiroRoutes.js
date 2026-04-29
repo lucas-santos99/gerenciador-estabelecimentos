@@ -251,6 +251,70 @@ router.put('/:contaId/pagar',
 
 
 // ============================================================
+// HISTÓRICO DE VENDAS
+// ============================================================
+
+router.get('/historico',
+    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    async (req, res) => {
+
+    const { data_inicio, data_fim } = req.query;
+    const supabaseAdmin = require('../db/supabaseAdmin');
+
+    const inicio = data_inicio
+      ? new Date(data_inicio + 'T00:00:00.000Z').toISOString()
+      : new Date(new Date().setHours(0,0,0,0)).toISOString();
+
+    const fim = data_fim
+      ? new Date(data_fim + 'T23:59:59.999Z').toISOString()
+      : new Date(new Date().setHours(23,59,59,999)).toISOString();
+
+    try {
+        const { data: vendas, error } = await supabaseAdmin
+            .from('vendas')
+            .select(`
+                id,
+                data_venda,
+                valor_total,
+                meio_pagamento,
+                status,
+                clientes ( nome )
+            `)
+            .eq('mercearia_id', req.user.mercearia_id)
+            .gte('data_venda', inicio)
+            .lte('data_venda', fim)
+            .order('data_venda', { ascending: false });
+
+        if (error) throw error;
+
+        // Busca itens de cada venda
+        const vendasComItens = await Promise.all(vendas.map(async (venda) => {
+            const { data: itens } = await supabaseAdmin
+                .from('itens_venda')
+                .select('quantidade, preco_unitario, produtos ( nome )')
+                .eq('venda_id', venda.id);
+
+            return {
+                ...venda,
+                cliente_nome: venda.clientes?.nome || null,
+                itens: (itens || []).map(i => ({
+                    produto_nome:    i.produtos?.nome || 'Produto',
+                    quantidade:      i.quantidade,
+                    preco_unitario:  i.preco_unitario,
+                })),
+            };
+        }));
+
+        res.status(200).json(vendasComItens);
+
+    } catch (error) {
+        console.error('[ERRO] GET /api/financeiro/historico:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// ============================================================
 // 5) RELATÓRIO DRE
 // ============================================================
 
