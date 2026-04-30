@@ -7,6 +7,7 @@ const router = express.Router();
 
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
+const supabaseAdmin = require('../db/supabaseAdmin');
 
 // 🔥 PROTEGE TODAS AS ROTAS
 router.use(authUser);
@@ -121,22 +122,21 @@ router.get('/dividas', async (req, res) => {
 
 router.post('/criar', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
-    const { nome, telefone } = req.body;
+    const { nome, telefone, limiteCredito, dataVencimento } = req.body;
 
     if (!nome)
-        return res.status(400).json({
-            error: 'Nome é obrigatório.'
-        });
+        return res.status(400).json({ error: 'Nome é obrigatório.' });
 
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('clientes')
             .insert({
                 nome,
-                telefone: telefone || null
+                telefone:        telefone || null,
+                mercearia_id:    req.user.mercearia_id,
+                limite_credito:  parseFloat(limiteCredito) || 0,
+                data_vencimento: dataVencimento || null,
             })
             .select()
             .single();
@@ -149,9 +149,7 @@ router.post('/criar', async (req, res) => {
 
         console.error('[ERRO] Criar cliente:', error.message);
 
-        res.status(500).json({
-            error: 'Erro ao criar cliente.'
-        });
+        res.status(500).json({ error: 'Erro ao criar cliente.' });
 
     }
 
