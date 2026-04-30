@@ -145,6 +145,37 @@ router.post('/criar', async (req, res) => {
 
 
 // ============================================================
+// 5b) HISTÓRICO DE PAGAMENTOS DO CLIENTE
+// ============================================================
+
+router.get('/:clienteId/pagamentos', async (req, res) => {
+
+    const { clienteId } = req.params;
+
+    try {
+
+        const { data, error } = await supabaseAdmin
+            .from('transacoes_caixa')
+            .select('id, valor, meio_pagamento, data_transacao, descricao')
+            .eq('cliente_id', clienteId)
+            .eq('tipo', 'entrada')
+            .order('data_transacao', { ascending: false });
+
+        if (error) throw error;
+
+        res.status(200).json(data || []);
+
+    } catch (error) {
+
+        console.error('[ERRO] Pagamentos cliente:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar pagamentos.' });
+
+    }
+
+});
+
+
+// ============================================================
 // 5) LISTAR ITENS DO FIADO
 // ============================================================
 
