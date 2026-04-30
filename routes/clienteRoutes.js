@@ -204,9 +204,10 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 
             if (item.produto_nome) {
                 acc[item.venda_id].itens.push({
-                    produto_nome: item.produto_nome,
-                    quantidade: item.quantidade,
-                    preco_unitario: item.preco_unitario
+                    produto_nome:   item.produto_nome,
+                    quantidade:     item.quantidade,
+                    preco_unitario: item.preco_unitario,
+                    unidade_medida: item.unidade_medida || 'un',
                 });
             }
 
