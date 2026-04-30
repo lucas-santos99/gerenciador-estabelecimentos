@@ -150,13 +150,11 @@ router.post('/criar', async (req, res) => {
 
 router.get('/:clienteId/itens-fiado', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     const { clienteId } = req.params;
 
     try {
 
-        const { data, error } = await supabase.rpc('listar_itens_fiado', {
+        const { data, error } = await supabaseAdmin.rpc('listar_itens_fiado', {
             p_cliente_id: clienteId
         });
 
@@ -165,24 +163,20 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
         const vendasAgrupadas = data.reduce((acc, item) => {
 
             if (!acc[item.venda_id]) {
-
                 acc[item.venda_id] = {
                     venda_id: item.venda_id,
                     data_venda: item.data_venda,
                     valor_total: item.valor_total,
                     itens: []
                 };
-
             }
 
             if (item.produto_nome) {
-
                 acc[item.venda_id].itens.push({
                     produto_nome: item.produto_nome,
                     quantidade: item.quantidade,
                     preco_unitario: item.preco_unitario
                 });
-
             }
 
             return acc;
@@ -194,10 +188,7 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
     } catch (error) {
 
         console.error('[ERRO] Itens fiado:', error.message);
-
-        res.status(500).json({
-            error: 'Erro ao listar itens do fiado.'
-        });
+        res.status(500).json({ error: 'Erro ao listar itens do fiado.' });
 
     }
 
@@ -210,18 +201,14 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 
 router.post('/liquidar', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     const { clienteId, valorPago, meioPagamento } = req.body;
 
     if (!clienteId || !valorPago || !meioPagamento)
-        return res.status(400).json({
-            error: 'Todos os campos são obrigatórios.'
-        });
+        return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
 
     try {
 
-        const { data: novoSaldo, error } = await supabase.rpc('liquidar_fiado', {
+        const { data: novoSaldo, error } = await supabaseAdmin.rpc('liquidar_fiado', {
             p_cliente_id: clienteId,
             p_valor_pago: parseFloat(valorPago),
             p_meio_pagamento: meioPagamento
@@ -237,10 +224,7 @@ router.post('/liquidar', async (req, res) => {
     } catch (error) {
 
         console.error('[ERRO] Liquidar fiado:', error.message);
-
-        res.status(500).json({
-            error: 'Erro ao registrar pagamento.'
-        });
+        res.status(500).json({ error: 'Erro ao registrar pagamento.' });
 
     }
 
@@ -294,36 +278,25 @@ router.put('/atualizar/:clienteId', async (req, res) => {
 
 router.delete('/deletar/:clienteId', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     const { clienteId } = req.params;
 
     try {
 
-        const { data, error } = await supabase.rpc('deletar_cliente_seguro', {
+        const { data, error } = await supabaseAdmin.rpc('deletar_cliente_seguro', {
             p_cliente_id: clienteId
         });
 
         if (error) throw error;
 
         if (data === true) {
-
-            return res.status(200).json({
-                message: 'Cliente excluído com sucesso.'
-            });
-
+            return res.status(200).json({ message: 'Cliente excluído com sucesso.' });
         } else {
-
-            return res.status(400).json({
-                error: 'Não é possível excluir cliente com saldo pendente.'
-            });
-
+            return res.status(400).json({ error: 'Não é possível excluir cliente com saldo pendente.' });
         }
 
     } catch (error) {
 
         console.error('[ERRO] Excluir cliente:', error.message);
-
         res.status(400).json({
             error: error.message.includes('Não é possível')
                 ? error.message
