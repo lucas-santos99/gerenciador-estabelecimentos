@@ -19,8 +19,6 @@ router.use(authUser);
 
 router.get('/buscar', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     const { termo } = req.query;
 
     if (!termo)
@@ -28,9 +26,10 @@ router.get('/buscar', async (req, res) => {
 
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('clientes')
             .select('id, nome, telefone, saldo_devedor, limite_credito')
+            .eq('mercearia_id', req.user.mercearia_id)
             .or(`nome.ilike.${termo}%,telefone.ilike.${termo}%`)
             .limit(10);
 
@@ -41,10 +40,7 @@ router.get('/buscar', async (req, res) => {
     } catch (error) {
 
         console.error('[ERRO] Busca rápida clientes:', error.message);
-
-        res.status(500).json({
-            error: 'Erro ao buscar clientes.'
-        });
+        res.status(500).json({ error: 'Erro ao buscar clientes.' });
 
     }
 
@@ -57,13 +53,12 @@ router.get('/buscar', async (req, res) => {
 
 router.get('/', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('clientes')
             .select('id, nome, telefone, saldo_devedor, limite_credito, data_vencimento')
+            .eq('mercearia_id', req.user.mercearia_id)
             .order('nome', { ascending: true });
 
         if (error) throw error;
@@ -73,10 +68,7 @@ router.get('/', async (req, res) => {
     } catch (error) {
 
         console.error('[ERRO] GET /api/clientes:', error.message);
-
-        res.status(500).json({
-            error: 'Erro ao carregar clientes.'
-        });
+        res.status(500).json({ error: 'Erro ao carregar clientes.' });
 
     }
 
@@ -89,13 +81,12 @@ router.get('/', async (req, res) => {
 
 router.get('/dividas', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('clientes')
             .select('id, nome, telefone, saldo_devedor, limite_credito, data_vencimento')
+            .eq('mercearia_id', req.user.mercearia_id)
             .gt('saldo_devedor', 0.01)
             .order('saldo_devedor', { ascending: false });
 
@@ -106,10 +97,7 @@ router.get('/dividas', async (req, res) => {
     } catch (error) {
 
         console.error('[ERRO] Listar dívidas:', error.message);
-
-        res.status(500).json({
-            error: 'Erro ao listar dívidas.'
-        });
+        res.status(500).json({ error: 'Erro ao listar dívidas.' });
 
     }
 
@@ -265,28 +253,24 @@ router.post('/liquidar', async (req, res) => {
 
 router.put('/atualizar/:clienteId', async (req, res) => {
 
-    const supabase = createSupabaseUserClient(req.userToken);
-
     const { clienteId } = req.params;
-
     const { nome, telefone, limiteCredito, dataVencimento } = req.body;
 
     if (!nome)
-        return res.status(400).json({
-            error: 'Nome é obrigatório.'
-        });
+        return res.status(400).json({ error: 'Nome é obrigatório.' });
 
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('clientes')
             .update({
                 nome,
-                telefone: telefone || null,
-                limite_credito: parseFloat(limiteCredito) || 0,
+                telefone:        telefone || null,
+                limite_credito:  parseFloat(limiteCredito) || 0,
                 data_vencimento: dataVencimento || null
             })
             .eq('id', clienteId)
+            .eq('mercearia_id', req.user.mercearia_id)
             .select()
             .single();
 
@@ -297,10 +281,7 @@ router.put('/atualizar/:clienteId', async (req, res) => {
     } catch (error) {
 
         console.error('[ERRO] Atualizar cliente:', error.message);
-
-        res.status(500).json({
-            error: 'Erro ao atualizar cliente.'
-        });
+        res.status(500).json({ error: 'Erro ao atualizar cliente.' });
 
     }
 
