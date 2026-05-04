@@ -228,6 +228,43 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 
 
 // ============================================================
+// 6b) PAGAR VENDA ESPECÍFICA DO FIADO
+// ============================================================
+
+router.post('/pagar-venda', async (req, res) => {
+
+    const { vendaId, clienteId, meioPagamento } = req.body;
+
+    if (!vendaId || !clienteId || !meioPagamento)
+        return res.status(400).json({ error: 'Campos obrigatórios ausentes.' });
+
+    try {
+
+        const { data: novoSaldo, error } = await supabaseAdmin.rpc('pagar_venda_fiado', {
+            p_venda_id:        vendaId,
+            p_cliente_id:      clienteId,
+            p_mercearia_id:    req.user.mercearia_id,
+            p_meio_pagamento:  meioPagamento,
+        });
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.status(200).json({
+            message: 'Venda paga com sucesso.',
+            novo_saldo: novoSaldo
+        });
+
+    } catch (error) {
+
+        console.error('[ERRO] Pagar venda fiado:', error.message);
+        res.status(500).json({ error: 'Erro ao pagar venda.' });
+
+    }
+
+});
+
+
+// ============================================================
 // 6) LIQUIDAR FIADO
 // ============================================================
 
