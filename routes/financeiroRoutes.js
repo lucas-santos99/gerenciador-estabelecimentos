@@ -104,7 +104,7 @@ router.get('/resumo',
 
         const { data: transacoes, error } = await supabaseAdmin
             .from('transacoes_caixa')
-            .select('tipo, meio_pagamento, valor')
+            .select('tipo, meio_pagamento, valor, descricao')
             .eq('mercearia_id', req.user.mercearia_id)
             .eq('tipo', 'entrada')
             .gte('data_transacao', todayStart.toISOString());
@@ -112,17 +112,27 @@ router.get('/resumo',
         if (error) throw error;
 
         let resumo = {
-            total_entradas_dia: 0,
-            total_dinheiro: 0,
-            total_pix: 0,
-            total_cartao: 0
+            total_entradas_dia:    0,
+            total_vendas_dia:      0, // só vendas normais
+            total_fiado_recebido:  0, // recebimentos de fiado
+            total_dinheiro:        0,
+            total_pix:             0,
+            total_cartao:          0,
         };
 
         transacoes.forEach(t => {
 
             const valor = parseFloat(t.valor);
+            const descricao = (t.descricao || '').toLowerCase();
+            const isFiado = descricao.includes('fiado') || descricao.includes('fiada');
 
             resumo.total_entradas_dia += valor;
+
+            if (isFiado) {
+                resumo.total_fiado_recebido += valor;
+            } else {
+                resumo.total_vendas_dia += valor;
+            }
 
             const meio = t.meio_pagamento ? t.meio_pagamento.toLowerCase() : '';
 
