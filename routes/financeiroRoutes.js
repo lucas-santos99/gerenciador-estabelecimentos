@@ -301,7 +301,7 @@ router.get('/historico',
         const vendasComItens = await Promise.all(vendas.map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
-                .select('quantidade, preco_unitario, produtos ( nome )')
+                .select('quantidade, preco_unitario, produtos ( nome, unidade_medida )')
                 .eq('venda_id', venda.id);
 
             return {
@@ -311,6 +311,7 @@ router.get('/historico',
                     produto_nome:    i.produtos?.nome || 'Produto',
                     quantidade:      i.quantidade,
                     preco_unitario:  i.preco_unitario,
+                    unidade_medida:  i.produtos?.unidade_medida || 'un',
                 })),
             };
         }));
