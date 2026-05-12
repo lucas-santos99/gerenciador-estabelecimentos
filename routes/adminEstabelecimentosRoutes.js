@@ -402,4 +402,69 @@ router.delete("/:id/apagar-definitivo", async (req, res) => {
   }
 });
 
+// ============================================================
+// PATCH — adicionar estas duas rotas em adminEstabelecimentosRoutes.js
+// Inserir ANTES do module.exports = router;
+// ============================================================
+
+/* ============================================================
+   ATUALIZAR LIMITE DE OPERADORES
+   PUT /api/admin/estabelecimentos/:id/limite-operadores
+============================================================ */
+router.put("/:id/limite-operadores", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { limite } = req.body;
+
+    if (typeof limite !== "number" || limite < 0 || limite > 50) {
+      return res.status(400).json({ error: "Limite inválido (0–50)" });
+    }
+
+    const { error } = await db
+      .from("mercearias")
+      .update({ limite_operadores: limite })
+      .eq("id", id);
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ success: true, limite });
+  } catch (err) {
+    console.error("Erro atualizar limite operadores:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+});
+
+/* ============================================================
+   BUSCAR LIMITE + CONTAGEM ATUAL
+   GET /api/admin/estabelecimentos/:id/limite-operadores
+============================================================ */
+router.get("/:id/limite-operadores", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: merc, error: mercErr } = await db
+      .from("mercearias")
+      .select("limite_operadores")
+      .eq("id", id)
+      .single();
+
+    if (mercErr) return res.status(400).json({ error: mercErr.message });
+
+    const { count } = await db
+      .from("operadores")
+      .select("id", { count: "exact", head: true })
+      .eq("mercearia_id", id)
+      .neq("status", "excluido");
+
+    res.json({
+      limite:     merc.limite_operadores ?? 3,
+      total:      count ?? 0,
+      pode_criar: (count ?? 0) < (merc.limite_operadores ?? 3),
+    });
+  } catch (err) {
+    console.error("Erro buscar limite:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+});
+
 module.exports = router;

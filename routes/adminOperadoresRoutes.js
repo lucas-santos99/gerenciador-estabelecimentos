@@ -69,6 +69,28 @@ router.post("/criar", async (req, res) => {
     }
 
     /* ===============================
+       VERIFICAR LIMITE
+    =============================== */
+    const { data: merc } = await db
+      .from("mercearias")
+      .select("limite_operadores")
+      .eq("id", mercearia_id)
+      .single();
+
+    const { count } = await db
+      .from("operadores")
+      .select("id", { count: "exact", head: true })
+      .eq("mercearia_id", mercearia_id)
+      .neq("status", "excluido");
+
+    const limite = merc?.limite_operadores ?? 3;
+    if ((count ?? 0) >= limite) {
+      return res.status(400).json({
+        error: `Limite de ${limite} operador(es) atingido para este estabelecimento.`,
+      });
+    }
+
+    /* ===============================
        VALIDAR EMAIL EXISTENTE
     =============================== */
     const { data: operadorExistente } = await db
@@ -348,6 +370,105 @@ router.put("/:id/status", async (req, res) => {
     });
   } catch (err) {
     console.error("Erro atualizar status operador:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+});
+
+/* ============================================================
+   LISTAR PERMISSÕES DE UM OPERADOR
+   GET /admin/operadores/:id/permissoes
+============================================================ */
+router.get("/:id/permissoes", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await db
+      .from("permissoes_operador")
+      .select("permissao_id")
+      .eq("operador_id", id);
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json((data || []).map(p => p.permissao_id));
+  } catch (err) {
+    console.error("Erro listar permissões:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+});
+
+/* ============================================================
+   SALVAR PERMISSÕES DE UM OPERADOR (substitui tudo)
+   PUT /admin/operadores/:id/permissoes
+============================================================ */
+router.put("/:id/permissoes", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { permissoes } = req.body; // array de strings ex: ['pdv','estoque']
+
+    if (!Array.isArray(permissoes)) {
+      return res.status(400).json({ error: "permissoes deve ser um array" });
+    }
+
+    // Remove todas as permissões atuais
+    const { error: delErr } = await db
+      .from("permissoes_operador")
+      .delete()
+      .eq("operador_id", id);
+
+    if (delErr) return res.status(400).json({ error: delErr.message });
+
+    // Insere as novas (se houver)
+    if (permissoes.length > 0) {
+      const rows = permissoes.map(permissao_id => ({
+        operador_id: id,
+        permissao_id,
+      }));
+
+      const { error: insErr } = await db
+        .from("permissoes_operador")
+        .insert(rows);
+
+      if (insErr) return res.status(400).json({ error: insErr.message });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Erro salvar permissões:", err);
+    res.status(500).json({ error: "Erro interno" });
+  }
+});
+
+/* ============================================================
+   VERIFICAR LIMITE DE OPERADORES DO ESTABELECIMENTO
+   GET /admin/operadores/:estabelecimentoId/limite
+============================================================ */
+router.get("/:estabelecimentoId/limite", async (req, res) => {
+  try {
+    const { estabelecimentoId } = req.params;
+
+    const { data: merc, error: mercErr } = await db
+      .from("mercearias")
+      .select("limite_operadores")
+      .eq("id", estabelecimentoId)
+      .single();
+
+    if (mercErr) return res.status(400).json({ error: mercErr.message });
+
+    const { count, error: countErr } = await db
+      .from("operadores")
+      .select("id", { count: "exact", head: true })
+      .eq("mercearia_id", estabelecimentoId)
+      .neq("status", "excluido");
+
+    if (countErr) return res.status(400).json({ error: countErr.message });
+
+    res.json({
+      limite: merc.limite_operadores ?? 3,
+      total:  count ?? 0,
+      pode_criar: (count ?? 0) < (merc.limite_operadores ?? 3),
+    });
+  } catch (err) {
+    console.error("Erro verificar limite:", err);
     res.status(500).json({ error: "Erro interno" });
   }
 });
