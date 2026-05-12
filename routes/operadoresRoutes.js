@@ -6,7 +6,6 @@ const db        = require("../db/supabaseAdmin");
 const authUser  = require("../middlewares/authUser");
 const verificarPermissao = require("../middlewares/verificarPermissao");
 const { PERMISSOES } = require("../utils/permissoes");
-const { v4: uuidv4 } = require("uuid");
 
 // Todas as rotas deste arquivo exigem autenticação
 router.use(authUser);
