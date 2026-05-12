@@ -15,6 +15,7 @@ const categoriaRoutes = require("./routes/categoriaRoutes");
 const vendaRoutes = require("./routes/vendaRoutes");
 const clienteRoutes = require("./routes/clienteRoutes");
 const financeiroRoutes = require("./routes/financeiroRoutes");
+const operadoresRoutes = require("./routes/operadoresRoutes");
 
 // --- IMPORTAÇÃO DAS ROTAS DO ADMIN ---
 const adminEstabelecimentosRoutes = require("./routes/adminEstabelecimentosRoutes");
@@ -57,6 +58,7 @@ app.use("/api/categorias", categoriaRoutes);
 app.use("/api/vendas", vendaRoutes);
 app.use("/api/clientes", clienteRoutes);
 app.use("/api/financeiro", financeiroRoutes);
+app.use("/api/operadores", operadoresRoutes);
 
 app.use("/superadmin", superAdminRoutes);
 
