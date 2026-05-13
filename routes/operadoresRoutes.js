@@ -288,6 +288,22 @@ router.put("/:id/permissoes", async (req, res) => {
 });
 
 /* ============================================================
+   MINHAS PERMISSÕES (operador logado consulta as próprias)
+   GET /api/operadores/minhas-permissoes
+============================================================ */
+router.get('/minhas-permissoes', async (req, res) => {
+  try {
+    if (req.user.role === 'merchant' || req.user.role === 'super_admin') {
+      return res.json(['pdv','estoque','clientes','financeiro','configuracoes']);
+    }
+    res.json(req.user.permissoes || []);
+  } catch (err) {
+    console.error('Erro minhas-permissoes:', err);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+/* ============================================================
    8) LIMITE E CONTAGEM (MERCHANT)
    GET /api/operadores/limite
 ============================================================ */
@@ -316,6 +332,32 @@ router.get("/limite", async (req, res) => {
   } catch (err) {
     console.error("Erro buscar limite:", err);
     res.status(500).json({ error: "Erro ao buscar limite" });
+  }
+});
+
+/* ============================================================
+   RESET SENHA (MERCHANT reseta operador do próprio estabelecimento)
+   POST /api/operadores/:id/reset-senha
+============================================================ */
+router.post('/:id/reset-senha', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { mercearia_id } = req.user;
+    const { senha } = req.body;
+
+    if (!senha || senha.length < 6) {
+      return res.status(400).json({ error: 'Senha inválida (mínimo 6 caracteres)' });
+    }
+
+    await garantirDono(id, mercearia_id);
+
+    const { error } = await db.auth.admin.updateUserById(id, { password: senha });
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro reset senha:', err);
+    res.status(500).json({ error: err.message || 'Erro interno' });
   }
 });
 
