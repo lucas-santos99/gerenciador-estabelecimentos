@@ -8,8 +8,8 @@ const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
+const { registrar } = require('./auditoriaRoutes');
 
-// 🔥 PROTEGE TODAS AS ROTAS
 router.use(authUser);
 
 
@@ -131,6 +131,16 @@ router.post('/criar', async (req, res) => {
 
         if (error) throw error;
 
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo:       'clientes',
+          acao:         'cliente_criado',
+          descricao:    `Cliente "${nome}" criado`,
+          meta:         { cliente_id: data.id },
+        });
+
         res.status(201).json(data);
 
     } catch (error) {
@@ -249,6 +259,16 @@ router.post('/pagar-venda', async (req, res) => {
 
         if (error) return res.status(400).json({ error: error.message });
 
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo:       'clientes',
+          acao:         'fiado_recebido',
+          descricao:    `Recebimento de venda fiado — ${meioPagamento}`,
+          meta:         { venda_id: vendaId, cliente_id: clienteId, meio_pagamento: meioPagamento },
+        });
+
         res.status(200).json({
             message: 'Venda paga com sucesso.',
             novo_saldo: novoSaldo
@@ -284,6 +304,16 @@ router.post('/liquidar', async (req, res) => {
         });
 
         if (error) return res.status(400).json({ error: error.message });
+
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo:       'clientes',
+          acao:         'fiado_recebido',
+          descricao:    `Liquidação de fiado — ${parseFloat(valorPago).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})} (${meioPagamento})`,
+          meta:         { cliente_id: clienteId, valor: parseFloat(valorPago), meio_pagamento: meioPagamento },
+        });
 
         res.status(200).json({
             message: 'Pagamento registrado com sucesso.',
@@ -329,6 +359,15 @@ router.put('/atualizar/:clienteId', async (req, res) => {
 
         if (error) throw error;
 
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo: 'clientes', acao: 'cliente_editado',
+          descricao: `Cliente "${nome}" atualizado`,
+          meta: { cliente_id: clienteId },
+        });
+
         res.status(200).json(data);
 
     } catch (error) {
@@ -358,6 +397,14 @@ router.delete('/deletar/:clienteId', async (req, res) => {
         if (error) throw error;
 
         if (data === true) {
+            registrar({
+              mercearia_id: req.user.mercearia_id,
+              operador_id:  req.user.role === 'operator' ? req.user.id : null,
+              usuario_nome: req.user.email,
+              modulo: 'clientes', acao: 'cliente_excluido',
+              descricao: `Cliente excluído (id: ${clienteId})`,
+              meta: { cliente_id: clienteId },
+            });
             return res.status(200).json({ message: 'Cliente excluído com sucesso.' });
         } else {
             return res.status(400).json({ error: 'Não é possível excluir cliente com saldo pendente.' });

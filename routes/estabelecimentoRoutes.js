@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db/supabaseAdmin');
 const router = express.Router();
 const authUser = require('../middlewares/authUser');
+const { registrar } = require('./auditoriaRoutes');
 router.use(authUser);
 
 // --- Rota GET: /:id/produtos/buscar-global ---
@@ -172,8 +173,16 @@ router.post('/:id/produtos', async (req, res) => {
 
         if (error) throw error;
 
-        console.log(`[INFO] Novo produto adicionado: ${data.nome}`);
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo: 'estoque', acao: 'produto_criado',
+          descricao: `Produto "${nome}" criado`,
+          meta: { produto_id: data.id, nome, preco_venda: parseFloat(preco_venda) },
+        });
 
+        console.log(`[INFO] Novo produto adicionado: ${data.nome}`);
         res.status(201).json(data);
 
     } catch (error) {
@@ -232,8 +241,16 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
             return res.status(404).json({ error: 'Produto não encontrado.' });
         }
 
-        console.log(`[INFO] Produto atualizado: ${data.nome}`);
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo: 'estoque', acao: 'produto_editado',
+          descricao: `Produto "${nome}" atualizado`,
+          meta: { produto_id: produtoId, nome, preco_venda: parseFloat(preco_venda) },
+        });
 
+        console.log(`[INFO] Produto atualizado: ${data.nome}`);
         res.status(200).json(data);
 
     } catch (error) {
@@ -267,6 +284,15 @@ router.delete('/:id/produtos/:produtoId', async (req, res) => {
         }
 
         console.log(`[INFO] Produto excluído: ${data[0].nome}`);
+
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo: 'estoque', acao: 'produto_excluido',
+          descricao: `Produto "${data[0].nome}" excluído`,
+          meta: { produto_id: produtoId },
+        });
 
         res.status(200).json({ message: 'Produto excluído com sucesso' });
 
@@ -365,6 +391,15 @@ router.put('/dados/:id', async (req, res) => {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+
+    registrar({
+      mercearia_id,
+      operador_id:  null,
+      usuario_nome: user.email,
+      modulo: 'configuracoes', acao: 'config_atualizada',
+      descricao: `Dados do estabelecimento atualizados`,
+      meta: { campos: Object.keys(req.body) },
+    });
 
     res.json({ success: true, mercearia: data });
 

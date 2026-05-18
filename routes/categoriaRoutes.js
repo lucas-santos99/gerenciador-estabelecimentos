@@ -1,11 +1,10 @@
 const express = require('express');
 const router = express.Router();
-
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
+const { registrar } = require('./auditoriaRoutes');
 
-// 🔥 PROTEGE TODAS AS ROTAS
 router.use(authUser);
 
 // --- Rota GET: Buscar categorias ---
@@ -45,6 +44,14 @@ router.post('/', async (req, res) => {
         if (error) throw error;
 
         console.log(`[INFO] Nova categoria criada: ${data.nome}`);
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo: 'estoque', acao: 'produto_criado',
+          descricao: `Categoria "${data.nome}" criada`,
+          meta: { categoria_id: data.id },
+        });
         res.status(201).json(data);
 
     } catch (error) {
@@ -85,6 +92,14 @@ router.put('/:id', async (req, res) => {
         }
 
         console.log(`[INFO] Categoria atualizada: ${data.nome}`);
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo: 'estoque', acao: 'produto_editado',
+          descricao: `Categoria "${data.nome}" atualizada`,
+          meta: { categoria_id: id },
+        });
         res.status(200).json(data);
 
     } catch (error) {
@@ -120,6 +135,14 @@ router.delete('/:id', async (req, res) => {
         }
 
         console.log(`[INFO] Categoria excluída: ${data.nome}`);
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.email,
+          modulo: 'estoque', acao: 'produto_excluido',
+          descricao: `Categoria "${data.nome}" excluída`,
+          meta: { categoria_id: id },
+        });
         res.status(200).json({ message: 'Categoria excluída com sucesso' });
 
     } catch (error) {
