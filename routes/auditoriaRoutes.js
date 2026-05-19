@@ -19,12 +19,17 @@ function garantirMerchant(req, res) {
    REGISTRAR AÇÃO (interno — chamado por outras rotas)
    Exportado como função auxiliar
 ============================================================ */
-async function registrar({ mercearia_id, operador_id, usuario_nome, modulo, acao, descricao, meta }) {
+async function registrar({ mercearia_id, operador_id, usuario_nome, usuario_email, modulo, acao, descricao, meta }) {
   try {
+    // Monta label legível: "João Silva (joao@email.com)" ou só o email
+    const nomeLabel = usuario_nome && usuario_nome !== usuario_email
+      ? `${usuario_nome} (${usuario_email || ''})`
+      : (usuario_email || usuario_nome || 'Sistema');
+
     await db.from('auditoria').insert({
       mercearia_id,
       operador_id:  operador_id || null,
-      usuario_nome: usuario_nome || null,
+      usuario_nome: nomeLabel,
       modulo,
       acao,
       descricao,

@@ -38,10 +38,11 @@ module.exports = async function authUser(req, res, next) {
     }
 
     req.user = {
-      id:          profile.id,
-      email:       profile.email,
-      role:        profile.role,
-      is_master:   profile.is_master,
+      id:           profile.id,
+      email:        profile.email,
+      nome:         profile.nome || profile.email, // nome legível para auditoria
+      role:         profile.role,
+      is_master:    profile.is_master,
       mercearia_id: profile.mercearia_id,
     };
 

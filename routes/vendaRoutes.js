@@ -52,7 +52,8 @@ router.post('/finalizar', async (req, res) => {
     await db.from('auditoria').insert({
       mercearia_id,
       operador_id:  operadorId,
-      usuario_nome: nomeUsuario,
+      usuario_nome: req.user.nome || req.user.email,
+      usuario_email: req.user.email,
       modulo:       'pdv',
       acao:         'venda_realizada',
       descricao:    `Venda de ${totalVendaFloat.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} — ${meioLabel}${clienteId ? ' (Fiado)' : ''}`,

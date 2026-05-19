@@ -176,10 +176,11 @@ router.post('/:id/produtos', async (req, res) => {
         registrar({
           mercearia_id: estabelecimentoId,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_criado',
-          descricao: `Produto "${nome}" criado`,
-          meta: { produto_id: data.id, nome, preco_venda: parseFloat(preco_venda) },
+          descricao: `Produto "${nome}" criado (estoque: ${parseFloat(estoque_atual)})`,
+          meta: { produto_id: data.id, depois: { nome, preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), unidade_medida } },
         });
 
         console.log(`[INFO] Novo produto adicionado: ${data.nome}`);
@@ -244,10 +245,11 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
         registrar({
           mercearia_id: estabelecimentoId,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_editado',
-          descricao: `Produto "${nome}" atualizado`,
-          meta: { produto_id: produtoId, nome, preco_venda: parseFloat(preco_venda) },
+          descricao: `Produto "${nome}" atualizado (estoque: ${parseFloat(estoque_atual)})`,
+          meta: { produto_id: produtoId, depois: { nome, preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), preco_custo: parseFloat(preco_custo) } },
         });
 
         console.log(`[INFO] Produto atualizado: ${data.nome}`);
@@ -288,10 +290,11 @@ router.delete('/:id/produtos/:produtoId', async (req, res) => {
         registrar({
           mercearia_id: estabelecimentoId,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_excluido',
           descricao: `Produto "${data[0].nome}" excluído`,
-          meta: { produto_id: produtoId },
+          meta: { produto_id: produtoId, antes: { nome: data[0].nome } },
         });
 
         res.status(200).json({ message: 'Produto excluído com sucesso' });
@@ -395,7 +398,8 @@ router.put('/dados/:id', async (req, res) => {
     registrar({
       mercearia_id,
       operador_id:  null,
-      usuario_nome: user.email,
+      usuario_nome: user.nome || user.email,
+      usuario_email: user.email,
       modulo: 'configuracoes', acao: 'config_atualizada',
       descricao: `Dados do estabelecimento atualizados`,
       meta: { campos: Object.keys(req.body) },

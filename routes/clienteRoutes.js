@@ -134,7 +134,8 @@ router.post('/criar', async (req, res) => {
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo:       'clientes',
           acao:         'cliente_criado',
           descricao:    `Cliente "${nome}" criado`,
@@ -262,7 +263,8 @@ router.post('/pagar-venda', async (req, res) => {
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo:       'clientes',
           acao:         'fiado_recebido',
           descricao:    `Recebimento de venda fiado — ${meioPagamento}`,
@@ -308,7 +310,8 @@ router.post('/liquidar', async (req, res) => {
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo:       'clientes',
           acao:         'fiado_recebido',
           descricao:    `Liquidação de fiado — ${parseFloat(valorPago).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})} (${meioPagamento})`,
@@ -365,7 +368,7 @@ router.put('/atualizar/:clienteId', async (req, res) => {
           usuario_nome: req.user.email,
           modulo: 'clientes', acao: 'cliente_editado',
           descricao: `Cliente "${nome}" atualizado`,
-          meta: { cliente_id: clienteId },
+          meta: { cliente_id: clienteId, depois: { nome, limite_credito: parseFloat(limiteCredito) || 0 } },
         });
 
         res.status(200).json(data);

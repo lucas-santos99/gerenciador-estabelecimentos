@@ -47,7 +47,8 @@ router.post('/', async (req, res) => {
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_criado',
           descricao: `Categoria "${data.nome}" criada`,
           meta: { categoria_id: data.id },
@@ -95,7 +96,8 @@ router.put('/:id', async (req, res) => {
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_editado',
           descricao: `Categoria "${data.nome}" atualizada`,
           meta: { categoria_id: id },
@@ -138,7 +140,8 @@ router.delete('/:id', async (req, res) => {
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.email,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_excluido',
           descricao: `Categoria "${data.nome}" excluída`,
           meta: { categoria_id: id },
