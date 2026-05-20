@@ -5,15 +5,12 @@ const express = require('express');
 const router = express.Router();
 
 const authUser = require('../middlewares/authUser');
-//const createSupabaseUserClient = require('../db/supabaseUser');
 
 // 🔥 PROTEGE TODAS AS ROTAS
 router.use(authUser);
 
-// 🔥 NOVO
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
-
 
 
 // ============================================================
@@ -54,13 +51,10 @@ router.get('/',
         if (error) throw error;
 
         const contas = data.map(c => {
-
             if (c.status === 'pendente' && new Date(c.data_vencimento) < new Date()) {
                 return { ...c, status: 'atrasada' };
             }
-
             return c;
-
         });
 
         res.status(200).json(contas);
@@ -68,11 +62,7 @@ router.get('/',
     } catch (error) {
 
         console.error('[ERRO] GET /api/financeiro:', error.message);
-
-       res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
+        res.status(500).json({ error: error.message, detalhe: error });
 
     }
 
@@ -87,16 +77,12 @@ router.get('/resumo',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = req.supabase;
-
-    // Início do dia no timezone de Brasília (UTC-3)
-    // Usa a data atual em UTC e subtrai 3 horas para alinhar com BRT
     const now = new Date();
     const todayStart = new Date(Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-      0, 0, 0, 0
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        0, 0, 0, 0
     ));
 
     try {
@@ -112,19 +98,19 @@ router.get('/resumo',
         if (error) throw error;
 
         let resumo = {
-            total_entradas_dia:    0,
-            total_vendas_dia:      0, // só vendas normais
-            total_fiado_recebido:  0, // recebimentos de fiado
-            total_dinheiro:        0,
-            total_pix:             0,
-            total_cartao:          0,
+            total_entradas_dia:   0,
+            total_vendas_dia:     0,
+            total_fiado_recebido: 0,
+            total_dinheiro:       0,
+            total_pix:            0,
+            total_cartao:         0,
         };
 
         transacoes.forEach(t => {
 
-            const valor = parseFloat(t.valor);
+            const valor    = parseFloat(t.valor);
             const descricao = (t.descricao || '').toLowerCase();
-            const isFiado = descricao.includes('fiado') || descricao.includes('fiada');
+            const isFiado  = descricao.includes('fiado') || descricao.includes('fiada');
 
             resumo.total_entradas_dia += valor;
 
@@ -135,11 +121,9 @@ router.get('/resumo',
             }
 
             const meio = t.meio_pagamento ? t.meio_pagamento.toLowerCase() : '';
-
             if (meio === 'dinheiro') resumo.total_dinheiro += valor;
             else if (meio === 'pix') resumo.total_pix += valor;
-            else if (meio === 'debito' || meio === 'credito' || meio === 'cartao')
-                resumo.total_cartao += valor;
+            else if (['debito', 'credito', 'cartao'].includes(meio)) resumo.total_cartao += valor;
 
         });
 
@@ -148,11 +132,7 @@ router.get('/resumo',
     } catch (error) {
 
         console.error('[ERRO] GET /api/financeiro/resumo:', error.message);
-
-        res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
+        res.status(500).json({ error: error.message, detalhe: error });
 
     }
 
@@ -168,15 +148,12 @@ router.post('/',
     async (req, res) => {
 
     const supabase = req.supabase;
-
     const { descricao, valor, data_vencimento } = req.body;
 
     if (!descricao || !valor || !data_vencimento) {
-
         return res.status(400).json({
             error: 'Todos os campos obrigatórios devem ser preenchidos.'
         });
-
     }
 
     try {
@@ -195,17 +172,12 @@ router.post('/',
         if (error) throw error;
 
         console.log(`[INFO] Nova conta registrada: ${data.descricao}`);
-
         res.status(201).json(data);
 
     } catch (error) {
 
         console.error('[ERRO] POST /api/financeiro:', error.message);
-
-       res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
+        res.status(500).json({ error: error.message, detalhe: error });
 
     }
 
@@ -238,11 +210,7 @@ router.put('/:contaId/pagar',
         if (error) throw error;
 
         if (!data) {
-
-            return res.status(404).json({
-                error: 'Conta não encontrada.'
-            });
-
+            return res.status(404).json({ error: 'Conta não encontrada.' });
         }
 
         res.status(200).json(data);
@@ -250,18 +218,15 @@ router.put('/:contaId/pagar',
     } catch (error) {
 
         console.error(`[ERRO] PUT /api/financeiro/${contaId}/pagar:`, error.message);
+        res.status(500).json({ error: error.message, detalhe: error });
 
-       res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
     }
 
 });
 
 
 // ============================================================
-// HISTÓRICO DE VENDAS
+// 5) HISTÓRICO DE VENDAS
 // ============================================================
 
 router.get('/historico',
@@ -272,14 +237,15 @@ router.get('/historico',
     const supabaseAdmin = require('../db/supabaseAdmin');
 
     const inicio = data_inicio
-      ? new Date(data_inicio + 'T00:00:00.000Z').toISOString()
-      : new Date(new Date().setHours(0,0,0,0)).toISOString();
+        ? new Date(data_inicio + 'T00:00:00.000Z').toISOString()
+        : new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
 
     const fim = data_fim
-      ? new Date(data_fim + 'T23:59:59.999Z').toISOString()
-      : new Date(new Date().setHours(23,59,59,999)).toISOString();
+        ? new Date(data_fim + 'T23:59:59.999Z').toISOString()
+        : new Date(new Date().setHours(23, 59, 59, 999)).toISOString();
 
     try {
+
         const { data: vendas, error } = await supabaseAdmin
             .from('vendas')
             .select(`
@@ -297,7 +263,6 @@ router.get('/historico',
 
         if (error) throw error;
 
-        // Busca itens de cada venda
         const vendasComItens = await Promise.all(vendas.map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
@@ -308,10 +273,10 @@ router.get('/historico',
                 ...venda,
                 cliente_nome: venda.clientes?.nome || null,
                 itens: (itens || []).map(i => ({
-                    produto_nome:    i.produtos?.nome || 'Produto',
-                    quantidade:      i.quantidade,
-                    preco_unitario:  i.preco_unitario,
-                    unidade_medida:  i.produtos?.unidade_medida || 'un',
+                    produto_nome:   i.produtos?.nome || 'Produto',
+                    quantidade:     i.quantidade,
+                    preco_unitario: i.preco_unitario,
+                    unidade_medida: i.produtos?.unidade_medida || 'un',
                 })),
             };
         }));
@@ -322,35 +287,32 @@ router.get('/historico',
         console.error('[ERRO] GET /api/financeiro/historico:', error.message);
         res.status(500).json({ error: error.message });
     }
+
 });
 
 
 // ============================================================
-// 5) RELATÓRIO DRE
+// 6) RELATÓRIO DRE
 // ============================================================
 
 router.get('/relatorio_dre',
     verificarPermissao(PERMISSOES.VER_RELATORIOS),
     async (req, res) => {
 
-    const supabase = req.supabase;
-
     const { data_inicio, data_fim } = req.query;
 
     if (!data_inicio || !data_fim) {
-
         return res.status(400).json({
             error: 'Data de início e fim são obrigatórias.'
         });
-
     }
 
     try {
         const supabaseAdmin = require('../db/supabaseAdmin');
 
         const { data, error } = await supabaseAdmin.rpc('gerar_relatorio_dre', {
-            p_data_inicio: data_inicio,
-            p_data_fim: data_fim,
+            p_data_inicio:  data_inicio,
+            p_data_fim:     data_fim,
             p_mercearia_id: req.user.mercearia_id
         });
 
@@ -361,18 +323,15 @@ router.get('/relatorio_dre',
     } catch (error) {
 
         console.error('[ERRO] Relatório DRE:', error.message);
+        res.status(500).json({ error: error.message, detalhe: error });
 
-       res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
     }
 
 });
 
 
 // ============================================================
-// 6) EXCLUIR CONTA
+// 7) EXCLUIR CONTA
 // ============================================================
 
 router.delete('/:contaId',
@@ -395,11 +354,7 @@ router.delete('/:contaId',
         if (error) throw error;
 
         if (!data) {
-
-            return res.status(404).json({
-                error: 'Conta não encontrada ou já paga.'
-            });
-
+            return res.status(404).json({ error: 'Conta não encontrada ou já paga.' });
         }
 
         res.status(200).json(data);
@@ -407,18 +362,15 @@ router.delete('/:contaId',
     } catch (error) {
 
         console.error('[ERRO] DELETE conta:', error.message);
+        res.status(500).json({ error: error.message, detalhe: error });
 
-       res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
     }
 
 });
 
 
 // ============================================================
-// 7) EDITAR CONTA
+// 8) EDITAR CONTA
 // ============================================================
 
 router.put('/:contaId',
@@ -427,15 +379,10 @@ router.put('/:contaId',
 
     const supabase = req.supabase;
     const { contaId } = req.params;
-
     const { descricao, valor, data_vencimento } = req.body;
 
     if (!descricao || !valor || !data_vencimento) {
-
-        return res.status(400).json({
-            error: 'Todos os campos são obrigatórios.'
-        });
-
+        return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
     }
 
     try {
@@ -455,11 +402,7 @@ router.put('/:contaId',
         if (error) throw error;
 
         if (!data) {
-
-            return res.status(404).json({
-                error: 'Conta não encontrada ou já paga.'
-            });
-
+            return res.status(404).json({ error: 'Conta não encontrada ou já paga.' });
         }
 
         res.status(200).json(data);
@@ -467,42 +410,33 @@ router.put('/:contaId',
     } catch (error) {
 
         console.error('[ERRO] PUT conta:', error.message);
+        res.status(500).json({ error: error.message, detalhe: error });
 
-       res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
     }
 
 });
 
 
 // ============================================================
-// 8) RELATÓRIO PRODUTOS VENDIDOS
+// 9) RELATÓRIO PRODUTOS VENDIDOS
 // ============================================================
 
 router.get('/relatorio_produtos',
     verificarPermissao(PERMISSOES.VER_RELATORIOS),
     async (req, res) => {
 
-    const supabase = req.supabase;
-
     const { data_inicio, data_fim, categoria_id } = req.query;
 
     if (!data_inicio || !data_fim) {
-
-        return res.status(400).json({
-            error: 'Datas obrigatórias.'
-        });
-
+        return res.status(400).json({ error: 'Datas obrigatórias.' });
     }
 
     try {
         const supabaseAdmin = require('../db/supabaseAdmin');
 
         const { data, error } = await supabaseAdmin.rpc('gerar_relatorio_produtos', {
-            p_data_inicio: data_inicio,
-            p_data_fim: data_fim,
+            p_data_inicio:  data_inicio,
+            p_data_fim:     data_fim,
             p_categoria_id: categoria_id || null,
             p_mercearia_id: req.user.mercearia_id
         });
@@ -514,13 +448,115 @@ router.get('/relatorio_produtos',
     } catch (error) {
 
         console.error('[ERRO] Relatório produtos:', error.message);
+        res.status(500).json({ error: error.message, detalhe: error });
 
-       res.status(500).json({
-  error: error.message,
-  detalhe: error
-});
     }
 
 });
+
+
+// ============================================================
+// 10) RELATÓRIO DE VENDAS POR OPERADOR
+// ============================================================
+
+router.get('/relatorio_vendas_operador',
+    verificarPermissao(PERMISSOES.VER_RELATORIOS),
+    async (req, res) => {
+
+    const { data_inicio, data_fim } = req.query;
+
+    if (!data_inicio || !data_fim) {
+        return res.status(400).json({
+            error: 'data_inicio e data_fim são obrigatórias.'
+        });
+    }
+
+    const inicio = new Date(data_inicio + 'T00:00:00.000Z').toISOString();
+    const fim    = new Date(data_fim    + 'T23:59:59.999Z').toISOString();
+
+    try {
+        const supabaseAdmin = require('../db/supabaseAdmin');
+
+        // 1) Busca todas as vendas concluídas do período
+        const { data: vendas, error: erroVendas } = await supabaseAdmin
+            .from('vendas')
+            .select('id, valor_total, meio_pagamento, status, operador_id, data_venda')
+            .eq('mercearia_id', req.user.mercearia_id)
+            .eq('status', 'concluida')
+            .gte('data_venda', inicio)
+            .lte('data_venda', fim);
+
+        if (erroVendas) throw erroVendas;
+
+        if (!vendas || vendas.length === 0) {
+            return res.status(200).json([]);
+        }
+
+        // 2) Coleta IDs únicos de operadores presentes nas vendas
+        const operadorIds = [...new Set(vendas.map(v => v.operador_id).filter(Boolean))];
+
+        // 3) Busca nomes dos operadores
+        let operadoresMap = {};
+        if (operadorIds.length > 0) {
+            const { data: operadores, error: erroOps } = await supabaseAdmin
+                .from('operadores')
+                .select('id, nome')
+                .in('id', operadorIds)
+                .eq('mercearia_id', req.user.mercearia_id);
+
+            if (erroOps) throw erroOps;
+
+            (operadores || []).forEach(op => {
+                operadoresMap[op.id] = op.nome;
+            });
+        }
+
+        // 4) Agrupa vendas por operador
+        const agrupado = {};
+
+        vendas.forEach(v => {
+            const chave = v.operador_id || '__sem_operador__';
+
+            if (!agrupado[chave]) {
+                agrupado[chave] = {
+                    operador_id:    v.operador_id || null,
+                    operador_nome:  v.operador_id
+                                        ? (operadoresMap[v.operador_id] || 'Operador removido')
+                                        : 'Sem operador',
+                    total_vendas:   0,
+                    qtd_vendas:     0,
+                    total_dinheiro: 0,
+                    total_pix:      0,
+                    total_cartao:   0,
+                    total_fiado:    0,
+                };
+            }
+
+            const valor = parseFloat(v.valor_total || 0);
+            const meio  = (v.meio_pagamento || '').toLowerCase();
+
+            agrupado[chave].total_vendas += valor;
+            agrupado[chave].qtd_vendas   += 1;
+
+            if (meio === 'dinheiro')                               agrupado[chave].total_dinheiro += valor;
+            else if (meio === 'pix')                               agrupado[chave].total_pix      += valor;
+            else if (['debito','credito','cartao'].includes(meio)) agrupado[chave].total_cartao   += valor;
+            else if (meio === 'fiado')                             agrupado[chave].total_fiado    += valor;
+        });
+
+        // 5) Converte para array, ordena por total decrescente
+        const resultado = Object.values(agrupado).sort(
+            (a, b) => b.total_vendas - a.total_vendas
+        );
+
+        res.status(200).json(resultado);
+
+    } catch (error) {
+        console.error('[ERRO] GET /api/financeiro/relatorio_vendas_operador:', error.message);
+        res.status(500).json({ error: error.message, detalhe: error });
+    }
+
+});
+
 
 module.exports = router;
