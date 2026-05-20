@@ -34,6 +34,7 @@ const verificarPermissao = (permissaoCodigo) => {
         });
       }
 
+      
       next();
     } catch (err) {
       console.error('ERRO GERAL verificarPermissao:', err);
