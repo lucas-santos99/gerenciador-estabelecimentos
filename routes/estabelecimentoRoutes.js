@@ -406,6 +406,14 @@ router.put('/dados/:id', async (req, res) => {
 
     if (error) return res.status(400).json({ error: error.message });
 
+    // Sincroniza profiles.nome com nome_fantasia para manter auditoria consistente
+    if (nome_fantasia) {
+      await db
+        .from('profiles')
+        .update({ nome: nome_fantasia })
+        .eq('id', user.id);
+    }
+
     registrar({
       mercearia_id,
       operador_id:  null,

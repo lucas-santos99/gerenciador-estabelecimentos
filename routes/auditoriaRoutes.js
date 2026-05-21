@@ -67,7 +67,11 @@ router.get('/', async (req, res) => {
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (modulo)      query = query.eq('modulo', modulo);
-    if (operador_id) query = query.eq('operador_id', operador_id);
+    if (operador_id === 'merchant') {
+      query = query.is('operador_id', null);
+    } else if (operador_id) {
+      query = query.eq('operador_id', operador_id);
+    }
     if (acao)        query = query.eq('acao', acao);
     if (data_inicio) query = query.gte('criado_em', data_inicio);
     if (data_fim)    query = query.lte('criado_em', data_fim + 'T23:59:59');
@@ -131,7 +135,7 @@ router.get('/resumo', async (req, res) => {
     (data || []).forEach(r => {
       const key = r.operador_id || 'merchant';
       if (!por_operador[key]) {
-        por_operador[key] = { operador_id: r.operador_id, nome: r.usuario_nome || 'Merchant', total: 0, por_modulo: {} };
+        por_operador[key] = { operador_id: r.operador_id, nome: r.usuario_nome || 'Administrador', total: 0, por_modulo: {} };
       }
       por_operador[key].total++;
       por_operador[key].por_modulo[r.modulo] = (por_operador[key].por_modulo[r.modulo] || 0) + 1;
