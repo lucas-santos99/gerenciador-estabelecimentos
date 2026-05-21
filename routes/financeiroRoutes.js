@@ -254,6 +254,7 @@ router.get('/historico',
                 valor_total,
                 meio_pagamento,
                 status,
+                operador_id,
                 clientes ( nome )
             `)
             .eq('mercearia_id', req.user.mercearia_id)
@@ -263,6 +264,29 @@ router.get('/historico',
 
         if (error) throw error;
 
+        // Busca nomes dos operadores presentes nas vendas
+        const operadorIds = [...new Set(vendas.map(v => v.operador_id).filter(Boolean))];
+        let operadoresMap = {};
+        if (operadorIds.length > 0) {
+            const { data: ops } = await supabaseAdmin
+                .from('operadores')
+                .select('id, nome')
+                .in('id', operadorIds)
+                .eq('mercearia_id', req.user.mercearia_id);
+            (ops || []).forEach(op => { operadoresMap[op.id] = op.nome; });
+        }
+
+        // Busca nome_fantasia para vendas sem operador (feitas pelo merchant)
+        let nomeMerchant = 'Administrador';
+        if (vendas.some(v => !v.operador_id)) {
+            const { data: m } = await supabaseAdmin
+                .from('mercearias')
+                .select('nome_fantasia')
+                .eq('id', req.user.mercearia_id)
+                .single();
+            if (m?.nome_fantasia) nomeMerchant = m.nome_fantasia;
+        }
+
         const vendasComItens = await Promise.all(vendas.map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
@@ -271,7 +295,10 @@ router.get('/historico',
 
             return {
                 ...venda,
-                cliente_nome: venda.clientes?.nome || null,
+                cliente_nome:   venda.clientes?.nome || null,
+                operador_nome:  venda.operador_id
+                                    ? (operadoresMap[venda.operador_id] || 'Operador removido')
+                                    : nomeMerchant,
                 itens: (itens || []).map(i => ({
                     produto_nome:   i.produtos?.nome || 'Produto',
                     quantidade:     i.quantidade,
