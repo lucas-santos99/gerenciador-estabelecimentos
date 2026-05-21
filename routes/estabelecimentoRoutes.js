@@ -229,6 +229,14 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
 
     try {
 
+        // Busca estado atual para registrar o antes
+        const { data: produtoAtual } = await db
+            .from('produtos')
+            .select('nome, preco_venda, preco_custo, estoque_atual, estoque_minimo, unidade_medida')
+            .eq('id', produtoId)
+            .eq('mercearia_id', estabelecimentoId)
+            .single();
+
         const { data, error } = await db
             .from('produtos')
             .update({
@@ -253,6 +261,24 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
             return res.status(404).json({ error: 'Produto não encontrado.' });
         }
 
+        const metaAntes = produtoAtual ? {
+            nome:           produtoAtual.nome,
+            preco_venda:    parseFloat(produtoAtual.preco_venda),
+            preco_custo:    parseFloat(produtoAtual.preco_custo),
+            estoque_atual:  parseFloat(produtoAtual.estoque_atual),
+            estoque_minimo: parseFloat(produtoAtual.estoque_minimo),
+            unidade_medida: produtoAtual.unidade_medida,
+        } : null;
+
+        const metaDepois = {
+            nome,
+            preco_venda:    parseFloat(preco_venda),
+            preco_custo:    parseFloat(preco_custo),
+            estoque_atual:  parseFloat(estoque_atual),
+            estoque_minimo: parseFloat(estoque_minimo),
+            unidade_medida: unidade_medida || 'un',
+        };
+
         registrar({
           mercearia_id: estabelecimentoId,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
@@ -260,7 +286,7 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_editado',
           descricao: `Produto "${nome}" atualizado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
-          meta: { produto_id: produtoId, depois: { nome, preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), preco_custo: parseFloat(preco_custo), unidade_medida } },
+          meta: { produto_id: produtoId, antes: metaAntes, depois: metaDepois },
         });
 
         console.log(`[INFO] Produto atualizado: ${data.nome}`);
