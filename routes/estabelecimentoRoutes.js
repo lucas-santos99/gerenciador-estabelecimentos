@@ -5,6 +5,17 @@ const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
 router.use(authUser);
 
+/* Formata estoque no padrão brasileiro com unidade */
+function fmtEstoque(valor, unidade) {
+  const v = parseFloat(valor) || 0;
+  const u = unidade || 'un';
+  if (u === 'kg') {
+    return v.toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' kg';
+  }
+  return v.toLocaleString('pt-BR', { maximumFractionDigits: 0 }) + ' un';
+}
+
+
 // --- Rota GET: /:id/produtos/buscar-global ---
 router.get('/:id/produtos/buscar-global', async (req, res) => {
     const { id: estabelecimentoId } = req.params;
@@ -179,7 +190,7 @@ router.post('/:id/produtos', async (req, res) => {
           usuario_nome: req.user.nome,
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_criado',
-          descricao: `Produto "${nome}" criado (estoque: ${parseFloat(estoque_atual)})`,
+          descricao: `Produto "${nome}" criado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
           meta: { produto_id: data.id, depois: { nome, preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), unidade_medida } },
         });
 
@@ -248,8 +259,8 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
           usuario_nome: req.user.nome,
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_editado',
-          descricao: `Produto "${nome}" atualizado (estoque: ${parseFloat(estoque_atual)})`,
-          meta: { produto_id: produtoId, depois: { nome, preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), preco_custo: parseFloat(preco_custo) } },
+          descricao: `Produto "${nome}" atualizado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
+          meta: { produto_id: produtoId, depois: { nome, preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), preco_custo: parseFloat(preco_custo), unidade_medida } },
         });
 
         console.log(`[INFO] Produto atualizado: ${data.nome}`);
