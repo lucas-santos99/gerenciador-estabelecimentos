@@ -511,6 +511,20 @@ router.get('/relatorio_vendas_operador',
             });
         }
 
+        // 3b) Busca nome_fantasia da mercearia para vendas sem operador_id
+        let nomeEstabelecimento = 'Administrador';
+        const temVendasSemOperador = vendas.some(v => !v.operador_id);
+        if (temVendasSemOperador) {
+            const { data: mercearia } = await supabaseAdmin
+                .from('mercearias')
+                .select('nome_fantasia')
+                .eq('id', req.user.mercearia_id)
+                .single();
+            if (mercearia?.nome_fantasia) {
+                nomeEstabelecimento = mercearia.nome_fantasia;
+            }
+        }
+
         // 4) Agrupa vendas por operador
         const agrupado = {};
 
@@ -522,7 +536,7 @@ router.get('/relatorio_vendas_operador',
                     operador_id:    v.operador_id || null,
                     operador_nome:  v.operador_id
                                         ? (operadoresMap[v.operador_id] || 'Operador removido')
-                                        : 'Sem operador',
+                                        : nomeEstabelecimento,
                     total_vendas:   0,
                     qtd_vendas:     0,
                     total_dinheiro: 0,
