@@ -294,7 +294,7 @@ router.put("/:id/permissoes", async (req, res) => {
 router.get('/minhas-permissoes', async (req, res) => {
   try {
     if (req.user.role === 'merchant' || req.user.role === 'super_admin') {
-      return res.json(['pdv','estoque','clientes','financeiro','configuracoes']);
+      return res.json(['pdv','estoque','clientes','financeiro','relatorios','configuracoes']);
     }
     res.json(req.user.permissoes || []);
   } catch (err) {

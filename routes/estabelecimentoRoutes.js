@@ -3,6 +3,8 @@ const db = require('../db/supabaseAdmin');
 const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
+const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { PERMISSOES } = require('../utils/permissoes');
 router.use(authUser);
 
 /* Formata estoque no padrão brasileiro com unidade */
@@ -143,7 +145,7 @@ router.get('/:id/produtos', async (req, res) => {
 
 
 // --- Rota POST /:id/produtos ---
-router.post('/:id/produtos', async (req, res) => {
+router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
 
     const estabelecimentoId = req.params.id;
 
@@ -207,7 +209,7 @@ router.post('/:id/produtos', async (req, res) => {
 
 
 // --- Rota PUT /:id/produtos/:produtoId ---
-router.put('/:id/produtos/:produtoId', async (req, res) => {
+router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
 
     const { id: estabelecimentoId, produtoId } = req.params;
 
@@ -302,7 +304,7 @@ router.put('/:id/produtos/:produtoId', async (req, res) => {
 
 
 // --- Rota DELETE /:id/produtos/:produtoId ---
-router.delete('/:id/produtos/:produtoId', async (req, res) => {
+router.delete('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req, res) => {
 
     const { id: estabelecimentoId, produtoId } = req.params;
 
