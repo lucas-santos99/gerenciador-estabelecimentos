@@ -143,22 +143,30 @@ router.put("/:id", async (req, res) => {
       status_assinatura,
       data_vencimento,
       logo_url,
-      tipo_estabelecimento
+      tipo_estabelecimento,
+      limite_operadores,
     } = req.body;
+
+    const updateData = {
+      nome_fantasia,
+      cnpj,
+      telefone,
+      email_contato,
+      endereco_completo,
+      status_assinatura,
+      data_vencimento,
+      logo_url,
+      tipo_estabelecimento,
+    };
+
+    // Atualiza limite apenas se enviado e válido
+    if (typeof limite_operadores === 'number' && limite_operadores >= 0 && limite_operadores <= 50) {
+      updateData.limite_operadores = limite_operadores;
+    }
 
     const { data, error } = await db
       .from("mercearias")
-      .update({
-        nome_fantasia,
-        cnpj,
-        telefone,
-        email_contato,
-        endereco_completo,
-        status_assinatura,
-        data_vencimento,
-        logo_url,
-        tipo_estabelecimento
-      })
+      .update(updateData)
       .eq("id", id)
       .select()
       .single();
