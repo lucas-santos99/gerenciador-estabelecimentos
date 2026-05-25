@@ -468,7 +468,4 @@ router.delete("/:id/apagar-definitivo", async (req, res) => {
   }
 });
 
-// ============================================================
-// PATCH — adicionar estas duas rotas em adminEstabelecimentosRoutes.js
-// Inserir ANTES do module.exports = router;
-// ============================================================
+module.exports = router;
