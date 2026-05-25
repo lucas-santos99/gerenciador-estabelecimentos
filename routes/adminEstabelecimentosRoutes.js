@@ -256,7 +256,8 @@ router.post("/criar", async (req, res) => {
       data_vencimento,
       status_assinatura,
       tipo_estabelecimento,
-      senha
+      senha,
+      limite_operadores,
     } = req.body;
 
     // validação da senha
@@ -292,7 +293,8 @@ router.post("/criar", async (req, res) => {
         status_assinatura: status_assinatura || "ativa",
         logo_url: null,
         data_vencimento: data_vencimento || null,
-        tipo_estabelecimento: tipo_estabelecimento || "mercearia"
+        tipo_estabelecimento: tipo_estabelecimento || "mercearia",
+        limite_operadores: parseInt(limite_operadores) || 3,
       })
       .select()
       .single();
