@@ -115,18 +115,20 @@ router.put("/:id/limite-operadores", async (req, res) => {
     const { id } = req.params;
     const { limite } = req.body;
 
-    if (typeof limite !== "number" || limite < 0 || limite > 50) {
+    const limiteNum = parseInt(limite);
+    if (isNaN(limiteNum) || limiteNum < 0 || limiteNum > 50) {
       return res.status(400).json({ error: "Limite inválido (0–50)" });
     }
+    const limite_val = limiteNum;
 
     const { error } = await db
       .from("mercearias")
-      .update({ limite_operadores: limite })
+      .update({ limite_operadores: limite_val })
       .eq("id", id);
 
     if (error) return res.status(400).json({ error: error.message });
 
-    res.json({ success: true, limite });
+    res.json({ success: true, limite: limite_val });
   } catch (err) {
     console.error("Erro atualizar limite operadores:", err);
     res.status(500).json({ error: "Erro interno" });
