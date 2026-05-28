@@ -236,12 +236,13 @@ router.get('/historico',
     const { data_inicio, data_fim } = req.query;
     const supabaseAdmin = require('../db/supabaseAdmin');
 
+    // BRT = UTC-3: deslocar datas para o fuso correto
     const inicio = data_inicio
-        ? new Date(data_inicio + 'T00:00:00.000Z').toISOString()
+        ? new Date(data_inicio + 'T00:00:00-03:00').toISOString()
         : new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
 
     const fim = data_fim
-        ? new Date(data_fim + 'T23:59:59.999Z').toISOString()
+        ? new Date(data_fim + 'T23:59:59-03:00').toISOString()
         : new Date(new Date().setHours(23, 59, 59, 999)).toISOString();
 
     try {
@@ -290,7 +291,7 @@ router.get('/historico',
         const vendasComItens = await Promise.all(vendas.map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
-                .select('quantidade, preco_unitario, produtos ( nome, unidade_medida )')
+                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida )')
                 .eq('venda_id', venda.id);
 
             return {
@@ -301,6 +302,7 @@ router.get('/historico',
                                     : nomeMerchant,
                 itens: (itens || []).map(i => ({
                     produto_nome:   i.produtos?.nome || 'Produto',
+                    produto_marca:  i.produtos?.marca || null,
                     quantidade:     i.quantidade,
                     preco_unitario: i.preco_unitario,
                     unidade_medida: i.produtos?.unidade_medida || 'un',
