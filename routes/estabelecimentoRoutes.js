@@ -192,8 +192,8 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
           usuario_nome: req.user.nome,
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_criado',
-          descricao: `Produto "${nome}" criado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
-          meta: { produto_id: data.id, depois: { nome, preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), unidade_medida } },
+          descricao: `Produto "${nome}${marca ? ' · ' + marca : ''}" criado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
+          meta: { produto_id: data.id, depois: { nome, ...(marca ? { marca } : {}), preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), unidade_medida } },
         });
 
         console.log(`[INFO] Novo produto adicionado: ${data.nome}`);
@@ -234,7 +234,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         // Busca estado atual para registrar o antes
         const { data: produtoAtual } = await db
             .from('produtos')
-            .select('nome, preco_venda, preco_custo, estoque_atual, estoque_minimo, unidade_medida')
+            .select('nome, marca, preco_venda, preco_custo, estoque_atual, estoque_minimo, unidade_medida')
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
             .single();
@@ -265,6 +265,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
 
         const metaAntes = produtoAtual ? {
             nome:           produtoAtual.nome,
+            ...(produtoAtual.marca ? { marca: produtoAtual.marca } : {}),
             preco_venda:    parseFloat(produtoAtual.preco_venda),
             preco_custo:    parseFloat(produtoAtual.preco_custo),
             estoque_atual:  parseFloat(produtoAtual.estoque_atual),
@@ -274,6 +275,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
 
         const metaDepois = {
             nome,
+            ...(marca ? { marca } : {}),
             preco_venda:    parseFloat(preco_venda),
             preco_custo:    parseFloat(preco_custo),
             estoque_atual:  parseFloat(estoque_atual),
@@ -287,7 +289,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
           usuario_nome: req.user.nome,
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_editado',
-          descricao: `Produto "${nome}" atualizado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
+          descricao: `Produto "${nome}${marca ? ' · ' + marca : ''}" atualizado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
           meta: { produto_id: produtoId, antes: metaAntes, depois: metaDepois },
         });
 
@@ -332,8 +334,8 @@ router.delete('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_
           usuario_nome: req.user.nome,
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_excluido',
-          descricao: `Produto "${data[0].nome}" excluído`,
-          meta: { produto_id: produtoId, antes: { nome: data[0].nome } },
+          descricao: `Produto "${data[0].nome}${data[0].marca ? ' · ' + data[0].marca : ''}" excluído`,
+          meta: { produto_id: produtoId, antes: { nome: data[0].nome, ...(data[0].marca ? { marca: data[0].marca } : {}) } },
         });
 
         res.status(200).json({ message: 'Produto excluído com sucesso' });
