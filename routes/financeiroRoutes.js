@@ -104,6 +104,8 @@ router.get('/resumo',
             total_dinheiro:       0,
             total_pix:            0,
             total_cartao:         0,
+            total_debito:         0,
+            total_credito:        0,
         };
 
         transacoes.forEach(t => {
@@ -123,7 +125,12 @@ router.get('/resumo',
             const meio = t.meio_pagamento ? t.meio_pagamento.toLowerCase() : '';
             if (meio === 'dinheiro') resumo.total_dinheiro += valor;
             else if (meio === 'pix') resumo.total_pix += valor;
-            else if (['debito', 'credito', 'cartao'].includes(meio)) resumo.total_cartao += valor;
+            else if (['debito', 'credito', 'cartao'].includes(meio)) {
+                resumo.total_cartao += valor;
+                if (meio === 'debito')  resumo.total_debito  += valor;
+                if (meio === 'credito') resumo.total_credito += valor;
+                // 'cartao' genérico (legado) vai só no total_cartao
+            }
 
         });
 
