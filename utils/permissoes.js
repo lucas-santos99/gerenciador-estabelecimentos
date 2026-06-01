@@ -45,6 +45,12 @@ const PERMISSOES = {
   CONFIG_EDITAR_DADOS: 'config_editar_dados',
   CONFIG_EDITAR_LOGO:  'config_editar_logo',
 
+  // ── Módulo Inventário ───────────────────────────────────────
+  INVENTARIO:           'inventario',
+  INVENTARIO_CONTAR:    'inventario_contar',
+  INVENTARIO_FINALIZAR: 'inventario_finalizar',
+  INVENTARIO_AJUSTE:    'inventario_ajuste',
+
   // ── Legado (mantidos para compatibilidade) ───────────────
   VER_CAIXA:         'pdv',
   VER_FINANCEIRO:    'financeiro',
@@ -111,6 +117,15 @@ const MODULOS_PERMISSOES = [
     acoes: [
       { id: 'config_editar_dados', label: 'Editar dados do estabelecimento' },
       { id: 'config_editar_logo',  label: 'Alterar logo' },
+    ],
+  },
+  {
+    id: 'inventario', label: 'Inventário', icone: '📦',
+    desc: 'Contagem física e movimentações de estoque',
+    acoes: [
+      { id: 'inventario_contar',    label: 'Realizar contagens (inventário)' },
+      { id: 'inventario_finalizar', label: 'Finalizar e aplicar inventário ao estoque' },
+      { id: 'inventario_ajuste',    label: 'Ajustes rápidos de estoque' },
     ],
   },
 ];
