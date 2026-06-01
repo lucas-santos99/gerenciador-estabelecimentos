@@ -299,10 +299,10 @@ router.post('/:id/finalizar', verificarPermissao(PERMISSOES.INVENTARIO_FINALIZAR
     if (!inv) return res.status(404).json({ error: 'Inventário não encontrado' });
     if (inv.status !== 'em_andamento') return res.status(400).json({ error: 'Inventário não está em andamento' });
 
-    // Buscar itens com contagem
+    // Buscar itens com contagem + categoria via produto
     const { data: itens } = await db
       .from('itens_inventario')
-      .select('*')
+      .select('*, produtos(categoria_id, categorias(nome))')
       .eq('inventario_id', id)
       .not('estoque_contado', 'is', null);
 
@@ -355,6 +355,7 @@ router.post('/:id/finalizar', verificarPermissao(PERMISSOES.INVENTARIO_FINALIZAR
         motivo:                 `Inventário: ${inv.nome}`,
         referencia_tipo:        'inventario',
         referencia_id:          id,
+        categoria_nome:         item.produtos?.categorias?.nome || null,
         operador_id:            operadorId(req),
         usuario_nome:           req.user.nome || req.user.email,
       });
@@ -458,6 +459,7 @@ router.get('/movimentacoes/listar', verificarPermissao(PERMISSOES.INVENTARIO), a
     if (produto)     q = q.ilike('produto_nome', `%${produto}%`);
     if (data_inicio) q = q.gte('created_at', data_inicio + 'T00:00:00-03:00');
     if (data_fim)    q = q.lte('created_at', data_fim + 'T23:59:59-03:00');
+    if (req.query.categoria) q = q.eq('categoria_nome', req.query.categoria);
 
     const { data, error, count } = await q;
     if (error) throw error;
@@ -490,7 +492,7 @@ router.post('/ajuste-rapido', verificarPermissao(PERMISSOES.INVENTARIO_AJUSTE), 
   try {
     const { data: produto } = await db
       .from('produtos')
-      .select('id, nome, marca, unidade_medida, estoque_atual')
+      .select('id, nome, marca, unidade_medida, estoque_atual, categoria_id, categorias(nome)')
       .eq('id', produto_id)
       .eq('mercearia_id', mid)
       .single();
@@ -532,6 +534,7 @@ router.post('/ajuste-rapido', verificarPermissao(PERMISSOES.INVENTARIO_AJUSTE), 
       quantidade_posterior:   qtdDepois,
       motivo:                 motivo.trim(),
       referencia_tipo:        'ajuste_manual',
+      categoria_nome:         produto.categorias?.nome || null,
       operador_id:            operadorId(req),
       usuario_nome:           req.user.nome || req.user.email,
     });
