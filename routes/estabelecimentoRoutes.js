@@ -121,6 +121,8 @@ router.get('/:id/produtos', async (req, res) => {
                 codigo_barras,
                 categoria_id,
                 unidade_medida,
+                vendido_por_peso,
+                plu_balanca,
                 categorias ( nome )
             `)
             .eq('mercearia_id', estabelecimentoId)
@@ -158,7 +160,9 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         preco_custo,
         preco_venda,
         categoria_id,
-        unidade_medida
+        unidade_medida,
+        vendido_por_peso,
+        plu_balanca
     } = req.body;
 
     if (!nome || !preco_venda || estoque_atual === undefined) {
@@ -179,7 +183,9 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
                 preco_custo: parseFloat(preco_custo) || 0,
                 preco_venda: parseFloat(preco_venda),
                 categoria_id: categoria_id || null,
-                unidade_medida: unidade_medida || 'un'
+                unidade_medida: unidade_medida || 'un',
+                vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
+                plu_balanca: plu_balanca || null,
             })
             .select()
             .single();
@@ -222,7 +228,9 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         preco_custo,
         preco_venda,
         categoria_id,
-        unidade_medida
+        unidade_medida,
+        vendido_por_peso,
+        plu_balanca
     } = req.body;
 
     if (!nome || !preco_venda || estoque_atual === undefined) {
@@ -250,7 +258,9 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
                 preco_custo: parseFloat(preco_custo) || 0,
                 preco_venda: parseFloat(preco_venda),
                 categoria_id: categoria_id || null,
-                unidade_medida: unidade_medida || 'un'
+                unidade_medida: unidade_medida || 'un',
+                vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
+                plu_balanca: plu_balanca || null,
             })
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
@@ -363,7 +373,7 @@ router.get('/:id/produtos/buscar', async (req, res) => {
 
         const { data, error } = await db
             .from('produtos')
-            .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo')
+            .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca')
             .eq('mercearia_id', estabelecimentoId)
             .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
             .limit(10);
