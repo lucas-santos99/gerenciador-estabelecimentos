@@ -84,8 +84,10 @@ router.get('/status/:userId', async (req, res) => {
 
         res.status(200).json({
             status: statusFinal,
-            nome: mercearia.nome_fantasia,
-            logo_url: mercearia.logo_url
+            nome:              mercearia.nome_fantasia,
+            logo_url:          mercearia.logo_url,
+            status_assinatura: statusFinal,
+            data_vencimento:   mercearia.data_vencimento || null,
         });
 
     } catch (error) {
