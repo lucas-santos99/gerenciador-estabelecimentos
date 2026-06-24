@@ -106,6 +106,50 @@ router.put("/:id/restaurar", async (req, res) => {
 });
 
 // =======================================================
+// LIBERAR ACESSO MANUALMENTE (SuperAdmin)
+// POST /api/admin/estabelecimentos/:id/liberar-acesso
+// =======================================================
+router.post("/:id/liberar-acesso", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dias = 30, motivo = "Liberação manual pelo administrador" } = req.body;
+
+    const diasNum = parseInt(dias);
+    if (isNaN(diasNum) || diasNum < 1 || diasNum > 3650) {
+      return res.status(400).json({ error: "Período inválido (1–3650 dias)." });
+    }
+
+    const novaData = new Date();
+    novaData.setDate(novaData.getDate() + diasNum);
+    const dataVencimento = novaData.toISOString().split("T")[0]; // YYYY-MM-DD
+
+    const { data, error } = await db
+      .from("mercearias")
+      .update({
+        status_assinatura: "ativa",
+        data_vencimento:   dataVencimento,
+      })
+      .eq("id", id)
+      .select("nome_fantasia")
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    console.log(`✅ Acesso liberado: ${data.nome_fantasia} por ${diasNum} dias — ${motivo}`);
+
+    res.json({
+      success:          true,
+      data_vencimento:  dataVencimento,
+      dias:             diasNum,
+      nome_fantasia:    data.nome_fantasia,
+    });
+  } catch (err) {
+    console.error("LIBERAR ACESSO error:", err);
+    res.status(500).json({ error: "Erro interno ao liberar acesso." });
+  }
+});
+
+// =======================================================
 // LIMITE DE OPERADORES (deve vir ANTES de /:id)
 // =======================================================
 

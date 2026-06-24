@@ -11,6 +11,12 @@ async function requireEstabelecimento(req, res, next) {
       return res.status(401).json({ error: "Usuário não autenticado" });
     }
 
+    // SuperAdmin bypassa verificação de licença — acesso irrestrito
+    if (req.user?.is_superadmin) {
+      req.merceariaId = req.user.mercearia_id || null;
+      return next();
+    }
+
     const { data, error } = await db
       .from("profiles")
       .select("mercearia_id")

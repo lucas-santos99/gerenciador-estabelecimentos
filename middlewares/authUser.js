@@ -40,10 +40,12 @@ module.exports = async function authUser(req, res, next) {
     req.user = {
       id:           profile.id,
       email:        profile.email,
-      nome:         profile.nome || profile.email, // nome legível para auditoria
+      nome:         profile.nome || profile.email,
       role:         profile.role,
       is_master:    profile.is_master,
       mercearia_id: profile.mercearia_id,
+      // Flag de superadmin: bypassa verificação de licença em todos os middlewares
+      is_superadmin: profile.is_master === true || profile.role === 'superadmin',
     };
 
     // Para operadores: carregar permissões e injetar no req.user
