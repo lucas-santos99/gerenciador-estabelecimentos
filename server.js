@@ -19,6 +19,9 @@ const operadoresRoutes = require("./routes/operadoresRoutes");
 const auditoriaRoutes   = require("./routes/auditoriaRoutes");
 const inventarioRoutes  = require("./routes/inventarioRoutes");
 
+// --- IMPORTAÇÃO DAS ROTAS DO ASAAS ---
+const asaasRoutes = require("./routes/asaasRoutes");
+
 // --- IMPORTAÇÃO DAS ROTAS DO ADMIN ---
 const adminEstabelecimentosRoutes = require("./routes/adminEstabelecimentosRoutes");
 const adminOperadoresRoutes = require("./routes/adminOperadoresRoutes");
@@ -49,6 +52,10 @@ app.use(
     credentials: true,
   })
 );
+
+// --- ROTAS DO ASAAS (cobrança de licença) ---
+// Webhook deve ser registrado ANTES do express.json para receber raw body se necessário
+app.use("/api/asaas", asaasRoutes);
 
 // --- ROTAS DO ADMIN (super_admin) ---
 app.use("/admin/estabelecimentos", adminEstabelecimentosRoutes);
