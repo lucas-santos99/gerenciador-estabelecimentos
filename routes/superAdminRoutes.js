@@ -60,11 +60,15 @@ router.get('/config', onlyMaster, async (req, res) => {
       .from('config_sistema')
       .select('chave, valor');
     if (error) throw error;
+
     const config = {};
-    (data || []).forEach(r => {
-      config[r.chave] = isNaN(r.valor) ? r.valor : parseInt(r.valor);
+    (data || []).forEach(r => { config[r.chave] = r.valor; });
+
+    res.json({
+      limite_operadores_padrao: parseInt(config.limite_operadores_padrao) || 3,
+      valor_mensalidade:        parseFloat(config.valor_mensalidade)      || 49.90,
+      whatsapp_suporte:         config.whatsapp_suporte                   || '',
     });
-    res.json({ limite_operadores_padrao: config.limite_operadores_padrao ?? 3 });
   } catch (err) {
     console.error('ERRO GET config:', err);
     res.status(500).json({ error: 'Erro ao buscar configurações' });
@@ -74,20 +78,39 @@ router.get('/config', onlyMaster, async (req, res) => {
 router.put('/config', onlyMaster, async (req, res) => {
   try {
     const db = require('../db/supabaseAdmin');
-    const { limite_operadores_padrao } = req.body;
+    const { limite_operadores_padrao, valor_mensalidade, whatsapp_suporte } = req.body;
 
-    const val = parseInt(limite_operadores_padrao);
-    if (isNaN(val) || val < 0 || val > 50) {
-      return res.status(400).json({ error: 'Limite inválido (0–50)' });
+    const updates = [];
+
+    if (limite_operadores_padrao !== undefined) {
+      const val = parseInt(limite_operadores_padrao);
+      if (isNaN(val) || val < 0 || val > 50)
+        return res.status(400).json({ error: 'Limite inválido (0–50)' });
+      updates.push({ chave: 'limite_operadores_padrao', valor: String(val) });
     }
 
-    const { error } = await db
-      .from('config_sistema')
-      .upsert({ chave: 'limite_operadores_padrao', valor: String(val) });
+    if (valor_mensalidade !== undefined) {
+      const val = parseFloat(valor_mensalidade);
+      if (isNaN(val) || val < 0 || val > 9999)
+        return res.status(400).json({ error: 'Valor de mensalidade inválido' });
+      updates.push({ chave: 'valor_mensalidade', valor: String(val.toFixed(2)) });
+    }
 
-    if (error) throw error;
+    if (whatsapp_suporte !== undefined) {
+      const limpo = String(whatsapp_suporte).replace(/\D/g, '');
+      if (limpo.length < 10 || limpo.length > 15)
+        return res.status(400).json({ error: 'WhatsApp inválido (só números, com DDD e DDI)' });
+      updates.push({ chave: 'whatsapp_suporte', valor: limpo });
+    }
 
-    res.json({ success: true, limite_operadores_padrao: val });
+    for (const u of updates) {
+      const { error } = await db
+        .from('config_sistema')
+        .upsert(u, { onConflict: 'chave' });
+      if (error) throw error;
+    }
+
+    res.json({ success: true });
   } catch (err) {
     console.error('ERRO PUT config:', err);
     res.status(500).json({ error: 'Erro ao salvar configurações' });

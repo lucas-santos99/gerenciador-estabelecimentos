@@ -249,6 +249,7 @@ router.put("/:id", async (req, res) => {
       logo_url,
       tipo_estabelecimento,
       limite_operadores,
+      valor_mensalidade,
     } = req.body;
 
     const updateData = {
@@ -267,6 +268,8 @@ router.put("/:id", async (req, res) => {
     if (typeof limite_operadores === 'number' && limite_operadores >= 0 && limite_operadores <= 50) {
       updateData.limite_operadores = limite_operadores;
     }
+    // Valor individual de mensalidade (null = usar padrão global)
+    updateData.valor_mensalidade = valor_mensalidade ? parseFloat(valor_mensalidade) : null;
 
     const { data, error } = await db
       .from("mercearias")
@@ -302,6 +305,7 @@ router.post("/criar", async (req, res) => {
       tipo_estabelecimento,
       senha,
       limite_operadores,
+      valor_mensalidade,
     } = req.body;
 
     // validação da senha
@@ -338,7 +342,8 @@ router.post("/criar", async (req, res) => {
         logo_url: null,
         data_vencimento: data_vencimento || null,
         tipo_estabelecimento: tipo_estabelecimento || "mercearia",
-        limite_operadores: parseInt(limite_operadores) || 3,
+        limite_operadores:    parseInt(limite_operadores) || 3,
+        valor_mensalidade:    valor_mensalidade ? parseFloat(valor_mensalidade) : null,
       })
       .select()
       .single();

@@ -10,13 +10,32 @@ const ASAAS_API_URL  = process.env.ASAAS_API_URL || "https://api.asaas.com/v3";
 const WEBHOOK_TOKEN  = process.env.ASAAS_WEBHOOK_TOKEN;
 
 // Valor da licença em config_sistema — busca do banco
-async function buscarValorPlano() {
+async function buscarValorPlano(mercearia_id = null) {
+  // Verificar se a mercearia tem valor individual
+  if (mercearia_id) {
+    const { data: merc } = await db
+      .from("mercearias")
+      .select("valor_mensalidade")
+      .eq("id", mercearia_id)
+      .single();
+    if (merc?.valor_mensalidade) return parseFloat(merc.valor_mensalidade);
+  }
+  // Fallback: valor padrão global
   const { data } = await db
     .from("config_sistema")
     .select("valor")
     .eq("chave", "valor_mensalidade")
     .single();
   return parseFloat(data?.valor) || 49.90;
+}
+
+async function buscarWhatsappSuporte() {
+  const { data } = await db
+    .from("config_sistema")
+    .select("valor")
+    .eq("chave", "whatsapp_suporte")
+    .single();
+  return data?.valor || "5500000000000";
 }
 
 // Headers padrão para todas as chamadas Asaas
@@ -80,7 +99,7 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
     if (error || !mercearia) return res.status(404).json({ error: "Estabelecimento não encontrado." });
 
     // 2. Buscar valor do plano
-    const valorMensal = await buscarValorPlano();
+    const valorMensal = await buscarValorPlano(mercearia_id);
     const valor = plano === "anual"
       ? parseFloat((valorMensal * 12 * 0.8).toFixed(2)) // 20% desconto anual
       : valorMensal;
@@ -186,9 +205,11 @@ router.get("/planos", async (req, res) => {
     const valorMensal = await buscarValorPlano();
     const valorAnual  = parseFloat((valorMensal * 12 * 0.8).toFixed(2));
 
+    const whatsapp = await buscarWhatsappSuporte();
     res.json({
-      mensal: { valor: valorMensal, dias: 30,  descricao: "Plano Mensal" },
-      anual:  { valor: valorAnual,  dias: 365, descricao: "Plano Anual (20% off)", economia: parseFloat((valorMensal * 12 - valorAnual).toFixed(2)) },
+      mensal:    { valor: valorMensal, dias: 30,  descricao: "Plano Mensal" },
+      anual:     { valor: valorAnual,  dias: 365, descricao: "Plano Anual (20% off)", economia: parseFloat((valorMensal * 12 - valorAnual).toFixed(2)) },
+      whatsapp,
     });
   } catch (err) {
     res.status(500).json({ error: "Erro ao buscar planos." });
