@@ -216,6 +216,41 @@ router.get("/planos", async (req, res) => {
   }
 });
 
+
+// ═══════════════════════════════════════════════════════════
+// GET /api/asaas/config-tela-bloqueio
+// Retorna textos editáveis da tela de bloqueio
+// ═══════════════════════════════════════════════════════════
+router.get("/config-tela-bloqueio", async (req, res) => {
+  try {
+    const { data } = await db
+      .from("config_sistema")
+      .select("chave, valor")
+      .in("chave", [
+        "tela_bloqueio_titulo",
+        "tela_bloqueio_mensagem",
+        "tela_bloqueio_info",
+        "promo_ativa",
+        "promo_texto",
+        "promo_validade",
+      ]);
+
+    const cfg = {};
+    (data || []).forEach(r => { cfg[r.chave] = r.valor; });
+
+    res.json({
+      titulo:         cfg.tela_bloqueio_titulo   || "",
+      mensagem:       cfg.tela_bloqueio_mensagem || "",
+      info:           cfg.tela_bloqueio_info     || "",
+      promo_ativa:    cfg.promo_ativa === "true",
+      promo_texto:    cfg.promo_texto            || "",
+      promo_validade: cfg.promo_validade         || "",
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao buscar configurações da tela." });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════
 // POST /api/asaas/webhook
 // Recebe notificações do Asaas — libera acesso automaticamente

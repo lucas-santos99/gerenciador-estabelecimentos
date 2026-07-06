@@ -112,17 +112,37 @@ router.put("/:id/restaurar", async (req, res) => {
 router.post("/:id/liberar-acesso", async (req, res) => {
   try {
     const { id } = req.params;
-    const { dias = 30, motivo = "Liberação manual pelo administrador" } = req.body;
+    const {
+      dias            = 30,
+      motivo          = "",
+      forma_pagamento = "manual",
+      liberado_por    = "SuperAdmin",
+      liberado_por_id = null,
+    } = req.body;
 
     const diasNum = parseInt(dias);
     if (isNaN(diasNum) || diasNum < 1 || diasNum > 3650) {
       return res.status(400).json({ error: "Período inválido (1–3650 dias)." });
     }
 
-    const novaData = new Date();
-    novaData.setDate(novaData.getDate() + diasNum);
-    const dataVencimento = novaData.toISOString().split("T")[0]; // YYYY-MM-DD
+    // Calcular nova data de vencimento
+    // Se já tem data futura, acumula; senão começa de hoje
+    const { data: mercAtual } = await db
+      .from("mercearias")
+      .select("data_vencimento, nome_fantasia")
+      .eq("id", id)
+      .single();
 
+    const base = mercAtual?.data_vencimento &&
+      new Date(mercAtual.data_vencimento + "T12:00:00") > new Date()
+        ? new Date(mercAtual.data_vencimento + "T12:00:00")
+        : new Date();
+
+    const dataInicio = new Date().toISOString().split("T")[0];
+    base.setDate(base.getDate() + diasNum);
+    const dataVencimento = base.toISOString().split("T")[0];
+
+    // Atualizar licença
     const { data, error } = await db
       .from("mercearias")
       .update({
@@ -135,7 +155,19 @@ router.post("/:id/liberar-acesso", async (req, res) => {
 
     if (error) return res.status(400).json({ error: error.message });
 
-    console.log(`✅ Acesso liberado: ${data.nome_fantasia} por ${diasNum} dias — ${motivo}`);
+    // Registrar no histórico de liberações
+    await db.from("liberacoes_licenca").insert({
+      mercearia_id:    id,
+      dias:            diasNum,
+      data_inicio:     dataInicio,
+      data_vencimento: dataVencimento,
+      forma_pagamento: forma_pagamento,
+      motivo:          motivo || null,
+      liberado_por:    liberado_por,
+      liberado_por_id: liberado_por_id || null,
+    });
+
+    console.log(`✅ Acesso liberado: ${data.nome_fantasia} | ${diasNum}d | ${forma_pagamento} | ${liberado_por} | ${motivo || "sem motivo"}`);
 
     res.json({
       success:          true,
@@ -146,6 +178,28 @@ router.post("/:id/liberar-acesso", async (req, res) => {
   } catch (err) {
     console.error("LIBERAR ACESSO error:", err);
     res.status(500).json({ error: "Erro interno ao liberar acesso." });
+  }
+});
+
+// =======================================================
+// HISTÓRICO DE LIBERAÇÕES DE UM ESTABELECIMENTO
+// GET /api/admin/estabelecimentos/:id/liberacoes
+// =======================================================
+router.get("/:id/liberacoes", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await db
+      .from("liberacoes_licenca")
+      .select("*")
+      .eq("mercearia_id", id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    console.error("LIBERACOES error:", err);
+    res.status(500).json({ error: "Erro ao buscar histórico." });
   }
 });
 

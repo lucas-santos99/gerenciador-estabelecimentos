@@ -117,4 +117,58 @@ router.put('/config', onlyMaster, async (req, res) => {
   }
 });
 
+
+// ============================================================
+// CONFIGURAÇÕES DA TELA DE BLOQUEIO (textos editáveis)
+// ============================================================
+
+router.get('/config-tela-bloqueio', onlyMaster, async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { data } = await db
+      .from('config_sistema')
+      .select('chave, valor')
+      .in('chave', [
+        'tela_bloqueio_titulo', 'tela_bloqueio_mensagem', 'tela_bloqueio_info',
+        'promo_ativa', 'promo_texto', 'promo_validade',
+      ]);
+    const cfg = {};
+    (data || []).forEach(r => { cfg[r.chave] = r.valor; });
+    res.json({
+      titulo:         cfg.tela_bloqueio_titulo   || 'Acesso Bloqueado',
+      mensagem:       cfg.tela_bloqueio_mensagem || '',
+      info:           cfg.tela_bloqueio_info     || '',
+      promo_ativa:    cfg.promo_ativa === 'true',
+      promo_texto:    cfg.promo_texto            || '',
+      promo_validade: cfg.promo_validade         || '',
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar configurações da tela.' });
+  }
+});
+
+router.put('/config-tela-bloqueio', onlyMaster, async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { titulo, mensagem, info, promo_ativa, promo_texto, promo_validade } = req.body;
+
+    const updates = [
+      { chave: 'tela_bloqueio_titulo',   valor: titulo   || 'Acesso Bloqueado' },
+      { chave: 'tela_bloqueio_mensagem', valor: mensagem || '' },
+      { chave: 'tela_bloqueio_info',     valor: info     || '' },
+      { chave: 'promo_ativa',            valor: promo_ativa ? 'true' : 'false' },
+      { chave: 'promo_texto',            valor: promo_texto    || '' },
+      { chave: 'promo_validade',         valor: promo_validade || '' },
+    ];
+
+    for (const u of updates) {
+      await db.from('config_sistema').upsert(u, { onConflict: 'chave' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao salvar configurações da tela.' });
+  }
+});
+
 module.exports = router;
