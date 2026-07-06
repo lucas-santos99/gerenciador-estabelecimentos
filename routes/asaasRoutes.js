@@ -53,16 +53,22 @@ async function obterOuCriarClienteAsaas(mercearia) {
   // Se já tem ID do Asaas salvo, retorna direto
   if (mercearia.asaas_customer_id) return mercearia.asaas_customer_id;
 
+  // Validar CPF/CNPJ — Asaas só aceita 11 dígitos (CPF) ou 14 dígitos (CNPJ)
+  const cnpjLimpo = (mercearia.cnpj || "").replace(/\D/g, "");
+  const cpfCnpjValido = cnpjLimpo.length === 11 || cnpjLimpo.length === 14
+    ? cnpjLimpo
+    : undefined; // não envia se inválido — campo é opcional no Asaas
+
   // Criar cliente no Asaas
   const resp = await fetch(`${ASAAS_API_URL}/customers`, {
     method:  "POST",
     headers: asaasHeaders(),
     body: JSON.stringify({
-      name:          mercearia.nome_fantasia,
-      email:         mercearia.email_contato || undefined,
-      phone:         mercearia.telefone      || undefined,
-      cpfCnpj:       mercearia.cnpj          || undefined,
-      externalReference: mercearia.id, // nosso ID interno
+      name:              mercearia.nome_fantasia,
+      email:             mercearia.email_contato || undefined,
+      phone:             mercearia.telefone      || undefined,
+      cpfCnpj:           cpfCnpjValido,
+      externalReference: mercearia.id,
     }),
   });
 
