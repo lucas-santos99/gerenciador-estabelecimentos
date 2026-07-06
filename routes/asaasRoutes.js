@@ -57,7 +57,13 @@ async function obterOuCriarClienteAsaas(mercearia) {
   const cnpjLimpo = (mercearia.cnpj || "").replace(/\D/g, "");
   const cpfCnpjValido = cnpjLimpo.length === 11 || cnpjLimpo.length === 14
     ? cnpjLimpo
-    : undefined; // não envia se inválido — campo é opcional no Asaas
+    : undefined;
+
+  // Validar telefone — Asaas exige mínimo 10 dígitos (DDD + número)
+  const telLimpo = (mercearia.telefone || "").replace(/\D/g, "");
+  const telefoneValido = telLimpo.length >= 10 && telLimpo.length <= 11
+    ? telLimpo
+    : undefined;
 
   // Criar cliente no Asaas
   const resp = await fetch(`${ASAAS_API_URL}/customers`, {
@@ -66,7 +72,7 @@ async function obterOuCriarClienteAsaas(mercearia) {
     body: JSON.stringify({
       name:              mercearia.nome_fantasia,
       email:             mercearia.email_contato || undefined,
-      phone:             mercearia.telefone      || undefined,
+      phone:             telefoneValido,
       cpfCnpj:           cpfCnpjValido,
       externalReference: mercearia.id,
     }),
