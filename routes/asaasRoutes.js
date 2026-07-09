@@ -128,53 +128,73 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
     vencCobranca.setDate(vencCobranca.getDate() + 3);
     const dueDate = vencCobranca.toISOString().split("T")[0];
 
-    // 5. Criar cobrança no Asaas (aceita Pix e Cartão)
-    const payload = {
-      customer:         customerId,
-      billingType:      "UNDEFINED", // UNDEFINED = cliente escolhe Pix ou Cartão
-      value:            valor,
-      dueDate:          dueDate,
-      description:      `Licença ${plano === "anual" ? "Anual" : "Mensal"} — Gerenciador de Estabelecimentos`,
-      externalReference: `${mercearia_id}|${diasPlano}`, // usado no webhook
-    };
+    const descricao = `Licença ${plano === "anual" ? "Anual" : "Mensal"} — Gerenciador de Estabelecimentos`;
+    const externalRef = `${mercearia_id}|${diasPlano}`;
 
-    const respCobranca = await fetch(`${ASAAS_API_URL}/payments`, {
+    // 5a. Criar cobrança Pix
+    const respPagPix = await fetch(`${ASAAS_API_URL}/payments`, {
       method:  "POST",
       headers: asaasHeaders(),
-      body:    JSON.stringify(payload),
+      body:    JSON.stringify({
+        customer:          customerId,
+        billingType:       "PIX",
+        value:             valor,
+        dueDate:           dueDate,
+        description:       descricao,
+        externalReference: externalRef,
+      }),
     });
-
-    const cobranca = await respCobranca.json();
-    if (!respCobranca.ok) {
-      console.error("Erro Asaas criar cobrança:", cobranca);
-      return res.status(400).json({ error: cobranca.errors?.[0]?.description || "Erro ao gerar cobrança." });
+    const cobrancaPix = await respPagPix.json();
+    if (!respPagPix.ok) {
+      console.error("Erro Asaas criar cobrança Pix:", cobrancaPix);
+      return res.status(400).json({ error: cobrancaPix.errors?.[0]?.description || "Erro ao gerar cobrança Pix." });
     }
 
-    // 6. Salvar cobrança pendente no banco
+    // 5b. Criar cobrança Cartão de Crédito
+    const respPagCartao = await fetch(`${ASAAS_API_URL}/payments`, {
+      method:  "POST",
+      headers: asaasHeaders(),
+      body:    JSON.stringify({
+        customer:          customerId,
+        billingType:       "CREDIT_CARD",
+        value:             valor,
+        dueDate:           dueDate,
+        description:       descricao,
+        externalReference: externalRef,
+      }),
+    });
+    const cobrancaCartao = await respPagCartao.json();
+    if (!respPagCartao.ok) {
+      console.error("Erro Asaas criar cobrança Cartão:", cobrancaCartao);
+      // Não bloqueia — Pix já foi criado, cartão é opcional
+    }
+
+    // 6. Salvar cobrança Pix como principal (webhook virá dela)
     await db.from("mercearias").update({
-      asaas_payment_id:     cobranca.id,
+      asaas_payment_id:     cobrancaPix.id,
       asaas_payment_status: "PENDING",
     }).eq("id", mercearia_id);
 
     // 7. Buscar QR Code Pix
     let pixData = null;
     try {
-      const respPix = await fetch(`${ASAAS_API_URL}/payments/${cobranca.id}/pixQrCode`, {
+      const respPix = await fetch(`${ASAAS_API_URL}/payments/${cobrancaPix.id}/pixQrCode`, {
         headers: asaasHeaders(),
       });
       if (respPix.ok) pixData = await respPix.json();
     } catch {}
 
     res.json({
-      success:       true,
-      payment_id:    cobranca.id,
+      success:            true,
+      payment_id:         cobrancaPix.id,         // usado no polling de status
+      payment_id_cartao:  cobrancaCartao?.id || null,
       valor,
       plano,
-      dias:          diasPlano,
-      due_date:      dueDate,
-      invoice_url:   cobranca.invoiceUrl,    // link de pagamento (Pix + Cartão)
-      pix_qr_code:   pixData?.encodedImage,  // QR Code em base64
-      pix_copy_paste: pixData?.payload,      // Pix copia e cola
+      dias:               diasPlano,
+      due_date:           dueDate,
+      invoice_url_cartao: cobrancaCartao?.invoiceUrl || null, // link só cartão de crédito
+      pix_qr_code:        pixData?.encodedImage,
+      pix_copy_paste:     pixData?.payload,
     });
 
   } catch (err) {
