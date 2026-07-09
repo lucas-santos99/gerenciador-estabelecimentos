@@ -59,6 +59,8 @@ async function obterOuCriarClienteAsaas(mercearia) {
     ? cnpjLimpo
     : undefined;
 
+  console.log(`[Asaas] CPF/CNPJ recebido: "${mercearia.cnpj}" → limpo: "${cnpjLimpo}" (${cnpjLimpo.length} dígitos) → enviando: "${cpfCnpjValido}"`);
+
   // Validar telefone — Asaas exige mínimo 10 dígitos (DDD + número)
   const telLimpo = (mercearia.telefone || "").replace(/\D/g, "");
   const telefoneValido = telLimpo.length >= 10 && telLimpo.length <= 11
