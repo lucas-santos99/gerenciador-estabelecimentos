@@ -106,6 +106,32 @@ router.put("/:id/restaurar", async (req, res) => {
 });
 
 // =======================================================
+// BLOQUEAR ACESSO MANUALMENTE (SuperAdmin)
+// POST /api/admin/estabelecimentos/:id/bloquear-acesso
+// =======================================================
+router.post("/:id/bloquear-acesso", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motivo = "Bloqueio manual pelo administrador" } = req.body;
+
+    const { data, error } = await db
+      .from("mercearias")
+      .update({ status_assinatura: "bloqueada" })
+      .eq("id", id)
+      .select("nome_fantasia")
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    console.log(`🔴 Acesso bloqueado: ${data.nome_fantasia} — ${motivo}`);
+    res.json({ success: true, nome_fantasia: data.nome_fantasia });
+  } catch (err) {
+    console.error("BLOQUEAR ACESSO error:", err);
+    res.status(500).json({ error: "Erro interno ao bloquear acesso." });
+  }
+});
+
+// =======================================================
 // LIBERAR ACESSO MANUALMENTE (SuperAdmin)
 // POST /api/admin/estabelecimentos/:id/liberar-acesso
 // =======================================================

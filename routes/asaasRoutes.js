@@ -1,5 +1,5 @@
 // routes/asaasRoutes.js
-// Integração com Asaas — cobrança de licença (Pix + Cartão de Crédito)
+// Integração com Asaas — cobrança de licença (Pix + Cartão de Crédito/Débito)
 
 const express = require("express");
 const router  = express.Router();
