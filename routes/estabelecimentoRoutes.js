@@ -176,6 +176,91 @@ router.get('/:id/produtos', async (req, res) => {
 
 
 // --- Rota POST /:id/produtos ---
+/* ============================================================
+   CATÁLOGO GLOBAL DE PRODUTOS — auto-preenchimento por código de barras
+============================================================ */
+
+// Consulta a Open Food Facts (API pública, gratuita, sem chave).
+// Retorna { nome, marca } ou null se não encontrar.
+async function consultarOpenFoodFacts(codigo) {
+  try {
+    const resp = await fetch(
+      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands`,
+      { headers: { 'User-Agent': 'GerenciadorEstabelecimentos - LucasJSystems - contato via app' } }
+    );
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    if (json.status !== 1 || !json.product) return null;
+
+    const nome  = (json.product.product_name || '').trim();
+    const marca = (json.product.brands || '').split(',')[0].trim();
+    if (!nome) return null;
+
+    return { nome, marca: marca || null };
+  } catch (err) {
+    console.error('[CATALOGO] Erro consultar Open Food Facts:', err.message);
+    return null;
+  }
+}
+
+// Salva/atualiza o catálogo global — usado tanto pelo fallback do Open Food
+// Facts quanto pelo cadastro manual de produtos (contribuição colaborativa).
+async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colaborativo') {
+  if (!codigo_barras || !nome) return;
+  try {
+    await db.from('catalogo_global_produtos').upsert({
+      codigo_barras,
+      nome,
+      marca: marca || null,
+      fonte,
+      atualizado_em: new Date().toISOString(),
+    }, { onConflict: 'codigo_barras' });
+  } catch (err) {
+    console.error('[CATALOGO] Erro salvar no catálogo global:', err.message);
+  }
+}
+
+// --- Rota GET: /:id/produtos/lookup-codigo?codigo=EAN ---
+// Usada no cadastro de produto novo pra auto-preencher nome/marca.
+// Ordem: 1) catálogo global (grátis, instantâneo) → 2) Open Food Facts
+// (grátis, externo — e já contribui de volta pro catálogo global).
+router.get('/:id/produtos/lookup-codigo', async (req, res) => {
+  const { codigo } = req.query;
+  if (!codigo || !codigo.trim()) {
+    return res.status(400).json({ error: 'Código de barras é obrigatório.' });
+  }
+  const codigoLimpo = codigo.trim();
+
+  try {
+    // 1) Catálogo global compartilhado
+    const { data: doCatalogo } = await db
+      .from('catalogo_global_produtos')
+      .select('nome, marca')
+      .eq('codigo_barras', codigoLimpo)
+      .maybeSingle();
+
+    if (doCatalogo) {
+      return res.json({ encontrado: true, nome: doCatalogo.nome, marca: doCatalogo.marca, fonte: 'catalogo' });
+    }
+
+    // 2) Open Food Facts (fallback externo, gratuito)
+    const doOff = await consultarOpenFoodFacts(codigoLimpo);
+    if (doOff) {
+      await salvarNoCatalogoGlobal(codigoLimpo, doOff.nome, doOff.marca, 'openfoodfacts');
+      return res.json({ encontrado: true, nome: doOff.nome, marca: doOff.marca, fonte: 'openfoodfacts' });
+    }
+
+    // Não encontrado em nenhuma fonte gratuita — comerciante preenche na mão
+    res.json({ encontrado: false });
+
+  } catch (err) {
+    console.error(`[ERRO] GET lookup-codigo:`, err.message);
+    res.status(500).json({ error: 'Erro ao consultar código de barras.' });
+  }
+});
+
+
+
 router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
 
     const estabelecimentoId = req.params.id;
@@ -220,6 +305,12 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
             .single();
 
         if (error) throw error;
+
+        // Contribui pro catálogo global — próximo estabelecimento que
+        // bipar esse mesmo código de barras já acha nome/marca prontos
+        if (codigo_barras) {
+          salvarNoCatalogoGlobal(codigo_barras, nome, marca, 'colaborativo');
+        }
 
         registrar({
           mercearia_id: estabelecimentoId,
