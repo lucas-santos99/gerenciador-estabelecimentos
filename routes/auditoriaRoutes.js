@@ -259,6 +259,41 @@ router.get('/admin/estabelecimentos', async (req, res) => {
 });
 
 /* ============================================================
+   ADMIN — OPÇÕES PARA OS FILTROS (usuários e ações que de fato
+   existem na auditoria, opcionalmente restrito a um estabelecimento
+   e/ou escopo). Alimenta os <select> de Usuário e Ação na tela.
+   GET /api/auditoria/admin/filtros?mercearia_id=&escopo=
+   ⚠️ Também precisa vir ANTES de /admin/:mercearia_id.
+============================================================ */
+router.get('/admin/filtros', async (req, res) => {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Acesso negado' });
+  }
+
+  const { mercearia_id, escopo } = req.query;
+
+  try {
+    let queryAcao = db.from('auditoria').select('acao').limit(5000);
+    let queryUser = db.from('auditoria').select('usuario_nome').limit(5000);
+
+    if (mercearia_id) { queryAcao = queryAcao.eq('mercearia_id', mercearia_id); queryUser = queryUser.eq('mercearia_id', mercearia_id); }
+    if (escopo)       { queryAcao = queryAcao.eq('escopo', escopo);             queryUser = queryUser.eq('escopo', escopo); }
+
+    const [{ data: acaoRows, error: e1 }, { data: userRows, error: e2 }] = await Promise.all([queryAcao, queryUser]);
+    if (e1) throw e1;
+    if (e2) throw e2;
+
+    const acoes    = [...new Set((acaoRows || []).map(r => r.acao).filter(Boolean))].sort();
+    const usuarios = [...new Set((userRows || []).map(r => r.usuario_nome).filter(Boolean))].sort();
+
+    res.json({ acoes, usuarios });
+  } catch (err) {
+    console.error('[AUDITORIA] Erro buscar filtros:', err.message);
+    res.status(500).json({ error: 'Erro ao buscar opções de filtro' });
+  }
+});
+
+/* ============================================================
    ADMIN — LISTAR AUDITORIA DE UM ESTABELECIMENTO
    GET /api/auditoria/admin/:mercearia_id
 ============================================================ */
