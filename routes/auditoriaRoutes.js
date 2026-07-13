@@ -180,42 +180,11 @@ router.get('/resumo', async (req, res) => {
 });
 
 /* ============================================================
-   ADMIN — LISTAR AUDITORIA DE UM ESTABELECIMENTO
-   GET /api/auditoria/admin/:mercearia_id
-============================================================ */
-router.get('/admin/:mercearia_id', async (req, res) => {
-  if (!['super_admin', 'merchant'].includes(req.user.role)) {
-    return res.status(403).json({ error: 'Acesso negado' });
-  }
-
-  const { mercearia_id } = req.params;
-  const { limit = 100, offset = 0, modulo, data_inicio, data_fim } = req.query;
-
-  try {
-    let query = db
-      .from('auditoria')
-      .select('id, modulo, acao, descricao, meta, criado_em, usuario_nome, operador_id', { count: 'exact' })
-      .eq('mercearia_id', mercearia_id)
-      .order('criado_em', { ascending: false })
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
-
-    if (modulo)      query = query.eq('modulo', modulo);
-    if (data_inicio) query = query.gte('criado_em', data_inicio);
-    if (data_fim)    query = query.lte('criado_em', data_fim + 'T23:59:59');
-
-    const { data, error, count } = await query;
-    if (error) throw error;
-
-    res.json({ registros: data || [], total: count || 0 });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar auditoria' });
-  }
-});
-
-/* ============================================================
    ADMIN — AUDITORIA GERAL (todas as mercearias, escopo admin)
    GET /api/auditoria/admin/geral?escopo=&modulo=&acao=&mercearia_id=&data_inicio=&data_fim=&limit=&offset=
    Só super_admin. Usada na aba "Auditoria" do painel administrativo.
+   ⚠️ Precisa vir ANTES de /admin/:mercearia_id, senão o Express
+   trata "geral" como valor do parâmetro :mercearia_id.
 ============================================================ */
 router.get('/admin/geral', async (req, res) => {
   if (req.user.role !== 'super_admin') {
@@ -258,6 +227,7 @@ router.get('/admin/geral', async (req, res) => {
 /* ============================================================
    ADMIN — LISTA DE ESTABELECIMENTOS COM AUDITORIA (p/ filtro)
    GET /api/auditoria/admin/estabelecimentos
+   ⚠️ Também precisa vir ANTES de /admin/:mercearia_id.
 ============================================================ */
 router.get('/admin/estabelecimentos', async (req, res) => {
   if (req.user.role !== 'super_admin') {
@@ -275,6 +245,39 @@ router.get('/admin/estabelecimentos', async (req, res) => {
     res.json(data || []);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar estabelecimentos' });
+  }
+});
+
+/* ============================================================
+   ADMIN — LISTAR AUDITORIA DE UM ESTABELECIMENTO
+   GET /api/auditoria/admin/:mercearia_id
+============================================================ */
+router.get('/admin/:mercearia_id', async (req, res) => {
+  if (!['super_admin', 'merchant'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Acesso negado' });
+  }
+
+  const { mercearia_id } = req.params;
+  const { limit = 100, offset = 0, modulo, data_inicio, data_fim } = req.query;
+
+  try {
+    let query = db
+      .from('auditoria')
+      .select('id, modulo, acao, descricao, meta, criado_em, usuario_nome, operador_id', { count: 'exact' })
+      .eq('mercearia_id', mercearia_id)
+      .order('criado_em', { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    if (modulo)      query = query.eq('modulo', modulo);
+    if (data_inicio) query = query.gte('criado_em', data_inicio);
+    if (data_fim)    query = query.lte('criado_em', data_fim + 'T23:59:59');
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    res.json({ registros: data || [], total: count || 0 });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar auditoria' });
   }
 });
 
