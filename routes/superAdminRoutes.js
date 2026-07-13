@@ -3,6 +3,7 @@ const router = express.Router();
 
 const authUser = require('../middlewares/authUser');
 const onlyMaster = require('../middlewares/onlyMaster');
+const { registrar } = require('./auditoriaRoutes');
 
 const {
   criarSuperAdmin,
@@ -110,6 +111,16 @@ router.put('/config', onlyMaster, async (req, res) => {
       if (error) throw error;
     }
 
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'configuracoes',
+      acao:          'editar_config_global',
+      descricao:     `Alterou configurações globais do sistema (${updates.map(u => u.chave).join(', ')})`,
+      meta:          { updates },
+      escopo:        'admin_global',
+    });
+
     res.json({ success: true });
   } catch (err) {
     console.error('ERRO PUT config:', err);
@@ -164,6 +175,15 @@ router.put('/config-tela-bloqueio', onlyMaster, async (req, res) => {
     for (const u of updates) {
       await db.from('config_sistema').upsert(u, { onConflict: 'chave' });
     }
+
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'configuracoes',
+      acao:          'editar_tela_bloqueio',
+      descricao:     'Alterou os textos da tela de bloqueio',
+      escopo:        'admin_global',
+    });
 
     res.json({ success: true });
   } catch (err) {

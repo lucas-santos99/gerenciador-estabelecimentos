@@ -3,6 +3,15 @@ const router = express.Router();
 const db = require("../db/supabaseAdmin"); // Cliente SUPABASE ADMIN (service_role)
 const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage() });
+const authUser = require("../middlewares/authUser");
+const { registrar } = require("./auditoriaRoutes");
+
+// ⚠️ NOTA: as demais rotas deste arquivo (listar, criar, editar, excluir,
+// limite-operadores, upload-logo) ainda não exigem authUser porque o
+// frontend correspondente (NovoEstabelecimento/EditarEstabelecimento/
+// Excluidas) ainda não envia o Bearer token. Aplicado authUser apenas
+// em bloquear-acesso e liberar-acesso, que já são chamadas com token
+// pelo DashboardAdmin.jsx e DetalhesEstabelecimento.jsx.
 
 // =======================================================
 // 🔴 FUNÇÃO: BLOQUEAR VENCIDOS AUTOMATICAMENTE
@@ -87,16 +96,28 @@ router.get("/excluidas", async (req, res) => {
 // =======================================================
 // RESTAURAR ESTABELECIMENTO EXCLUÍDA
 // =======================================================
-router.put("/:id/restaurar", async (req, res) => {
+router.put("/:id/restaurar", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await db
+    const { data, error } = await db
       .from("mercearias")
       .update({ status_assinatura: "ativa" })
-      .eq("id", id);
+      .eq("id", id)
+      .select("nome_fantasia")
+      .single();
 
     if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "restaurar_estabelecimento",
+      descricao:     `Restaurou o estabelecimento "${data.nome_fantasia}"`,
+      escopo:        "admin_global",
+    });
 
     res.json({ success: true });
   } catch (e) {
@@ -108,22 +129,58 @@ router.put("/:id/restaurar", async (req, res) => {
 // =======================================================
 // BLOQUEAR ACESSO MANUALMENTE (SuperAdmin)
 // POST /api/admin/estabelecimentos/:id/bloquear-acesso
+// Motivo é OBRIGATÓRIO — vai para liberacoes_licenca e auditoria
 // =======================================================
-router.post("/:id/bloquear-acesso", async (req, res) => {
+router.post("/:id/bloquear-acesso", authUser, async (req, res) => {
   try {
+    if (req.user.role !== "super_admin") {
+      return res.status(403).json({ error: "Acesso negado." });
+    }
+
     const { id } = req.params;
-    const { motivo = "Bloqueio manual pelo administrador" } = req.body;
+    const motivo = (req.body.motivo || "").trim();
+
+    if (motivo.length < 3) {
+      return res.status(400).json({ error: "Informe o motivo do bloqueio (mínimo 3 caracteres)." });
+    }
 
     const { data, error } = await db
       .from("mercearias")
       .update({ status_assinatura: "bloqueada" })
       .eq("id", id)
-      .select("nome_fantasia")
+      .select("nome_fantasia, data_vencimento")
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
 
-    console.log(`🔴 Acesso bloqueado: ${data.nome_fantasia} — ${motivo}`);
+    const hoje = new Date().toISOString().split("T")[0];
+    const nomeUsuario = req.user.nome || req.user.email;
+
+    // Histórico de licença — aparece junto com as liberações
+    await db.from("liberacoes_licenca").insert({
+      mercearia_id:    id,
+      dias:             0,
+      data_inicio:      hoje,
+      data_vencimento:  data.data_vencimento || hoje,
+      forma_pagamento:  "bloqueio_manual",
+      motivo,
+      liberado_por:     nomeUsuario,
+      liberado_por_id:  req.user.id,
+    });
+
+    // Auditoria geral do painel admin
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "bloquear_acesso",
+      descricao:     `Bloqueou acesso de "${data.nome_fantasia}" — motivo: ${motivo}`,
+      meta:          { mercearia_id: id, motivo },
+      escopo:        "admin_global",
+    });
+
+    console.log(`🔴 Acesso bloqueado: ${data.nome_fantasia} — ${motivo} (por ${nomeUsuario})`);
     res.json({ success: true, nome_fantasia: data.nome_fantasia });
   } catch (err) {
     console.error("BLOQUEAR ACESSO error:", err);
@@ -135,16 +192,21 @@ router.post("/:id/bloquear-acesso", async (req, res) => {
 // LIBERAR ACESSO MANUALMENTE (SuperAdmin)
 // POST /api/admin/estabelecimentos/:id/liberar-acesso
 // =======================================================
-router.post("/:id/liberar-acesso", async (req, res) => {
+router.post("/:id/liberar-acesso", authUser, async (req, res) => {
   try {
+    if (req.user.role !== "super_admin") {
+      return res.status(403).json({ error: "Acesso negado." });
+    }
+
     const { id } = req.params;
     const {
       dias            = 30,
       motivo          = "",
       forma_pagamento = "manual",
-      liberado_por    = "SuperAdmin",
-      liberado_por_id = null,
     } = req.body;
+    // Usa sempre o usuário autenticado — não confia no que o frontend mandar
+    const liberado_por    = req.user.nome || req.user.email;
+    const liberado_por_id = req.user.id;
 
     const diasNum = parseInt(dias);
     if (isNaN(diasNum) || diasNum < 1 || diasNum > 3650) {
@@ -195,6 +257,17 @@ router.post("/:id/liberar-acesso", async (req, res) => {
 
     console.log(`✅ Acesso liberado: ${data.nome_fantasia} | ${diasNum}d | ${forma_pagamento} | ${liberado_por} | ${motivo || "sem motivo"}`);
 
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "liberar_acesso",
+      descricao:     `Liberou acesso de "${data.nome_fantasia}" por ${diasNum} dia(s) (${forma_pagamento})${motivo ? " — " + motivo : ""}`,
+      meta:          { mercearia_id: id, dias: diasNum, forma_pagamento, motivo },
+      escopo:        "admin_global",
+    });
+
     res.json({
       success:          true,
       data_vencimento:  dataVencimento,
@@ -234,7 +307,7 @@ router.get("/:id/liberacoes", async (req, res) => {
 // =======================================================
 
 /* PUT /api/admin/estabelecimentos/:id/limite-operadores */
-router.put("/:id/limite-operadores", async (req, res) => {
+router.put("/:id/limite-operadores", authUser, async (req, res) => {
   try {
     const { id } = req.params;
     const { limite } = req.body;
@@ -251,6 +324,17 @@ router.put("/:id/limite-operadores", async (req, res) => {
       .eq("id", id);
 
     if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "editar_limite_operadores",
+      descricao:     `Alterou o limite de operadores para ${limite_val}`,
+      meta:          { limite: limite_val },
+      escopo:        "admin_global",
+    });
 
     res.json({ success: true, limite: limite_val });
   } catch (err) {
@@ -314,7 +398,7 @@ router.get("/:id", async (req, res) => {
 // =======================================================
 // ATUALIZAR ESTABELECIMENTO
 // =======================================================
-router.put("/:id", async (req, res) => {
+router.put("/:id", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -360,6 +444,17 @@ router.put("/:id", async (req, res) => {
 
     if (error) return res.status(400).json({ error: error.message });
 
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "editar_estabelecimento",
+      descricao:     `Editou os dados de "${data.nome_fantasia}"`,
+      meta:          { campos: Object.keys(updateData) },
+      escopo:        "admin_global",
+    });
+
     res.json({ success: true, mercearia: data });
 
   } catch (e) {
@@ -371,7 +466,7 @@ router.put("/:id", async (req, res) => {
 // =======================================================
 // CRIAR ESTABELECIMENTO + USER (🔥 CORRIGIDO)
 // =======================================================
-router.post("/criar", async (req, res) => {
+router.post("/criar", authUser, async (req, res) => {
   try {
 
     const {
@@ -455,6 +550,16 @@ router.post("/criar", async (req, res) => {
       return res.status(400).json({ error: profErr.message });
     }
 
+    await registrar({
+      mercearia_id:  mercData.id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "criar_estabelecimento",
+      descricao:     `Criou o estabelecimento "${nome_fantasia}"`,
+      escopo:        "admin_global",
+    });
+
     res.json({
       success: true,
       estabelecimentoId: mercData.id
@@ -469,7 +574,7 @@ router.post("/criar", async (req, res) => {
 // =======================================================
 // UPLOAD DE LOGO
 // =======================================================
-router.post("/:id/upload-logo", upload.single("logo"), async (req, res) => {
+router.post("/:id/upload-logo", authUser, upload.single("logo"), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -493,6 +598,16 @@ router.post("/:id/upload-logo", upload.single("logo"), async (req, res) => {
 
     await db.from("mercearias").update({ logo_url: url }).eq("id", id);
 
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "atualizar_logo",
+      descricao:     "Atualizou a logo do estabelecimento",
+      escopo:        "admin_global",
+    });
+
     res.json({ success: true, logo_url: url });
 
   } catch (err) {
@@ -504,7 +619,7 @@ router.post("/:id/upload-logo", upload.single("logo"), async (req, res) => {
 // =======================================================
 // REMOVER LOGO
 // =======================================================
-router.delete("/:id/remover-logo", async (req, res) => {
+router.delete("/:id/remover-logo", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -524,6 +639,16 @@ router.delete("/:id/remover-logo", async (req, res) => {
 
     await db.from("mercearias").update({ logo_url: null }).eq("id", id);
 
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "remover_logo",
+      descricao:     "Removeu a logo do estabelecimento",
+      escopo:        "admin_global",
+    });
+
     res.json({ success: true });
 
   } catch (err) {
@@ -535,16 +660,28 @@ router.delete("/:id/remover-logo", async (req, res) => {
 // =======================================================
 // SOFT DELETE
 // =======================================================
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await db
+    const { data, error } = await db
       .from("mercearias")
       .update({ status_assinatura: "excluida" })
-      .eq("id", id);
+      .eq("id", id)
+      .select("nome_fantasia")
+      .single();
 
     if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "excluir_estabelecimento",
+      descricao:     `Excluiu (soft delete) o estabelecimento "${data.nome_fantasia}"`,
+      escopo:        "admin_global",
+    });
 
     res.json({ success: true });
 
@@ -557,7 +694,7 @@ router.delete("/:id", async (req, res) => {
 // =======================================================
 // EXCLUSÃO PERMANENTE
 // =======================================================
-router.delete("/:id/apagar-definitivo", async (req, res) => {
+router.delete("/:id/apagar-definitivo", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -592,6 +729,18 @@ router.delete("/:id/apagar-definitivo", async (req, res) => {
       .eq("id", id);
 
     if (delErr) return res.status(400).json({ error: "Erro ao apagar definitivamente" });
+
+    // mercearia_id: null porque a linha acabou de ser apagada (evita erro de FK)
+    await registrar({
+      mercearia_id:  null,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "apagar_definitivo_estabelecimento",
+      descricao:     `Apagou definitivamente o estabelecimento "${merc.nome_fantasia}"`,
+      meta:          { mercearia_id_excluida: id },
+      escopo:        "admin_global",
+    });
 
     res.json({ success: true });
 

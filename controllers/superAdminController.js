@@ -1,4 +1,5 @@
 const supabaseAdmin = require('../db/supabaseAdmin');
+const { registrar } = require('../routes/auditoriaRoutes');
 
 // 🔥 CRIAR SUPERADMIN
 const criarSuperAdmin = async (req, res) => {
@@ -27,6 +28,16 @@ const criarSuperAdmin = async (req, res) => {
       ]);
 
     if (upsertError) throw upsertError;
+
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'superadmins',
+      acao:          'criar_superadmin',
+      descricao:     `Criou o SuperAdmin "${nome}" (${email})`,
+      meta:          { novo_id: data.user.id, email },
+      escopo:        'admin_global',
+    });
 
     return res.json({ success: true });
 
@@ -80,6 +91,16 @@ const excluirSuperAdmin = async (req, res) => {
       .delete()
       .eq("id", id);
 
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'superadmins',
+      acao:          'excluir_superadmin',
+      descricao:     `Excluiu o SuperAdmin "${user.nome || user.email}"`,
+      meta:          { excluido_id: id },
+      escopo:        'admin_global',
+    });
+
     res.json({ success: true });
 
   } catch (err) {
@@ -113,6 +134,16 @@ async function toggleAtivo(req, res) {
       .eq("id", id);
 
     if (error) throw error;
+
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'superadmins',
+      acao:          !user.is_active ? 'ativar_superadmin' : 'desativar_superadmin',
+      descricao:     `${!user.is_active ? "Ativou" : "Desativou"} o SuperAdmin ID ${id}`,
+      meta:          { alvo_id: id },
+      escopo:        'admin_global',
+    });
 
     res.json({ success: true });
 
@@ -165,6 +196,16 @@ async function alterarSenha(req, res) {
 
     if (error) throw error;
 
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'superadmins',
+      acao:          'alterar_senha_superadmin',
+      descricao:     isOwnUser ? "Alterou a própria senha" : `Alterou a senha do SuperAdmin ID ${id}`,
+      meta:          { alvo_id: id },
+      escopo:        'admin_global',
+    });
+
     return res.json({ success: true });
 
   } catch (err) {
@@ -200,6 +241,16 @@ async function tornarMaster(req, res) {
     if (error) {
       return res.status(500).json({ error: 'Erro ao definir como master' });
     }
+
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'superadmins',
+      acao:          'tornar_master',
+      descricao:     `Tornou "${user.nome || user.email}" um usuário Master`,
+      meta:          { alvo_id: id },
+      escopo:        'admin_global',
+    });
 
     return res.json({ success: true });
 

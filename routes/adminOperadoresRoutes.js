@@ -3,8 +3,15 @@ const express = require("express");
 const router = express.Router();
 const db = require("../db/supabaseAdmin"); // cliente SUPABASE ADMIN
 const multer = require("multer");
+const authUser = require("../middlewares/authUser");
+const { registrar } = require("./auditoriaRoutes");
 
 const upload = multer({ storage: multer.memoryStorage() });
+
+// ⚠️ NOTA: upload-foto, remover-foto e reset-senha continuam sem authUser
+// porque o componente que os chama (provavelmente ResetSenhaModal.jsx e
+// algum uploader de foto) ainda não foi revisado. Aplicar authUser sem
+// corrigir o frontend correspondente quebraria essas ações.
 
 /* ============================================================
    LISTAR OPERADORES DE UM ESTABELECIMENTO
@@ -58,7 +65,7 @@ router.get("/detalhes/:id", async (req, res) => {
    CRIAR OPERADOR
    POST /admin/operadores/criar
 ============================================================ */
-router.post("/criar", async (req, res) => {
+router.post("/criar", authUser, async (req, res) => {
   try {
     const { nome, email, telefone, senha, mercearia_id } = req.body;
 
@@ -152,6 +159,17 @@ router.post("/criar", async (req, res) => {
       })
       .eq("id", userId);
 
+    await registrar({
+      mercearia_id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "operadores",
+      acao:          "criar_operador",
+      descricao:     `Criou o operador "${nome}" (${email})`,
+      meta:          { operador_id: userId },
+      escopo:        "admin_global",
+    });
+
     res.json({
       success: true,
       operador: data,
@@ -166,7 +184,7 @@ router.post("/criar", async (req, res) => {
    EDITAR OPERADOR
    PUT /admin/operadores/:id
 ============================================================ */
-router.put("/:id", async (req, res) => {
+router.put("/:id", authUser, async (req, res) => {
   try {
     const { id } = req.params;
     const { nome, telefone, email, status } = req.body;
@@ -193,6 +211,17 @@ router.put("/:id", async (req, res) => {
       .update({ nome, email })
       .eq("id", id);
 
+    await registrar({
+      mercearia_id:  data.mercearia_id,
+      operador_id:   id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "operadores",
+      acao:          "editar_operador",
+      descricao:     `Editou os dados do operador "${data.nome}"`,
+      escopo:        "admin_global",
+    });
+
     res.json({
       success: true,
       operador: data,
@@ -206,16 +235,29 @@ router.put("/:id", async (req, res) => {
 /* ============================================================
    SOFT DELETE
 ============================================================ */
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await db
+    const { data, error } = await db
       .from("operadores")
       .update({ status: "excluido" })
-      .eq("id", id);
+      .eq("id", id)
+      .select("mercearia_id, nome")
+      .single();
 
     if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  data.mercearia_id,
+      operador_id:   id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "operadores",
+      acao:          "excluir_operador",
+      descricao:     `Excluiu o operador "${data.nome}"`,
+      escopo:        "admin_global",
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -227,16 +269,29 @@ router.delete("/:id", async (req, res) => {
 /* ============================================================
    RESTAURAR OPERADOR
 ============================================================ */
-router.put("/:id/restaurar", async (req, res) => {
+router.put("/:id/restaurar", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { error } = await db
+    const { data, error } = await db
       .from("operadores")
       .update({ status: "ativo" })
-      .eq("id", id);
+      .eq("id", id)
+      .select("mercearia_id, nome")
+      .single();
 
     if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  data.mercearia_id,
+      operador_id:   id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "operadores",
+      acao:          "restaurar_operador",
+      descricao:     `Restaurou o operador "${data.nome}"`,
+      escopo:        "admin_global",
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -319,7 +374,7 @@ router.delete("/:id/remover-foto", async (req, res) => {
 /* ============================================================
    RESETAR SENHA
 ============================================================ */
-router.post("/:id/reset-senha", async (req, res) => {
+router.post("/:id/reset-senha", authUser, async (req, res) => {
   try {
     const { id } = req.params;
     const { senha } = req.body;
@@ -336,6 +391,24 @@ router.post("/:id/reset-senha", async (req, res) => {
 
     if (error) return res.status(400).json({ error: error.message });
 
+    // Busca mercearia_id/nome só pra anexar na auditoria
+    const { data: op } = await db
+      .from("operadores")
+      .select("mercearia_id, nome")
+      .eq("id", id)
+      .single();
+
+    await registrar({
+      mercearia_id:  op?.mercearia_id || null,
+      operador_id:   id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "operadores",
+      acao:          "resetar_senha_operador",
+      descricao:     `Resetou a senha do operador "${op?.nome || id}"`,
+      escopo:        "admin_global",
+    });
+
     res.json({ success: true });
   } catch (err) {
     console.error("Erro reset senha:", err);
@@ -346,7 +419,7 @@ router.post("/:id/reset-senha", async (req, res) => {
 /* ============================================================
    ATUALIZAR STATUS
 ============================================================ */
-router.put("/:id/status", async (req, res) => {
+router.put("/:id/status", authUser, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -363,6 +436,17 @@ router.put("/:id/status", async (req, res) => {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  data.mercearia_id,
+      operador_id:   id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "operadores",
+      acao:          status === "ativo" ? "ativar_operador" : "inativar_operador",
+      descricao:     `${status === "ativo" ? "Ativou" : "Inativou"} o operador "${data.nome}"`,
+      escopo:        "admin_global",
+    });
 
     res.json({
       success: true,
@@ -400,7 +484,7 @@ router.get("/:id/permissoes", async (req, res) => {
    SALVAR PERMISSÕES DE UM OPERADOR (substitui tudo)
    PUT /admin/operadores/:id/permissoes
 ============================================================ */
-router.put("/:id/permissoes", async (req, res) => {
+router.put("/:id/permissoes", authUser, async (req, res) => {
   try {
     const { id } = req.params;
     const { permissoes } = req.body; // array de strings ex: ['pdv','estoque']
@@ -430,6 +514,25 @@ router.put("/:id/permissoes", async (req, res) => {
 
       if (insErr) return res.status(400).json({ error: insErr.message });
     }
+
+    // Busca mercearia_id do operador só pra anexar na auditoria
+    const { data: op } = await db
+      .from("operadores")
+      .select("mercearia_id, nome")
+      .eq("id", id)
+      .single();
+
+    await registrar({
+      mercearia_id:  op?.mercearia_id || null,
+      operador_id:   id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "operadores",
+      acao:          "editar_permissoes_operador",
+      descricao:     `Alterou as permissões de "${op?.nome || id}" (${permissoes.length} permissão(ões))`,
+      meta:          { permissoes },
+      escopo:        "admin_global",
+    });
 
     res.json({ success: true });
   } catch (err) {
