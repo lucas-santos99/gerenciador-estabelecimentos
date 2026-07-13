@@ -203,8 +203,12 @@ async function consultarOpenFoodFacts(codigo) {
   }
 }
 
-// Salva/atualiza o catálogo global — usado tanto pelo fallback do Open Food
-// Facts quanto pelo cadastro manual de produtos (contribuição colaborativa).
+// Salva no catálogo global — usado tanto pelo fallback do Open Food Facts
+// quanto pelo cadastro manual de produtos (contribuição colaborativa).
+// IMPORTANTE: nunca sobrescreve um código de barras que já existe no
+// catálogo. O primeiro cadastro "vence"; contribuições seguintes pro
+// mesmo código são ignoradas — evita que um erro de digitação de um
+// estabelecimento estrague um dado bom que já estava lá pra todo mundo.
 async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colaborativo') {
   if (!codigo_barras || !nome) return;
   try {
@@ -214,7 +218,7 @@ async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colab
       marca: marca || null,
       fonte,
       atualizado_em: new Date().toISOString(),
-    }, { onConflict: 'codigo_barras' });
+    }, { onConflict: 'codigo_barras', ignoreDuplicates: true });
   } catch (err) {
     console.error('[CATALOGO] Erro salvar no catálogo global:', err.message);
   }
