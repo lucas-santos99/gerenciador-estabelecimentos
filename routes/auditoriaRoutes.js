@@ -192,10 +192,19 @@ router.get('/admin/geral', async (req, res) => {
   }
 
   const {
-    escopo, modulo, acao, mercearia_id,
+    escopo, modulo, acao, mercearia_id, usuario,
     data_inicio, data_fim,
+    sort_by = 'criado_em', sort_order = 'desc',
     limit = 50, offset = 0,
   } = req.query;
+
+  // Whitelist pra evitar sort_by arbitrário vindo da query string
+  const colunasOrdenaveis = ['criado_em', 'usuario_nome', 'modulo', 'acao', 'escopo'];
+  const coluna = colunasOrdenaveis.includes(sort_by) ? sort_by : 'criado_em';
+  const ascending = sort_order === 'asc';
+
+  // Cap de segurança — usado pela exportação (CSV/PDF), que pede lotes maiores
+  const limitNum = Math.min(parseInt(limit) || 50, 1000);
 
   try {
     let query = db
@@ -204,13 +213,14 @@ router.get('/admin/geral', async (req, res) => {
         id, mercearia_id, modulo, acao, descricao, meta, criado_em,
         usuario_nome, operador_id, escopo
       `, { count: 'exact' })
-      .order('criado_em', { ascending: false })
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+      .order(coluna, { ascending })
+      .range(parseInt(offset), parseInt(offset) + limitNum - 1);
 
     if (escopo)       query = query.eq('escopo', escopo);
     if (modulo)       query = query.eq('modulo', modulo);
     if (acao)         query = query.eq('acao', acao);
     if (mercearia_id) query = query.eq('mercearia_id', mercearia_id);
+    if (usuario)      query = query.ilike('usuario_nome', `%${usuario}%`);
     if (data_inicio)  query = query.gte('criado_em', data_inicio);
     if (data_fim)     query = query.lte('criado_em', data_fim + 'T23:59:59');
 
