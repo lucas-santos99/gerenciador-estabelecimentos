@@ -44,10 +44,11 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
                 .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca, codigo_barras, categoria_id')
                 .eq('mercearia_id', estabelecimentoId)
                 .eq('plu_balanca', termo.trim())
-                .neq('status', 'excluido')
                 .limit(10);
 
-            if (!errPlu && porPlu && porPlu.length > 0) {
+            if (errPlu) {
+                console.error(`[ERRO] fallback PLU busca-global:`, errPlu.message);
+            } else if (porPlu && porPlu.length > 0) {
                 return res.status(200).json(porPlu);
             }
         }
