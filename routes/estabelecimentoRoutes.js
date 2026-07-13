@@ -38,18 +38,27 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
         // Fallback: se não achou por nome/código de barras, tenta por PLU
         // da balança — permite digitar o PLU manualmente no PDV quando a
         // balança está fora do ar, puxando o produto igual ao código de barras.
-        if ((!data || data.length === 0)) {
-            const { data: porPlu, error: errPlu } = await db
+        // PLU costuma ter zeros à esquerda (ex: "0018"), então comparamos
+        // o valor numérico, não a string exata — "18", "018" e "0018" batem
+        // com o mesmo produto.
+        if ((!data || data.length === 0) && /^\d+$/.test(termo.trim())) {
+            const termoNum = parseInt(termo.trim(), 10);
+
+            const { data: candidatos, error: errPlu } = await db
                 .from('produtos')
                 .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca, codigo_barras, categoria_id')
                 .eq('mercearia_id', estabelecimentoId)
-                .eq('plu_balanca', termo.trim())
-                .limit(10);
+                .not('plu_balanca', 'is', null)
+                .limit(500);
 
             if (errPlu) {
                 console.error(`[ERRO] fallback PLU busca-global:`, errPlu.message);
-            } else if (porPlu && porPlu.length > 0) {
-                return res.status(200).json(porPlu);
+            } else {
+                const porPlu = (candidatos || []).filter(p => {
+                    const pluNum = parseInt(String(p.plu_balanca).trim(), 10);
+                    return !isNaN(pluNum) && pluNum === termoNum;
+                });
+                if (porPlu.length > 0) return res.status(200).json(porPlu);
             }
         }
 
@@ -395,10 +404,27 @@ router.get('/:id/produtos/buscar', async (req, res) => {
             .from('produtos')
             .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca')
             .eq('mercearia_id', estabelecimentoId)
-            .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%,plu_balanca.eq.${termo}`)
+            .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
             .limit(10);
 
         if (error) throw error;
+
+        // Fallback por PLU, ignorando zeros à esquerda (ex: "18" == "0018")
+        if ((!data || data.length === 0) && /^\d+$/.test(termo.trim())) {
+            const termoNum = parseInt(termo.trim(), 10);
+            const { data: candidatos } = await db
+                .from('produtos')
+                .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca')
+                .eq('mercearia_id', estabelecimentoId)
+                .not('plu_balanca', 'is', null)
+                .limit(500);
+
+            const porPlu = (candidatos || []).filter(p => {
+                const pluNum = parseInt(String(p.plu_balanca).trim(), 10);
+                return !isNaN(pluNum) && pluNum === termoNum;
+            });
+            if (porPlu.length > 0) return res.status(200).json(porPlu);
+        }
 
         res.status(200).json(data);
 
