@@ -35,6 +35,23 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
 
         if (error) throw error;
 
+        // Fallback: se não achou por nome/código de barras, tenta por PLU
+        // da balança — permite digitar o PLU manualmente no PDV quando a
+        // balança está fora do ar, puxando o produto igual ao código de barras.
+        if ((!data || data.length === 0)) {
+            const { data: porPlu, error: errPlu } = await db
+                .from('produtos')
+                .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca, codigo_barras, categoria_id')
+                .eq('mercearia_id', estabelecimentoId)
+                .eq('plu_balanca', termo.trim())
+                .neq('status', 'excluido')
+                .limit(10);
+
+            if (!errPlu && porPlu && porPlu.length > 0) {
+                return res.status(200).json(porPlu);
+            }
+        }
+
         res.status(200).json(data);
 
     } catch (error) {
@@ -377,7 +394,7 @@ router.get('/:id/produtos/buscar', async (req, res) => {
             .from('produtos')
             .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca')
             .eq('mercearia_id', estabelecimentoId)
-            .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
+            .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%,plu_balanca.eq.${termo}`)
             .limit(10);
 
         if (error) throw error;
