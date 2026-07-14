@@ -127,6 +127,30 @@ router.get('/status/:userId', async (req, res) => {
 
 
 // --- Rota GET /:id/produtos ---
+// --- Rota GET: /:id/produtos/marcas — marcas já cadastradas nesse
+// estabelecimento (pra sugerir no cadastro e evitar duplicar a mesma
+// marca escrita de formas diferentes) ---
+router.get('/:id/produtos/marcas', async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    try {
+        const { data, error } = await db
+            .from('produtos')
+            .select('marca')
+            .eq('mercearia_id', estabelecimentoId)
+            .not('marca', 'is', null);
+
+        if (error) throw error;
+
+        const marcas = [...new Set((data || []).map(p => (p.marca || '').trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+        res.status(200).json(marcas);
+    } catch (error) {
+        console.error(`[ERRO] GET /:id/produtos/marcas:`, error.message);
+        res.status(500).json({ error: 'Erro ao buscar marcas.' });
+    }
+});
+
 router.get('/:id/produtos', async (req, res) => {
 
     const estabelecimentoId = req.params.id;
