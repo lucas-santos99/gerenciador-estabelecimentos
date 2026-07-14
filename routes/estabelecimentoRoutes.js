@@ -600,11 +600,29 @@ router.put('/dados/:id', async (req, res) => {
       return res.status(403).json({ error: 'Usuário sem estabelecimento vinculado' });
     }
 
-    const { nome_fantasia, telefone, endereco_completo, logo_url } = req.body;
+    const {
+      nome_fantasia, telefone, endereco_completo, logo_url,
+      pix_chave, pix_tipo_chave, pix_cidade, pix_modo,
+    } = req.body;
+
+    const updateData = { nome_fantasia, telefone, endereco_completo, logo_url };
+
+    // Campos de Pix só entram no update se vierem no corpo da requisição —
+    // assim essa mesma rota continua funcionando pro upload de logo sem
+    // precisar reenviar a config de Pix inteira toda vez.
+    if (pix_chave       !== undefined) updateData.pix_chave      = pix_chave || null;
+    if (pix_tipo_chave  !== undefined) updateData.pix_tipo_chave = pix_tipo_chave || null;
+    if (pix_cidade      !== undefined) updateData.pix_cidade     = pix_cidade || null;
+    if (pix_modo        !== undefined) {
+      if (!['maquininha', 'sistema'].includes(pix_modo)) {
+        return res.status(400).json({ error: 'pix_modo inválido.' });
+      }
+      updateData.pix_modo = pix_modo;
+    }
 
     const { data, error } = await db
       .from('mercearias')
-      .update({ nome_fantasia, telefone, endereco_completo, logo_url })
+      .update(updateData)
       .eq('id', mercearia_id)
       .select()
       .single();
@@ -634,6 +652,66 @@ router.put('/dados/:id', async (req, res) => {
   } catch (err) {
     console.error('[ERRO] PUT /api/estabelecimentos/dados/:id', err);
     res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// POST /api/estabelecimentos/:id/pix/gerar
+// Gera Pix Copia-e-Cola + QR Code usando a CHAVE PIX DO PRÓPRIO
+// ESTABELECIMENTO (padrão BR Code do Banco Central — não é Asaas,
+// não passa pelo sistema, o dinheiro cai direto na conta do dono).
+// Usado no PDV (venda) e no recebimento de fiado.
+// ═══════════════════════════════════════════════════════════
+router.post('/:id/pix/gerar', async (req, res) => {
+  try {
+    const { id: mercearia_id } = req.params;
+
+    // Isolamento de tenant: só pode gerar Pix pro próprio estabelecimento
+    if (req.user.mercearia_id !== mercearia_id) {
+      return res.status(403).json({ error: 'Acesso negado.' });
+    }
+
+    const { valor, descricao } = req.body;
+
+    const valorNum = parseFloat(valor);
+    if (isNaN(valorNum) || valorNum <= 0) {
+      return res.status(400).json({ error: 'Valor inválido.' });
+    }
+
+    const { data: merc, error } = await db
+      .from('mercearias')
+      .select('nome_fantasia, pix_chave, pix_cidade')
+      .eq('id', mercearia_id)
+      .single();
+
+    if (error || !merc) return res.status(404).json({ error: 'Estabelecimento não encontrado.' });
+
+    if (!merc.pix_chave || !merc.pix_cidade) {
+      return res.status(400).json({
+        error: 'Chave Pix não configurada. Cadastre em Configurações → Pagamentos antes de usar o Pix pelo sistema.',
+      });
+    }
+
+    const { QrCodePix } = require('qrcode-pix');
+
+    const qrCodePix = QrCodePix({
+      version:       '01',
+      key:           merc.pix_chave,
+      name:          (merc.nome_fantasia || 'Estabelecimento').slice(0, 25),
+      city:          merc.pix_cidade.slice(0, 15),
+      transactionId: `V${Date.now().toString().slice(-15)}`, // até 25 caracteres
+      message:       (descricao || 'Venda').slice(0, 40),
+      value:         valorNum,
+    });
+
+    const payload = qrCodePix.payload();
+    const qrcode_base64 = await qrCodePix.base64();
+
+    res.json({ payload, qrcode_base64 });
+
+  } catch (err) {
+    console.error('[PIX] Erro ao gerar cobrança:', err.message);
+    res.status(500).json({ error: 'Erro ao gerar o Pix.' });
   }
 });
 
