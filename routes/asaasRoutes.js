@@ -96,7 +96,9 @@ async function obterOuCriarClienteAsaas(mercearia) {
 
 // ═══════════════════════════════════════════════════════════
 // POST /api/asaas/gerar-cobranca/:mercearia_id
-// Gera cobrança Pix + Cartão para renovação de licença
+// Gera cobrança de CARTÃO para renovação de licença.
+// ⚠️ O Pix saiu daqui — agora é gerado pelo Efí (efiRoutes.js),
+// que tem taxa bem menor. O frontend chama os dois em paralelo.
 // ═══════════════════════════════════════════════════════════
 router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
   try {
@@ -131,26 +133,7 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
     const descricao = `Licença ${plano === "anual" ? "Anual" : "Mensal"} — Gerenciador de Estabelecimentos`;
     const externalRef = `${mercearia_id}|${diasPlano}`;
 
-    // 5a. Criar cobrança Pix
-    const respPagPix = await fetch(`${ASAAS_API_URL}/payments`, {
-      method:  "POST",
-      headers: asaasHeaders(),
-      body:    JSON.stringify({
-        customer:          customerId,
-        billingType:       "PIX",
-        value:             valor,
-        dueDate:           dueDate,
-        description:       descricao,
-        externalReference: externalRef,
-      }),
-    });
-    const cobrancaPix = await respPagPix.json();
-    if (!respPagPix.ok) {
-      console.error("Erro Asaas criar cobrança Pix:", cobrancaPix);
-      return res.status(400).json({ error: cobrancaPix.errors?.[0]?.description || "Erro ao gerar cobrança Pix." });
-    }
-
-    // 5b. Criar cobrança Cartão de Crédito
+    // 5. Criar cobrança Cartão de Crédito
     const respPagCartao = await fetch(`${ASAAS_API_URL}/payments`, {
       method:  "POST",
       headers: asaasHeaders(),
@@ -166,35 +149,24 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
     const cobrancaCartao = await respPagCartao.json();
     if (!respPagCartao.ok) {
       console.error("Erro Asaas criar cobrança Cartão:", cobrancaCartao);
-      // Não bloqueia — Pix já foi criado, cartão é opcional
+      return res.status(400).json({ error: cobrancaCartao.errors?.[0]?.description || "Erro ao gerar cobrança de cartão." });
     }
 
-    // 6. Salvar cobrança Pix como principal (webhook virá dela)
+    // 6. Salva o ID da cobrança de cartão (informativo — a confirmação
+    // continua chegando pelo webhook, via externalReference)
     await db.from("mercearias").update({
-      asaas_payment_id:     cobrancaPix.id,
+      asaas_payment_id:     cobrancaCartao.id,
       asaas_payment_status: "PENDING",
     }).eq("id", mercearia_id);
 
-    // 7. Buscar QR Code Pix
-    let pixData = null;
-    try {
-      const respPix = await fetch(`${ASAAS_API_URL}/payments/${cobrancaPix.id}/pixQrCode`, {
-        headers: asaasHeaders(),
-      });
-      if (respPix.ok) pixData = await respPix.json();
-    } catch {}
-
     res.json({
       success:            true,
-      payment_id:         cobrancaPix.id,         // usado no polling de status
-      payment_id_cartao:  cobrancaCartao?.id || null,
+      payment_id_cartao:  cobrancaCartao.id,
       valor,
       plano,
       dias:               diasPlano,
       due_date:           dueDate,
-      invoice_url_cartao: cobrancaCartao?.invoiceUrl || null, // link só cartão de crédito
-      pix_qr_code:        pixData?.encodedImage,
-      pix_copy_paste:     pixData?.payload,
+      invoice_url_cartao: cobrancaCartao.invoiceUrl || null,
     });
 
   } catch (err) {
