@@ -207,7 +207,10 @@ router.get("/status-pagamento/:txid", async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// POST /api/efi/webhook?token=...
+// POST /api/efi/webhook/:token/pix
+// (o Efí sempre adiciona "/pix" no final da URL registrada — por isso o
+// token vai no caminho e não na query string, senão o "/pix" quebraria
+// o valor do token)
 // Recebe a notificação do Efí quando um Pix é pago — libera acesso
 // automaticamente, igual o webhook do Asaas já faz hoje.
 //
@@ -217,15 +220,10 @@ router.get("/status-pagamento/:txid", async (req, res) => {
 // Efí) — suficiente pra esse estágio, mas não é validação criptográfica
 // de verdade. Dá pra reforçar depois com validação mTLS se quiser.
 // ═══════════════════════════════════════════════════════════
-router.post("/webhook", async (req, res) => {
+router.post("/webhook/:token/pix", async (req, res) => {
   try {
-    if (req.query.token !== EFI_WEBHOOK_TOKEN) {
-      // Log temporário de diagnóstico — não expõe o token completo, só
-      // o suficiente pra confirmar se ele chegou vazio, cortado, ou
-      // diferente. Remover depois de resolver.
-      console.warn("⚠️ Webhook Efí com token inválido. originalUrl:", req.originalUrl,
-        "| query recebida:", JSON.stringify(req.query),
-        "| token esperado (4 primeiros chars):", (EFI_WEBHOOK_TOKEN || "").slice(0, 4));
+    if (req.params.token !== EFI_WEBHOOK_TOKEN) {
+      console.warn("⚠️ Webhook Efí com token inválido. originalUrl:", req.originalUrl);
       return res.status(401).json({ error: "Token inválido." });
     }
 
@@ -281,7 +279,7 @@ router.post("/webhook", async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.post("/configurar-webhook", async (req, res) => {
   try {
-    const { url } = req.body; // ex: https://seu-backend.up.railway.app/api/efi/webhook?token=SEU_TOKEN
+    const { url } = req.body; // ex: https://seu-backend.up.railway.app/api/efi/webhook/SEU_TOKEN — NÃO inclua "/pix" no final, o Efí adiciona sozinho
     if (!url) return res.status(400).json({ error: "Informe a URL do webhook." });
 
     // x-skip-mtls-checking: pulamos a exigência de mTLS do nosso lado —
