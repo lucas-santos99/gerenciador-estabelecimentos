@@ -220,6 +220,15 @@ router.get("/status-pagamento/:txid", async (req, res) => {
 // Efí) — suficiente pra esse estágio, mas não é validação criptográfica
 // de verdade. Dá pra reforçar depois com validação mTLS se quiser.
 // ═══════════════════════════════════════════════════════════
+// O Efí testa se a URL responde ANTES de aceitar o cadastro do webhook —
+// esse teste bate na URL exata que foi registrada (sem o "/pix" que ele
+// mesmo adiciona depois pras notificações de verdade). Essa rota só
+// existe pra passar nesse teste de verificação inicial.
+router.all("/webhook/:token", (req, res) => {
+  if (req.params.token !== EFI_WEBHOOK_TOKEN) return res.status(401).json({ error: "Token inválido." });
+  res.status(200).json({ ok: true });
+});
+
 router.post("/webhook/:token/pix", async (req, res) => {
   try {
     if (req.params.token !== EFI_WEBHOOK_TOKEN) {
