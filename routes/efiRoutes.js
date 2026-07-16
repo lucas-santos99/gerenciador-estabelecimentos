@@ -84,12 +84,12 @@ async function obterTokenPix() {
 }
 
 // Helper genérico pra chamar a API Pix já autenticada
-async function efiPixRequest(method, path, data) {
+async function efiPixRequest(method, path, data, extraHeaders = {}) {
   const token = await obterTokenPix();
   return axios({
     method,
     url:     `${EFI_PIX_BASE}${path}`,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...extraHeaders },
     httpsAgent: agenteComCertificado(),
     data:    data ? JSON.stringify(data) : undefined,
   });
@@ -261,7 +261,11 @@ router.post("/configurar-webhook", async (req, res) => {
     const { url } = req.body; // ex: https://seu-backend.up.railway.app/api/efi/webhook?token=SEU_TOKEN
     if (!url) return res.status(400).json({ error: "Informe a URL do webhook." });
 
-    await efiPixRequest("PUT", `/v2/webhook/${EFI_CHAVE_PIX}`, { webhookUrl: url });
+    // x-skip-mtls-checking: pulamos a exigência de mTLS do nosso lado —
+    // configurar um servidor que aceita handshake mTLS de entrada é uma
+    // complexidade adicional grande, e o token na URL já dá uma proteção
+    // razoável nesse estágio.
+    await efiPixRequest("PUT", `/v2/webhook/${EFI_CHAVE_PIX}`, { webhookUrl: url }, { "x-skip-mtls-checking": "true" });
     res.json({ success: true, mensagem: "Webhook configurado no Efí." });
 
   } catch (err) {
