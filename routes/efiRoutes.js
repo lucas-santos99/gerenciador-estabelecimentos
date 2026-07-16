@@ -26,8 +26,14 @@ const EFI_PIX_BASE = EFI_SANDBOX
   ? "https://pix-h.api.efipay.com.br"
   : "https://pix.api.efipay.com.br";
 
-if (!EFI_CLIENT_ID || !EFI_CLIENT_SECRET || !EFI_CERT_BASE64 || !EFI_CHAVE_PIX) {
-  console.warn("⚠️ [EFI] Variáveis de ambiente do Efí incompletas — rotas de Pix Efí vão falhar até configurar EFI_CLIENT_ID, EFI_CLIENT_SECRET, EFI_CERTIFICADO_BASE64 e EFI_CHAVE_PIX.");
+const faltando = [];
+if (!EFI_CLIENT_ID)     faltando.push("EFI_CLIENT_ID");
+if (!EFI_CLIENT_SECRET) faltando.push("EFI_CLIENT_SECRET");
+if (!EFI_CERT_BASE64)   faltando.push("EFI_CERTIFICADO_BASE64");
+if (!EFI_CHAVE_PIX)     faltando.push("EFI_CHAVE_PIX");
+
+if (faltando.length > 0) {
+  console.warn(`⚠️ [EFI] Faltando configurar: ${faltando.join(", ")} — rotas de Pix Efí vão falhar até isso ser corrigido.`);
 } else {
   // Checagem de sanidade no boot — confirma nos logs do Railway que o
   // certificado colado tem o tamanho esperado (não foi cortado ao colar).
