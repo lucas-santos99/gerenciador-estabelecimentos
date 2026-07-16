@@ -71,7 +71,13 @@ async function obterTokenPix() {
     url:     `${EFI_PIX_BASE}/oauth/token`,
     headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
     httpsAgent: agenteComCertificado(),
-    data:    JSON.stringify({ grant_type: "client_credentials" }),
+    // Precisa pedir os escopos explicitamente aqui — mesmo com tudo
+    // habilitado no painel da aplicação, sem isso o Efí libera um token
+    // "mínimo" que não inclui permissão de escrita (ex: criar cobrança).
+    data:    JSON.stringify({
+      grant_type: "client_credentials",
+      scope:      "cob.write cob.read pix.read webhook.read webhook.write",
+    }),
   });
 
   tokenCache = {
