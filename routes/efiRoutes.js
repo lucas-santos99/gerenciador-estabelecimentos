@@ -220,7 +220,12 @@ router.get("/status-pagamento/:txid", async (req, res) => {
 router.post("/webhook", async (req, res) => {
   try {
     if (req.query.token !== EFI_WEBHOOK_TOKEN) {
-      console.warn("⚠️ Webhook Efí com token inválido.");
+      // Log temporário de diagnóstico — não expõe o token completo, só
+      // o suficiente pra confirmar se ele chegou vazio, cortado, ou
+      // diferente. Remover depois de resolver.
+      console.warn("⚠️ Webhook Efí com token inválido. originalUrl:", req.originalUrl,
+        "| query recebida:", JSON.stringify(req.query),
+        "| token esperado (4 primeiros chars):", (EFI_WEBHOOK_TOKEN || "").slice(0, 4));
       return res.status(401).json({ error: "Token inválido." });
     }
 
