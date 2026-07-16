@@ -22,6 +22,9 @@ const inventarioRoutes  = require("./routes/inventarioRoutes");
 // --- IMPORTAÇÃO DAS ROTAS DO ASAAS ---
 const asaasRoutes = require("./routes/asaasRoutes");
 
+// --- IMPORTAÇÃO DAS ROTAS DO EFÍ (Pix da mensalidade) ---
+const efiRoutes = require("./routes/efiRoutes");
+
 // --- IMPORTAÇÃO DAS ROTAS DO ADMIN ---
 const adminEstabelecimentosRoutes = require("./routes/adminEstabelecimentosRoutes");
 const adminOperadoresRoutes = require("./routes/adminOperadoresRoutes");
@@ -56,6 +59,9 @@ app.use(
 // --- ROTAS DO ASAAS (cobrança de licença) ---
 // Webhook deve ser registrado ANTES do express.json para receber raw body se necessário
 app.use("/api/asaas", asaasRoutes);
+
+// --- ROTAS DO EFÍ (Pix da mensalidade — cartão continua no Asaas acima) ---
+app.use("/api/efi", efiRoutes);
 
 // --- ROTAS DO ADMIN (super_admin) ---
 app.use("/admin/estabelecimentos", adminEstabelecimentosRoutes);
