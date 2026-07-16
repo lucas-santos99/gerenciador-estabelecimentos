@@ -76,7 +76,7 @@ async function obterTokenPix() {
     // "mínimo" que não inclui permissão de escrita (ex: criar cobrança).
     data:    JSON.stringify({
       grant_type: "client_credentials",
-      scope:      "cob.write cob.read pix.read webhook.read webhook.write",
+      scope:      "cob.write cob.read pix.read webhook.read webhook.write payloadlocation.write payloadlocation.read",
     }),
   });
 
@@ -134,12 +134,18 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
     // txid precisa ser alfanumérico, 26 a 35 caracteres
     const txid = crypto.randomBytes(16).toString("hex"); // 32 caracteres
 
-    const cobResp = await efiPixRequest("PUT", `/v2/cob/${txid}`, {
-      calendario:          { expiracao: 3 * 24 * 60 * 60 }, // 3 dias pra pagar, igual o Asaas
-      valor:                { original: valor.toFixed(2) },
-      chave:                EFI_CHAVE_PIX,
-      solicitacaoPagador:   `Licença ${plano === "anual" ? "Anual" : "Mensal"} — ${mercearia.nome_fantasia}`,
-    });
+    let cobResp;
+    try {
+      cobResp = await efiPixRequest("PUT", `/v2/cob/${txid}`, {
+        calendario:          { expiracao: 3 * 24 * 60 * 60 }, // 3 dias pra pagar, igual o Asaas
+        valor:                { original: valor.toFixed(2) },
+        chave:                EFI_CHAVE_PIX,
+        solicitacaoPagador:   `Licença ${plano === "anual" ? "Anual" : "Mensal"} — ${mercearia.nome_fantasia}`,
+      });
+    } catch (e) {
+      console.error("[EFI] Falha ao CRIAR a cobrança (PUT /v2/cob):", e.response?.data || e.message);
+      throw e;
+    }
 
     const locId = cobResp.data.loc?.id;
     let pixCopiaECola = cobResp.data.pixCopiaECola || null;
@@ -147,9 +153,15 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
 
     // Busca o QR Code (imagem) e a garantia do copia-e-cola via /loc
     if (locId) {
-      const qrResp = await efiPixRequest("GET", `/v2/loc/${locId}/qrcode`);
-      qrcodeBase64   = qrResp.data.imagemQrcode || null;
-      pixCopiaECola  = pixCopiaECola || qrResp.data.qrcode || null;
+      try {
+        const qrResp = await efiPixRequest("GET", `/v2/loc/${locId}/qrcode`);
+        qrcodeBase64   = qrResp.data.imagemQrcode || null;
+        pixCopiaECola  = pixCopiaECola || qrResp.data.qrcode || null;
+      } catch (e) {
+        console.error("[EFI] Falha ao BUSCAR o QR Code (GET /v2/loc/:id/qrcode):", e.response?.data || e.message);
+        // Não derruba a resposta inteira — se já temos o pixCopiaECola do
+        // /cob, o front ainda pode gerar o QR a partir dele se precisar.
+      }
     }
 
     // Salva a cobrança pendente pra o webhook conseguir achar depois
