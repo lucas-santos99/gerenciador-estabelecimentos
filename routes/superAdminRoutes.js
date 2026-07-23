@@ -191,4 +191,74 @@ router.put('/config-tela-bloqueio', onlyMaster, async (req, res) => {
   }
 });
 
+// ============================================================
+// CONTATOS DE SUPORTE (WhatsApp / E-mail) — múltiplos, configuráveis
+// ============================================================
+
+// Leitura liberada pra qualquer usuário autenticado (merchant/operador
+// também precisam ver isso — botão "Fale Conosco" e tela de bloqueio)
+router.get('/contatos-suporte', async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { data, error } = await db
+      .from('contatos_suporte')
+      .select('id, tipo, valor, label, ordem')
+      .order('tipo')
+      .order('ordem');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error('ERRO GET contatos-suporte:', err);
+    res.status(500).json({ error: 'Erro ao buscar contatos de suporte' });
+  }
+});
+
+router.post('/contatos-suporte', onlyMaster, async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { tipo, valor, label } = req.body;
+
+    if (!['whatsapp', 'email'].includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo inválido (use whatsapp ou email).' });
+    }
+    if (!valor || !valor.trim()) {
+      return res.status(400).json({ error: 'Informe o valor do contato.' });
+    }
+
+    const valorLimpo = tipo === 'whatsapp' ? valor.replace(/\D/g, '') : valor.trim();
+
+    const { data: existentes } = await db
+      .from('contatos_suporte')
+      .select('ordem')
+      .eq('tipo', tipo)
+      .order('ordem', { ascending: false })
+      .limit(1);
+    const proximaOrdem = (existentes?.[0]?.ordem ?? -1) + 1;
+
+    const { data, error } = await db
+      .from('contatos_suporte')
+      .insert({ tipo, valor: valorLimpo, label: label?.trim() || null, ordem: proximaOrdem })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('ERRO POST contatos-suporte:', err);
+    res.status(500).json({ error: 'Erro ao criar contato de suporte' });
+  }
+});
+
+router.delete('/contatos-suporte/:id', onlyMaster, async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { error } = await db.from('contatos_suporte').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error('ERRO DELETE contatos-suporte:', err);
+    res.status(500).json({ error: 'Erro ao remover contato de suporte' });
+  }
+});
+
 module.exports = router;

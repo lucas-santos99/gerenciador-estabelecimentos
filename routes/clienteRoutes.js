@@ -260,6 +260,13 @@ router.post('/pagar-venda', async (req, res) => {
 
         if (error) return res.status(400).json({ error: error.message });
 
+        const { data: clienteInfo } = await supabaseAdmin
+            .from('clientes')
+            .select('nome')
+            .eq('id', clienteId)
+            .single();
+        const nomeCliente = clienteInfo?.nome || 'cliente';
+
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
@@ -267,8 +274,8 @@ router.post('/pagar-venda', async (req, res) => {
           usuario_email: req.user.email,
           modulo:       'clientes',
           acao:         'fiado_recebido',
-          descricao:    `Recebimento de venda fiado — ${meioPagamento}`,
-          meta:         { venda_id: vendaId, cliente_id: clienteId, meio_pagamento: meioPagamento },
+          descricao:    `Recebimento de venda fiado de "${nomeCliente}" — ${meioPagamento}`,
+          meta:         { venda_id: vendaId, cliente_id: clienteId, cliente_nome: nomeCliente, meio_pagamento: meioPagamento },
         });
 
         res.status(200).json({
@@ -307,6 +314,13 @@ router.post('/liquidar', async (req, res) => {
 
         if (error) return res.status(400).json({ error: error.message });
 
+        const { data: clienteInfo } = await supabaseAdmin
+            .from('clientes')
+            .select('nome')
+            .eq('id', clienteId)
+            .single();
+        const nomeCliente = clienteInfo?.nome || 'cliente';
+
         registrar({
           mercearia_id: req.user.mercearia_id,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
@@ -314,8 +328,8 @@ router.post('/liquidar', async (req, res) => {
           usuario_email: req.user.email,
           modulo:       'clientes',
           acao:         'fiado_recebido',
-          descricao:    `Liquidação de fiado — ${parseFloat(valorPago).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})} (${meioPagamento})`,
-          meta:         { cliente_id: clienteId, valor: parseFloat(valorPago), meio_pagamento: meioPagamento },
+          descricao:    `Recebimento de fiado de "${nomeCliente}" — ${parseFloat(valorPago).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})} (${meioPagamento})`,
+          meta:         { cliente_id: clienteId, cliente_nome: nomeCliente, valor: parseFloat(valorPago), meio_pagamento: meioPagamento },
         });
 
         res.status(200).json({
