@@ -126,6 +126,23 @@ router.get('/:id', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req,
       .order('data_compra', { ascending: false })
       .limit(50);
 
+    // Itens de cada compra (produto, quantidade, custo, subtotal) — usado
+    // pra exportar o histórico com o detalhe do que foi comprado, sem
+    // precisar de uma chamada por compra
+    const compraIds = (compras || []).map(c => c.id);
+    const itensPorCompra = {};
+    if (compraIds.length > 0) {
+      const { data: itensCompras } = await db
+        .from('itens_compra')
+        .select('compra_id, produto_nome, produto_marca, unidade_medida, quantidade, preco_custo_unitario, subtotal')
+        .in('compra_id', compraIds);
+      (itensCompras || []).forEach(i => {
+        if (!itensPorCompra[i.compra_id]) itensPorCompra[i.compra_id] = [];
+        itensPorCompra[i.compra_id].push(i);
+      });
+    }
+    const comprasComItens = (compras || []).map(c => ({ ...c, itens: itensPorCompra[c.id] || [] }));
+
     // Produtos fornecidos + último preço de custo pago e quantidade da
     // última compra, derivados dos itens
     const { data: itens } = await db
@@ -149,14 +166,14 @@ router.get('/:id', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req,
       }
     });
 
-    const comprasAtivas = (compras || []).filter(c => c.status === 'ativa');
+    const comprasAtivas = (comprasComItens || []).filter(c => c.status === 'ativa');
     const totalGasto = comprasAtivas.reduce((acc, c) => acc + (parseFloat(c.valor_total) || 0), 0);
 
     res.json({
       ...fornecedor,
       total_gasto_historico: totalGasto,
       total_compras: comprasAtivas.length,
-      compras: compras || [],
+      compras: comprasComItens,
       produtos_fornecidos: Object.values(produtosMap),
     });
   } catch (err) {

@@ -232,9 +232,10 @@ router.post('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res)
     let contaAPagar = null;
     if (forma_pagamento === 'a_prazo') {
       try {
-        const { data: conta, error: errConta } = await req.supabase
+        const { data: conta, error: errConta } = await db
           .from('contas_a_pagar')
           .insert({
+            mercearia_id:    mid,
             descricao:       `Compra — ${fornecedor.nome}${numero_nota ? ` (Nota ${numero_nota})` : ''}`,
             valor:           valorTotal,
             data_vencimento: data_vencimento,
@@ -309,10 +310,11 @@ router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req
     // resolver manualmente no Financeiro primeiro, pra não mexer em
     // dinheiro que já saiu sem o comerciante saber
     if (compra.conta_a_pagar_id) {
-      const { data: conta } = await req.supabase
+      const { data: conta } = await db
         .from('contas_a_pagar')
         .select('status')
         .eq('id', compra.conta_a_pagar_id)
+        .eq('mercearia_id', mid)
         .single();
       if (conta?.status === 'paga') {
         return res.status(400).json({ error: 'Essa compra tem uma conta a pagar já quitada. Resolva isso no Financeiro antes de cancelar a compra.' });
@@ -376,7 +378,7 @@ router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req
 
     // Cancela a conta a pagar vinculada, se ainda pendente
     if (compra.conta_a_pagar_id) {
-      await req.supabase.from('contas_a_pagar').delete().eq('id', compra.conta_a_pagar_id);
+      await db.from('contas_a_pagar').delete().eq('id', compra.conta_a_pagar_id).eq('mercearia_id', mid);
     }
 
     await db.from('compras').update({ status: 'cancelada', cancelado_em: new Date().toISOString() }).eq('id', id);
