@@ -21,6 +21,17 @@ function operadorId(req) { return req.user.role === 'operator' ? req.user.id : n
 function fmtMoeda(v) {
   return (parseFloat(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
+function fmtQtd(v, u) {
+  return u === 'kg'
+    ? parseFloat(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' kg'
+    : Math.trunc(parseFloat(v) || 0) + ' un';
+}
+// Resumo curto pra caber na descrição da auditoria sem ficar ilegível
+function resumoItens(itensRegistrados) {
+  const nomes = itensRegistrados.map(i => `${i.produto_nome} (${fmtQtd(i.quantidade, i.unidade_medida)})`);
+  if (nomes.length <= 3) return nomes.join(', ');
+  return `${nomes.slice(0, 3).join(', ')} e mais ${nomes.length - 3}`;
+}
 
 /* ════════════════════════════════════════════════════════════
    1. LISTAR COMPRAS — GET /api/compras?fornecedor_id=&status=
@@ -159,7 +170,10 @@ router.post('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res)
     if (errCompra) throw errCompra;
 
     // 4. Pra cada item: grava o item da nota, dá entrada no estoque,
-    // registra a movimentação — mesmo padrão do Ajuste Rápido
+    // registra a movimentação — mesmo padrão do Ajuste Rápido. Guarda
+    // também um resumo (antes/depois) pra jogar na auditoria no final.
+    const itensRegistrados = [];
+
     for (const it of itens) {
       const produto = produtosMap[it.produto_id];
       const qtd     = parseFloat(it.quantidade);
@@ -200,6 +214,17 @@ router.post('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res)
         usuario_nome:            req.user.nome || req.user.email,
         compra_id:               compra.id,
       });
+
+      itensRegistrados.push({
+        produto_id:       produto.id,
+        produto_nome:     produto.nome,
+        produto_marca:    produto.marca,
+        unidade_medida:   produto.unidade_medida,
+        quantidade:       qtd,
+        preco_custo_unitario: preco,
+        estoque_antes:    qtdAntes,
+        estoque_depois:   qtdDepois,
+      });
     }
 
     // 5. Se for a prazo, gera a conta a pagar (mesma tabela/estilo que o
@@ -226,6 +251,15 @@ router.post('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res)
         console.error('[COMPRAS] Compra salva, mas falhou ao gerar conta a pagar:', contaErr.message);
         // Não derruba a resposta — a compra e o estoque já foram registrados
         // corretamente, só a conta a pagar precisa ser lançada manualmente.
+        registrar({
+          mercearia_id:  mid,
+          operador_id:   operadorId(req),
+          usuario_nome:  req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'fornecedores', acao: 'lancar_compra',
+          descricao: `Lançou compra de ${fornecedor.nome} — ${fmtMoeda(valorTotal)} (${resumoItens(itensRegistrados)})`,
+          meta: { compra_id: compra.id, fornecedor_id, valor_total: valorTotal, forma_pagamento, itens: itensRegistrados },
+        });
         return res.status(201).json({
           ...compra,
           fornecedor_nome: fornecedor.nome,
@@ -240,8 +274,8 @@ router.post('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res)
       usuario_nome:  req.user.nome,
       usuario_email: req.user.email,
       modulo: 'fornecedores', acao: 'lancar_compra',
-      descricao: `Lançou compra de ${fornecedor.nome} — ${fmtMoeda(valorTotal)} (${itens.length} ite${itens.length > 1 ? 'ns' : 'm'})`,
-      meta: { compra_id: compra.id, fornecedor_id, valor_total: valorTotal, forma_pagamento },
+      descricao: `Lançou compra de ${fornecedor.nome} — ${fmtMoeda(valorTotal)} (${resumoItens(itensRegistrados)})`,
+      meta: { compra_id: compra.id, fornecedor_id, valor_total: valorTotal, forma_pagamento, itens: itensRegistrados },
     });
 
     res.status(201).json({ ...compra, fornecedor_nome: fornecedor.nome, conta_a_pagar: contaAPagar });
@@ -287,7 +321,10 @@ router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req
 
     const { data: itens } = await db.from('itens_compra').select('*').eq('compra_id', id);
 
-    // Estorna o estoque de cada item (some com a quantidade que entrou)
+    // Estorna o estoque de cada item (some com a quantidade que entrou),
+    // guardando o antes/depois de cada um pra auditoria
+    const itensEstornados = [];
+
     for (const item of (itens || [])) {
       const { data: produto } = await db
         .from('produtos')
@@ -296,7 +333,21 @@ router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req
         .eq('mercearia_id', mid)
         .single();
 
-      if (!produto) continue; // produto pode ter sido excluído depois — segue o cancelamento mesmo assim
+      if (!produto) {
+        // Produto pode ter sido excluído depois — segue o cancelamento
+        // mesmo assim, só registra o que foi cancelado sem o "depois"
+        itensEstornados.push({
+          produto_id: item.produto_id,
+          produto_nome: item.produto_nome,
+          produto_marca: item.produto_marca,
+          unidade_medida: item.unidade_medida,
+          quantidade: parseFloat(item.quantidade),
+          estoque_antes: null,
+          estoque_depois: null,
+          obs: 'produto excluído depois da compra — estoque não pôde ser estornado',
+        });
+        continue;
+      }
 
       const qtdAntes  = parseFloat(produto.estoque_atual) || 0;
       const qtdDepois = Math.max(0, qtdAntes - parseFloat(item.quantidade));
@@ -311,6 +362,16 @@ router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req
         referencia_tipo: 'cancelamento_compra', categoria_nome: produto.categorias?.nome || null,
         operador_id: operadorId(req), usuario_nome: req.user.nome || req.user.email, compra_id: compra.id,
       });
+
+      itensEstornados.push({
+        produto_id:     produto.id,
+        produto_nome:   produto.nome,
+        produto_marca:  produto.marca,
+        unidade_medida: produto.unidade_medida,
+        quantidade:     parseFloat(item.quantidade),
+        estoque_antes:  qtdAntes,
+        estoque_depois: qtdDepois,
+      });
     }
 
     // Cancela a conta a pagar vinculada, se ainda pendente
@@ -323,8 +384,8 @@ router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req
     registrar({
       mercearia_id: mid, operador_id: operadorId(req), usuario_nome: req.user.nome, usuario_email: req.user.email,
       modulo: 'fornecedores', acao: 'cancelar_compra',
-      descricao: `Cancelou a compra de ${compra.fornecedores?.nome || 'fornecedor'} — estoque estornado`,
-      meta: { compra_id: id },
+      descricao: `Cancelou a compra de ${compra.fornecedores?.nome || 'fornecedor'} — ${fmtMoeda(compra.valor_total)} — estoque estornado (${resumoItens(itensEstornados)})`,
+      meta: { compra_id: id, valor_total: compra.valor_total, itens: itensEstornados },
     });
 
     res.json({ success: true });

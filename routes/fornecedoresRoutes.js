@@ -15,7 +15,7 @@ function operadorId(req) { return req.user.role === 'operator' ? req.user.id : n
 
 /* ════════════════════════════════════════════════════════════
    1. LISTAR FORNECEDORES (com números rápidos: gasto no mês,
-      última compra) — GET /api/fornecedores?busca=
+      última compra, formas de pagamento já usadas) — GET /api/fornecedores?busca=
 ════════════════════════════════════════════════════════════ */
 router.get('/', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
   const mid = mercearia(req);
@@ -36,15 +36,16 @@ router.get('/', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, re
 
     if (!fornecedores || fornecedores.length === 0) return res.json([]);
 
-    // Números rápidos: gasto no mês corrente + data da última compra,
-    // numa única passada pelas compras do estabelecimento
+    // Números rápidos: gasto no mês corrente + data da última compra +
+    // quais formas de pagamento (à vista / a prazo) já apareceram nas
+    // compras ativas desse fornecedor, numa única passada
     const inicioMes = new Date();
     inicioMes.setDate(1);
     inicioMes.setHours(0, 0, 0, 0);
 
     const { data: compras } = await db
       .from('compras')
-      .select('fornecedor_id, valor_total, data_compra')
+      .select('fornecedor_id, valor_total, data_compra, forma_pagamento')
       .eq('mercearia_id', mid)
       .eq('status', 'ativa')
       .order('data_compra', { ascending: false });
@@ -52,17 +53,19 @@ router.get('/', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, re
     const resumoPorFornecedor = {};
     (compras || []).forEach(c => {
       if (!resumoPorFornecedor[c.fornecedor_id]) {
-        resumoPorFornecedor[c.fornecedor_id] = { gasto_mes: 0, ultima_compra: null };
+        resumoPorFornecedor[c.fornecedor_id] = { gasto_mes: 0, ultima_compra: null, formasPagamento: new Set() };
       }
       const r = resumoPorFornecedor[c.fornecedor_id];
       if (!r.ultima_compra) r.ultima_compra = c.data_compra; // já vem ordenado desc
       if (new Date(c.data_compra) >= inicioMes) r.gasto_mes += parseFloat(c.valor_total) || 0;
+      if (c.forma_pagamento) r.formasPagamento.add(c.forma_pagamento);
     });
 
     const resultado = fornecedores.map(f => ({
       ...f,
-      gasto_mes:     resumoPorFornecedor[f.id]?.gasto_mes || 0,
-      ultima_compra: resumoPorFornecedor[f.id]?.ultima_compra || null,
+      gasto_mes:        resumoPorFornecedor[f.id]?.gasto_mes || 0,
+      ultima_compra:    resumoPorFornecedor[f.id]?.ultima_compra || null,
+      formas_pagamento: Array.from(resumoPorFornecedor[f.id]?.formasPagamento || []),
     }));
 
     res.json(resultado);
@@ -123,10 +126,11 @@ router.get('/:id', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req,
       .order('data_compra', { ascending: false })
       .limit(50);
 
-    // Produtos fornecidos + último preço de custo pago, derivado dos itens
+    // Produtos fornecidos + último preço de custo pago e quantidade da
+    // última compra, derivados dos itens
     const { data: itens } = await db
       .from('itens_compra')
-      .select('produto_id, produto_nome, produto_marca, unidade_medida, preco_custo_unitario, compras!inner(fornecedor_id, data_compra, status)')
+      .select('produto_id, produto_nome, produto_marca, unidade_medida, quantidade, preco_custo_unitario, compras!inner(fornecedor_id, data_compra, status)')
       .eq('compras.fornecedor_id', id)
       .eq('compras.status', 'ativa')
       .order('compras(data_compra)', { ascending: false });
@@ -140,6 +144,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req,
           produto_marca: i.produto_marca,
           unidade_medida: i.unidade_medida,
           ultimo_preco: i.preco_custo_unitario, // primeiro da lista = mais recente (já ordenado)
+          ultima_quantidade: i.quantidade,
         };
       }
     });
