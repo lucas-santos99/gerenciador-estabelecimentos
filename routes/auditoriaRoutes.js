@@ -3,6 +3,8 @@ const express  = require('express');
 const router   = express.Router();
 const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
+const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { PERMISSOES } = require('../utils/permissoes');
 
 router.use(authUser);
 
@@ -76,7 +78,7 @@ router.post('/login', async (req, res) => {
    LISTAR AUDITORIA DO ESTABELECIMENTO (merchant)
    GET /api/auditoria?modulo=&operador_id=&data_inicio=&data_fim=&limit=&offset=
 ============================================================ */
-router.get('/', async (req, res) => {
+router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
   if (!garantirMerchant(req, res)) return;
 
   const { mercearia_id } = req.user;
@@ -122,7 +124,7 @@ router.get('/', async (req, res) => {
    LISTAR OPERADORES DO ESTABELECIMENTO (para filtros)
    GET /api/auditoria/operadores
 ============================================================ */
-router.get('/operadores', async (req, res) => {
+router.get('/operadores', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
   if (!garantirMerchant(req, res)) return;
   const { mercearia_id } = req.user;
 
@@ -145,7 +147,7 @@ router.get('/operadores', async (req, res) => {
    RESUMO DE AÇÕES POR OPERADOR (merchant)
    GET /api/auditoria/resumo?data_inicio=&data_fim=
 ============================================================ */
-router.get('/resumo', async (req, res) => {
+router.get('/resumo', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
   if (!garantirMerchant(req, res)) return;
   const { mercearia_id } = req.user;
   const { data_inicio, data_fim } = req.query;

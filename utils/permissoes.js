@@ -10,7 +10,11 @@ const PERMISSOES = {
   CLIENTES:      'clientes',
   FINANCEIRO:    'financeiro',
   RELATORIOS:    'relatorios',
-  CONFIGURACOES: 'configuracoes',
+  // ⚠️ Valor real precisa ser 'config' (não 'configuracoes') — é a key
+  // que o LayoutEstabelecimento.jsx usa pra liberar a aba no sidebar do
+  // operador. Manter o nome da constante CONFIGURACOES por compatibilidade
+  // com quem já referencia PERMISSOES.CONFIGURACOES pelo símbolo.
+  CONFIGURACOES: 'config',
 
   // ── Ações granulares — PDV ───────────────────────────────
   PDV_REALIZAR_VENDA: 'pdv_realizar_venda',
@@ -39,7 +43,6 @@ const PERMISSOES = {
   RELATORIOS_OPERADORES: 'relatorios_operadores',
   RELATORIOS_PRODUTOS:   'relatorios_produtos',
   RELATORIOS_ESTOQUE:    'relatorios_estoque',
-  RELATORIOS_AUDITORIA:  'relatorios_auditoria',
 
   // ── Ações granulares — Configurações ────────────────────
   CONFIG_EDITAR_DADOS: 'config_editar_dados',
@@ -50,6 +53,17 @@ const PERMISSOES = {
   INVENTARIO_CONTAR:    'inventario_contar',
   INVENTARIO_FINALIZAR: 'inventario_finalizar',
   INVENTARIO_AJUSTE:    'inventario_ajuste',
+
+  // ── Módulo Fornecedores ──────────────────────────────────
+  FORNECEDORES:           'fornecedores',
+  FORNECEDORES_ADICIONAR: 'fornecedores_adicionar',
+  FORNECEDORES_EDITAR:    'fornecedores_editar',
+  FORNECEDORES_EXCLUIR:   'fornecedores_excluir',
+  FORNECEDORES_COMPRAR:   'fornecedores_comprar',
+  FORNECEDORES_CANCELAR:  'fornecedores_cancelar',
+
+  // ── Módulo Auditoria (tela só de leitura, sem sub-ações) ──
+  AUDITORIA: 'auditoria',
 
   // ── Legado (mantidos para compatibilidade) ───────────────
   VER_CAIXA:         'pdv',
@@ -102,30 +116,45 @@ const MODULOS_PERMISSOES = [
   },
   {
     id: 'relatorios', label: 'Relatórios', icone: '📊',
-    desc: 'Histórico de vendas, estoque e auditoria',
+    desc: 'Histórico de vendas, estoque e produtos',
     acoes: [
       { id: 'relatorios_historico',  label: 'Ver histórico de vendas' },
       { id: 'relatorios_operadores', label: 'Ver vendas por operador' },
       { id: 'relatorios_produtos',   label: 'Ver produtos mais vendidos' },
       { id: 'relatorios_estoque',    label: 'Ver relatório de estoque' },
-      { id: 'relatorios_auditoria',  label: 'Ver auditoria de ações' },
     ],
   },
   {
-    id: 'configuracoes', label: 'Configurações', icone: '⚙️',
-    desc: 'Configurações do estabelecimento',
-    acoes: [
-      { id: 'config_editar_dados', label: 'Editar dados do estabelecimento' },
-      { id: 'config_editar_logo',  label: 'Alterar logo' },
-    ],
-  },
-  {
-    id: 'inventario', label: 'Inventário', icone: '📦',
+    id: 'inventario', label: 'Inventário', icone: '📋',
     desc: 'Contagem física e movimentações de estoque',
     acoes: [
       { id: 'inventario_contar',    label: 'Realizar contagens (inventário)' },
       { id: 'inventario_finalizar', label: 'Finalizar e aplicar inventário ao estoque' },
       { id: 'inventario_ajuste',    label: 'Ajustes rápidos de estoque' },
+    ],
+  },
+  {
+    id: 'fornecedores', label: 'Fornecedores', icone: '🚚',
+    desc: 'Cadastro de fornecedores e lançamento de compras',
+    acoes: [
+      { id: 'fornecedores_adicionar', label: 'Adicionar fornecedores' },
+      { id: 'fornecedores_editar',    label: 'Editar fornecedores' },
+      { id: 'fornecedores_excluir',   label: 'Excluir fornecedores' },
+      { id: 'fornecedores_comprar',   label: 'Lançar compras' },
+      { id: 'fornecedores_cancelar',  label: 'Cancelar compras' },
+    ],
+  },
+  {
+    id: 'auditoria', label: 'Auditoria', icone: '🔍',
+    desc: 'Ver o histórico de ações no estabelecimento',
+    acoes: [],
+  },
+  {
+    id: 'config', label: 'Configurações', icone: '⚙️',
+    desc: 'Configurações do estabelecimento',
+    acoes: [
+      { id: 'config_editar_dados', label: 'Editar dados do estabelecimento' },
+      { id: 'config_editar_logo',  label: 'Alterar logo' },
     ],
   },
 ];

@@ -17,7 +17,7 @@ function operadorId(req) { return req.user.role === 'operator' ? req.user.id : n
    1. LISTAR FORNECEDORES (com números rápidos: gasto no mês,
       última compra, formas de pagamento já usadas) — GET /api/fornecedores?busca=
 ════════════════════════════════════════════════════════════ */
-router.get('/', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
+router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (req, res) => {
   const mid = mercearia(req);
   const { busca } = req.query;
 
@@ -105,7 +105,7 @@ router.get('/buscar-rapido', async (req, res) => {
    3. DETALHES DO FORNECEDOR — histórico + produtos fornecidos
       GET /api/fornecedores/:id
 ════════════════════════════════════════════════════════════ */
-router.get('/:id', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
+router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 
@@ -185,7 +185,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req,
 /* ════════════════════════════════════════════════════════════
    4. CRIAR FORNECEDOR — POST /api/fornecedores
 ════════════════════════════════════════════════════════════ */
-router.post('/', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
+router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (req, res) => {
   const mid = mercearia(req);
   const {
     nome, razao_social, cnpj_cpf, telefone, whatsapp, email,
@@ -236,7 +236,7 @@ router.post('/', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, r
 /* ════════════════════════════════════════════════════════════
    5. EDITAR FORNECEDOR — PUT /api/fornecedores/:id
 ════════════════════════════════════════════════════════════ */
-router.put('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+router.put('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EDITAR), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
   const {
@@ -290,7 +290,7 @@ router.put('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, re
 /* ════════════════════════════════════════════════════════════
    6. EXCLUIR (soft) FORNECEDOR — DELETE /api/fornecedores/:id
 ════════════════════════════════════════════════════════════ */
-router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req, res) => {
+router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EXCLUIR), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 

@@ -36,7 +36,7 @@ function resumoItens(itensRegistrados) {
 /* ════════════════════════════════════════════════════════════
    1. LISTAR COMPRAS — GET /api/compras?fornecedor_id=&status=
 ════════════════════════════════════════════════════════════ */
-router.get('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res) => {
+router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
   const mid = mercearia(req);
   const { fornecedor_id, data_inicio, data_fim, limit = 50, offset = 0 } = req.query;
 
@@ -68,7 +68,7 @@ router.get('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res) 
 /* ════════════════════════════════════════════════════════════
    2. DETALHES DE UMA COMPRA (com itens) — GET /api/compras/:id
 ════════════════════════════════════════════════════════════ */
-router.get('/:id', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res) => {
+router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 
@@ -100,7 +100,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, re
               data_vencimento (se a_prazo), observacoes,
               itens: [{ produto_id, quantidade, preco_custo_unitario }] }
 ════════════════════════════════════════════════════════════ */
-router.post('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res) => {
+router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
   const mid = mercearia(req);
   const {
     fornecedor_id, numero_nota, data_compra, forma_pagamento,
@@ -291,7 +291,7 @@ router.post('/', verificarPermissao(PERMISSOES.VER_FINANCEIRO), async (req, res)
       a conta a pagar vinculada (se ainda estiver pendente)
       DELETE /api/compras/:id
 ════════════════════════════════════════════════════════════ */
-router.delete('/:id', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req, res) => {
+router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_CANCELAR), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 

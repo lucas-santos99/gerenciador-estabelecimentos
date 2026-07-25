@@ -6,21 +6,27 @@ const db        = require("../db/supabaseAdmin");
 const authUser  = require("../middlewares/authUser");
 const verificarPermissao = require("../middlewares/verificarPermissao");
 const { PERMISSOES } = require("../utils/permissoes");
+const { registrar } = require("./auditoriaRoutes");
 
 // Todas as rotas deste arquivo exigem autenticação
 router.use(authUser);
 
+function quemFez(req) { return req.user.role === "operator" ? req.user.id : null; }
+
 /* ============================================================
-   HELPER — garante que o req.user é merchant e dono do operador
+   HELPER — garante que o req.user é merchant e dono do operador.
+   Devolve o registro do operador (nome/email) pra reaproveitar
+   nas descrições de auditoria sem precisar buscar de novo.
 ============================================================ */
-async function garantirDono(operadorId, merceariaId) {
+async function garantirDono(alvoId, merceariaId) {
   const { data, error } = await db
     .from("operadores")
-    .select("mercearia_id")
-    .eq("id", operadorId)
+    .select("id, nome, email, mercearia_id")
+    .eq("id", alvoId)
     .single();
   if (error || !data) throw new Error("Operador não encontrado");
   if (data.mercearia_id !== merceariaId) throw new Error("Sem permissão");
+  return data;
 }
 
 /* ============================================================
@@ -137,6 +143,16 @@ router.post("/criar", async (req, res) => {
         .insert(permissoes.map(permissao_id => ({ operador_id: userId, permissao_id })));
     }
 
+    registrar({
+      mercearia_id:  mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: 'operadores', acao: 'criar_operador',
+      descricao: `Cadastrou o operador "${nome}"`,
+      meta: { operador_id: userId, email },
+    });
+
     res.status(201).json({ success: true, operador });
   } catch (err) {
     console.error("Erro criar operador:", err);
@@ -168,6 +184,16 @@ router.put("/:id", async (req, res) => {
 
     await db.from("profiles").update({ nome, email }).eq("id", id);
 
+    registrar({
+      mercearia_id:  mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: 'operadores', acao: 'editar_operador',
+      descricao: `Editou o operador "${nome}"`,
+      meta: { operador_id: id },
+    });
+
     res.json({ success: true, operador: data });
   } catch (err) {
     console.error("Erro editar operador:", err);
@@ -189,7 +215,7 @@ router.put("/:id/status", async (req, res) => {
       return res.status(400).json({ error: "Status inválido" });
     }
 
-    await garantirDono(id, mercearia_id);
+    const operadorAtual = await garantirDono(id, mercearia_id);
 
     const { error } = await db
       .from("operadores")
@@ -197,6 +223,16 @@ router.put("/:id/status", async (req, res) => {
       .eq("id", id);
 
     if (error) return res.status(400).json({ error: error.message });
+
+    registrar({
+      mercearia_id:  mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: 'operadores', acao: 'alterar_status_operador',
+      descricao: `${status === 'ativo' ? 'Ativou' : 'Desativou'} o operador "${operadorAtual.nome}"`,
+      meta: { operador_id: id, status },
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -214,7 +250,7 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
     const { mercearia_id } = req.user;
 
-    await garantirDono(id, mercearia_id);
+    const operadorAtual = await garantirDono(id, mercearia_id);
 
     const { error } = await db
       .from("operadores")
@@ -222,6 +258,16 @@ router.delete("/:id", async (req, res) => {
       .eq("id", id);
 
     if (error) return res.status(400).json({ error: error.message });
+
+    registrar({
+      mercearia_id:  mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: 'operadores', acao: 'excluir_operador',
+      descricao: `Excluiu o operador "${operadorAtual.nome}"`,
+      meta: { operador_id: id },
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -269,7 +315,7 @@ router.put("/:id/permissoes", async (req, res) => {
       return res.status(400).json({ error: "permissoes deve ser um array" });
     }
 
-    await garantirDono(id, mercearia_id);
+    const operadorAtual = await garantirDono(id, mercearia_id);
 
     // Remove tudo e reinsere
     await db.from("permissoes_operador").delete().eq("operador_id", id);
@@ -279,6 +325,16 @@ router.put("/:id/permissoes", async (req, res) => {
         permissoes.map(permissao_id => ({ operador_id: id, permissao_id }))
       );
     }
+
+    registrar({
+      mercearia_id:  mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: 'operadores', acao: 'editar_permissoes_operador',
+      descricao: `Atualizou as permissões do operador "${operadorAtual.nome}" (${permissoes.length} permissão${permissoes.length !== 1 ? 'ões' : ''})`,
+      meta: { operador_id: id, total_permissoes: permissoes.length },
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -294,7 +350,7 @@ router.put("/:id/permissoes", async (req, res) => {
 router.get('/minhas-permissoes', async (req, res) => {
   try {
     if (req.user.role === 'merchant' || req.user.role === 'super_admin') {
-      return res.json(['pdv','estoque','clientes','financeiro','relatorios','configuracoes']);
+      return res.json(['pdv','estoque','clientes','financeiro','relatorios','inventario','fornecedores','operadores','auditoria','config']);
     }
     res.json(req.user.permissoes || []);
   } catch (err) {
@@ -349,10 +405,20 @@ router.post('/:id/reset-senha', async (req, res) => {
       return res.status(400).json({ error: 'Senha inválida (mínimo 6 caracteres)' });
     }
 
-    await garantirDono(id, mercearia_id);
+    const operadorAtual = await garantirDono(id, mercearia_id);
 
     const { error } = await db.auth.admin.updateUserById(id, { password: senha });
     if (error) return res.status(400).json({ error: error.message });
+
+    registrar({
+      mercearia_id:  mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: 'operadores', acao: 'reset_senha_operador',
+      descricao: `Redefiniu a senha do operador "${operadorAtual.nome}"`,
+      meta: { operador_id: id },
+    });
 
     res.json({ success: true });
   } catch (err) {
