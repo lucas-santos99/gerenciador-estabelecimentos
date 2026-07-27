@@ -281,6 +281,52 @@ router.post("/:id/liberar-acesso", authUser, async (req, res) => {
 });
 
 // =======================================================
+// MARCAR COBRANÇA MANUAL COMO ENVIADA (módulo de Cobranças)
+// POST /api/admin/estabelecimentos/:id/marcar-cobrado
+// Chamado pelo frontend logo depois de abrir o WhatsApp/e-mail —
+// tira o estabelecimento da lista de cobrança até o dia seguinte.
+// =======================================================
+router.post("/:id/marcar-cobrado", authUser, async (req, res) => {
+  try {
+    if (req.user.role !== "super_admin") {
+      return res.status(403).json({ error: "Acesso negado." });
+    }
+
+    const { id } = req.params;
+    const { canal = "whatsapp", desfazer = false } = req.body; // canal só informativo, pra auditoria
+
+    const agora = desfazer ? null : new Date().toISOString();
+
+    const { data, error } = await db
+      .from("mercearias")
+      .update({ cobranca_manual_em: agora })
+      .eq("id", id)
+      .select("nome_fantasia")
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          desfazer ? "cobranca_manual_desfeita" : "cobranca_manual_enviada",
+      descricao:     desfazer
+        ? `Desfez a marcação de cobrado de "${data.nome_fantasia}"`
+        : `Marcou "${data.nome_fantasia}" como cobrado (${canal})`,
+      meta:          { mercearia_id: id, canal },
+      escopo:        "admin_global",
+    });
+
+    res.json({ success: true, cobranca_manual_em: agora });
+  } catch (err) {
+    console.error("MARCAR COBRADO error:", err);
+    res.status(500).json({ error: "Erro interno ao marcar cobrança." });
+  }
+});
+
+// =======================================================
 // HISTÓRICO DE LIBERAÇÕES DE UM ESTABELECIMENTO
 // GET /api/admin/estabelecimentos/:id/liberacoes
 // =======================================================

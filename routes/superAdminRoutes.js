@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
 const authUser = require('../middlewares/authUser');
 const onlyMaster = require('../middlewares/onlyMaster');
@@ -188,6 +190,130 @@ router.put('/config-tela-bloqueio', onlyMaster, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao salvar configurações da tela.' });
+  }
+});
+
+// ============================================================
+// CONFIGURAÇÕES DE COBRANÇA (renovação antecipada + módulo de
+// cobrança manual do admin) — mensagem/imagem/janela de dias
+// ============================================================
+
+// Leitura liberada pra qualquer autenticado — o merchant também
+// precisa saber a janela de dias pra decidir se mostra o banner de
+// renovação antecipada (a mensagem/imagem em si só importa pro admin,
+// mas não custa nada devolver tudo junto, é a mesma info do próprio
+// estabelecimento dele).
+router.get('/config-cobranca', async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { data } = await db
+      .from('config_sistema')
+      .select('chave, valor')
+      .in('chave', [
+        'cobranca_dias_aviso',
+        'cobranca_msg_whatsapp',
+        'cobranca_email_assunto',
+        'cobranca_email_corpo',
+        'cobranca_imagem_url',
+      ]);
+    const cfg = {};
+    (data || []).forEach(r => { cfg[r.chave] = r.valor; });
+
+    res.json({
+      dias_aviso:     parseInt(cfg.cobranca_dias_aviso) || 5,
+      msg_whatsapp:   cfg.cobranca_msg_whatsapp   || 'Olá {nome}! 👋 Passando pra lembrar que a mensalidade do seu sistema vence em {dias} dia(s), no dia {vencimento} (R$ {valor}). Pra continuar com o acesso sem interrupção, é só entrar no sistema e clicar em "Renovar agora". Qualquer dúvida, me chama! 🙂',
+      email_assunto:  cfg.cobranca_email_assunto  || 'Sua mensalidade vence em breve',
+      email_corpo:    cfg.cobranca_email_corpo    || 'Olá {nome},\n\nSua mensalidade do sistema vence em {dias} dia(s), no dia {vencimento}.\n\nPra continuar com o acesso sem interrupção, acesse o sistema e clique em "Renovar agora".\n\nQualquer dúvida, estou à disposição.',
+      imagem_url:     cfg.cobranca_imagem_url     || '',
+    });
+  } catch (err) {
+    console.error('ERRO GET config-cobranca:', err);
+    res.status(500).json({ error: 'Erro ao buscar configurações de cobrança.' });
+  }
+});
+
+router.put('/config-cobranca', onlyMaster, async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { dias_aviso, msg_whatsapp, email_assunto, email_corpo } = req.body;
+
+    const diasNum = parseInt(dias_aviso);
+    if (isNaN(diasNum) || diasNum < 1 || diasNum > 60) {
+      return res.status(400).json({ error: 'Janela de dias inválida (1–60).' });
+    }
+
+    const updates = [
+      { chave: 'cobranca_dias_aviso',    valor: String(diasNum) },
+      { chave: 'cobranca_msg_whatsapp',  valor: msg_whatsapp  || '' },
+      { chave: 'cobranca_email_assunto', valor: email_assunto || '' },
+      { chave: 'cobranca_email_corpo',   valor: email_corpo   || '' },
+    ];
+
+    for (const u of updates) {
+      await db.from('config_sistema').upsert(u, { onConflict: 'chave' });
+    }
+
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'configuracoes',
+      acao:          'editar_config_cobranca',
+      descricao:     'Alterou as configurações de cobrança (mensagem/janela de dias)',
+      escopo:        'admin_global',
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('ERRO PUT config-cobranca:', err);
+    res.status(500).json({ error: 'Erro ao salvar configurações de cobrança.' });
+  }
+});
+
+// Imagem padrão da cobrança — reaproveita o bucket "logos" já existente
+// (pasta separada "cobranca/"), pra não precisar criar bucket novo no
+// Supabase Storage.
+router.post('/config-cobranca/imagem', onlyMaster, upload.single('imagem'), async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    if (!req.file) return res.status(400).json({ error: 'Arquivo não enviado.' });
+
+    const ext = req.file.originalname.split('.').pop();
+    const nomeArquivo = `cobranca/imagem-${Date.now()}.${ext}`;
+
+    const { error: uploadErr } = await db.storage
+      .from('logos')
+      .upload(nomeArquivo, req.file.buffer, { upsert: true, contentType: req.file.mimetype });
+
+    if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+
+    const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
+    const url = urlData.publicUrl;
+
+    await db.from('config_sistema').upsert({ chave: 'cobranca_imagem_url', valor: url }, { onConflict: 'chave' });
+
+    await registrar({
+      usuario_nome:  req.user?.nome,
+      usuario_email: req.user?.email,
+      modulo:        'configuracoes',
+      acao:          'editar_config_cobranca',
+      descricao:     'Trocou a imagem padrão da cobrança',
+      escopo:        'admin_global',
+    });
+
+    res.json({ success: true, imagem_url: url });
+  } catch (err) {
+    console.error('ERRO POST config-cobranca/imagem:', err);
+    res.status(500).json({ error: 'Erro ao enviar imagem.' });
+  }
+});
+
+router.delete('/config-cobranca/imagem', onlyMaster, async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    await db.from('config_sistema').upsert({ chave: 'cobranca_imagem_url', valor: '' }, { onConflict: 'chave' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover imagem.' });
   }
 });
 
