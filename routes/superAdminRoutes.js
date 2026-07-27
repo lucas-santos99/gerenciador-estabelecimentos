@@ -221,9 +221,9 @@ router.get('/config-cobranca', async (req, res) => {
 
     res.json({
       dias_aviso:     parseInt(cfg.cobranca_dias_aviso) || 5,
-      msg_whatsapp:   cfg.cobranca_msg_whatsapp   || 'Olá {nome}! 👋 Passando pra lembrar que a mensalidade do seu sistema {situacao}, no dia {vencimento} (R$ {valor}). Pra continuar com o acesso sem interrupção, é só entrar no sistema e clicar em "Renovar agora". Qualquer dúvida, me chama! 🙂',
+      msg_whatsapp:   cfg.cobranca_msg_whatsapp   || 'Olá {nome}! 👋 Passando pra lembrar que a mensalidade do seu sistema {situacao}, no dia {vencimento} (R$ {valor}).\n\n{link_pagamento}\n\nQualquer dúvida, me chama! 🙂',
       email_assunto:  cfg.cobranca_email_assunto  || 'Sua mensalidade — {situacao}',
-      email_corpo:    cfg.cobranca_email_corpo    || 'Olá {nome},\n\nSua mensalidade do sistema {situacao}, no dia {vencimento}.\n\nPra continuar com o acesso sem interrupção, acesse o sistema e clique em "Renovar agora".\n\nQualquer dúvida, estou à disposição.',
+      email_corpo:    cfg.cobranca_email_corpo    || 'Olá {nome},\n\nSua mensalidade do sistema {situacao}, no dia {vencimento}.\n\n{link_pagamento}\n\nQualquer dúvida, estou à disposição.',
       imagem_url:     cfg.cobranca_imagem_url     || '',
     });
   } catch (err) {
