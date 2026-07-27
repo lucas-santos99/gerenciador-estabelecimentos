@@ -59,6 +59,29 @@ module.exports = async function authUser(req, res, next) {
       req.permissoes      = req.user.permissoes; // cache para verificarPermissao
     }
 
+    // ── Licença bloqueada: barra ações que ALTERAM algo (venda, editar
+    // estoque, lançar compra, etc.) em qualquer rota do sistema, mesmo
+    // que a pessoa já esteja com a aba aberta há dias sem dar F5. GET
+    // continua liberado de propósito — é o que a tela usa pra descobrir
+    // que está bloqueada e redirecionar pro /bloqueado; travar leitura
+    // junto deixaria a pessoa presa sem nem conseguir ver o motivo.
+    // SuperAdmin sempre passa direto (acesso irrestrito).
+    const metodosQueAlteramAlgo = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    if (!req.user.is_superadmin && req.user.mercearia_id && metodosQueAlteramAlgo.includes(req.method)) {
+      const { data: merc } = await supabaseAdmin
+        .from('mercearias')
+        .select('status_assinatura')
+        .eq('id', req.user.mercearia_id)
+        .single();
+
+      if (merc?.status_assinatura === 'bloqueada') {
+        return res.status(402).json({
+          error: 'Licença bloqueada. Renove a assinatura para continuar usando o sistema.',
+          licenca_bloqueada: true,
+        });
+      }
+    }
+
     next();
   } catch (err) {
     console.error('ERRO GERAL authUser:', err);

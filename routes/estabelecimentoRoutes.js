@@ -577,7 +577,26 @@ router.get('/dados/:id', async (req, res) => {
 
     if (error) return res.status(404).json({ error: 'Estabelecimento não encontrado' });
 
-    res.json(data);
+    // ── Auto-correção da licença: essa é a rota que o sistema de fato
+    // usa (tela principal, Tela de Bloqueio e banner de renovação
+    // pollam ela), diferente de /status/:userId que não é mais chamada
+    // por lugar nenhum do frontend atual. Sem essa checagem aqui,
+    // status_assinatura nunca vira "bloqueada" sozinho — só via ação
+    // manual no SuperAdmin. Comparação por meia-noite normalizada,
+    // mesmo padrão já usado no resto do sistema (evita depender da
+    // hora do dia em que a checagem roda).
+    let statusFinal = data.status_assinatura;
+    if (data.data_vencimento && data.status_assinatura === 'ativa') {
+      const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+      const venc = new Date(data.data_vencimento + 'T12:00:00'); venc.setHours(0, 0, 0, 0);
+      if (venc < hoje) {
+        console.log(`[LICENÇA] Vencimento passou pra "${data.nome_fantasia}" — atualizando status_assinatura para 'bloqueada'.`);
+        await db.from('mercearias').update({ status_assinatura: 'bloqueada' }).eq('id', mercearia_id);
+        statusFinal = 'bloqueada';
+      }
+    }
+
+    res.json({ ...data, status_assinatura: statusFinal });
 
   } catch (err) {
     console.error('[ERRO] GET /api/estabelecimentos/dados/:id', err);

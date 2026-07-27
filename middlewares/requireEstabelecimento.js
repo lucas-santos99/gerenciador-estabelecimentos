@@ -29,6 +29,28 @@ async function requireEstabelecimento(req, res, next) {
 
     req.merceariaId = data.mercearia_id;
 
+    // ── Licença bloqueada: barra ações que ALTERAM algo (venda, editar
+    // estoque, lançar compra, etc.), mesmo que a pessoa já esteja com a
+    // aba aberta há dias sem dar F5. GET continua liberado de propósito
+    // — é o que a própria tela usa pra descobrir que está bloqueada e
+    // redirecionar pro /bloqueado; travar isso junto deixaria a pessoa
+    // presa numa tela sem conseguir nem carregar o motivo do bloqueio.
+    const metodosQueAlteramAlgo = ["POST", "PUT", "PATCH", "DELETE"];
+    if (data.mercearia_id && metodosQueAlteramAlgo.includes(req.method)) {
+      const { data: merc } = await db
+        .from("mercearias")
+        .select("status_assinatura")
+        .eq("id", data.mercearia_id)
+        .single();
+
+      if (merc?.status_assinatura === "bloqueada") {
+        return res.status(402).json({
+          error: "Licença bloqueada. Renove a assinatura para continuar usando o sistema.",
+          licenca_bloqueada: true,
+        });
+      }
+    }
+
     next();
 
   } catch (err) {
