@@ -113,7 +113,7 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
 
     const { data: mercearia, error } = await db
       .from("mercearias")
-      .select("id, nome_fantasia")
+      .select("id, nome_fantasia, efi_pix_txid, efi_pix_status, efi_pix_dias")
       .eq("id", mercearia_id)
       .single();
 
@@ -130,6 +130,47 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
       ? parseFloat((valorMensal * 12 * 0.8).toFixed(2))
       : valorMensal;
     const diasPlano = plano === "anual" ? 365 : 30;
+
+    // ── Tenta reaproveitar uma cobrança Pix ainda ativa, em vez de
+    // gerar uma nova toda vez — evita acumular cobranças penduradas no
+    // painel do Efí quando alguém clica em "cobrar" várias vezes sem o
+    // cliente pagar. Confirma o status direto com o Efí (fonte da
+    // verdade), não confia só no que está salvo no banco. ──
+    if (mercearia.efi_pix_txid && mercearia.efi_pix_status === "ATIVA") {
+      try {
+        const cobExistente = await efiPixRequest("GET", `/v2/cob/${mercearia.efi_pix_txid}`);
+        if (cobExistente.data.status === "ATIVA") {
+          const locId = cobExistente.data.loc?.id;
+          let qrcodeBase64  = null;
+          let pixCopiaECola = cobExistente.data.pixCopiaECola || null;
+          if (locId) {
+            try {
+              const qrResp = await efiPixRequest("GET", `/v2/loc/${locId}/qrcode`);
+              qrcodeBase64  = qrResp.data.imagemQrcode || null;
+              pixCopiaECola = pixCopiaECola || qrResp.data.qrcode || null;
+            } catch (e) {
+              console.error("[EFI] Falha ao buscar QR da cobrança reaproveitada:", e.response?.data || e.message);
+            }
+          }
+          if (pixCopiaECola) {
+            return res.json({
+              success:        true,
+              txid:           mercearia.efi_pix_txid,
+              valor:          parseFloat(cobExistente.data.valor?.original) || valor,
+              plano,
+              dias:           mercearia.efi_pix_dias || diasPlano,
+              pix_qr_code:    qrcodeBase64,
+              pix_copy_paste: pixCopiaECola,
+              reaproveitada:  true,
+            });
+          }
+        }
+      } catch (e) {
+        // Cobrança antiga não existe mais / expirou no Efí — segue o
+        // fluxo normal abaixo e cria uma nova, sem interromper nada.
+        console.log("[EFI] Cobrança anterior não pôde ser reaproveitada, gerando nova:", e.response?.data?.nome || e.message);
+      }
+    }
 
     // txid precisa ser alfanumérico, 26 a 35 caracteres
     const txid = crypto.randomBytes(16).toString("hex"); // 32 caracteres

@@ -108,7 +108,7 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
     // 1. Buscar dados da mercearia
     const { data: mercearia, error } = await db
       .from("mercearias")
-      .select("id, nome_fantasia, email_contato, telefone, cnpj, asaas_customer_id")
+      .select("id, nome_fantasia, email_contato, telefone, cnpj, asaas_customer_id, asaas_payment_id, asaas_payment_status")
       .eq("id", mercearia_id)
       .single();
 
@@ -121,6 +121,41 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
       : valorMensal;
 
     const diasPlano = plano === "anual" ? 365 : 30;
+
+    // ── Tenta reaproveitar uma cobrança de cartão ainda pendente, em
+    // vez de gerar uma nova toda vez — evita acumular cobranças
+    // penduradas no painel do Asaas. Confirma o status direto com o
+    // Asaas (fonte da verdade) e só reaproveita se ainda não venceu. ──
+    if (mercearia.asaas_payment_id && mercearia.asaas_payment_status === "PENDING") {
+      try {
+        const respCheck = await fetch(`${ASAAS_API_URL}/payments/${mercearia.asaas_payment_id}`, {
+          headers: asaasHeaders(),
+        });
+        const dataCheck = await respCheck.json();
+        const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+        const aindaValida = respCheck.ok
+          && dataCheck.status === "PENDING"
+          && dataCheck.dueDate
+          && new Date(dataCheck.dueDate + "T23:59:59") >= hoje;
+
+        if (aindaValida) {
+          return res.json({
+            success:            true,
+            payment_id_cartao:  dataCheck.id,
+            valor:              dataCheck.value ?? valor,
+            plano,
+            dias:               diasPlano,
+            due_date:           dataCheck.dueDate,
+            invoice_url_cartao: dataCheck.invoiceUrl || null,
+            reaproveitada:      true,
+          });
+        }
+      } catch (e) {
+        // Cobrança antiga não existe mais / erro ao consultar — segue
+        // o fluxo normal abaixo e cria uma nova, sem interromper nada.
+        console.log("[ASAAS] Cobrança anterior não pôde ser reaproveitada, gerando nova:", e.message);
+      }
+    }
 
     // 3. Buscar ou criar cliente no Asaas
     const customerId = await obterOuCriarClienteAsaas(mercearia);
