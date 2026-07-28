@@ -7,6 +7,8 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 
+console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
+
 router.use(authUser);
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -121,7 +123,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async 
 
     const { data: compras } = await db
       .from('compras')
-      .select('id, numero_nota, data_compra, forma_pagamento, valor_total, status')
+      .select('id, numero_nota, data_compra, forma_pagamento, valor_total, status, conta_a_pagar_id')
       .eq('fornecedor_id', id)
       .order('data_compra', { ascending: false })
       .limit(50);
@@ -141,7 +143,24 @@ router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async 
         itensPorCompra[i.compra_id].push(i);
       });
     }
-    const comprasComItens = (compras || []).map(c => ({ ...c, itens: itensPorCompra[c.id] || [] }));
+
+    // Data de vencimento das compras a prazo — vem da conta a pagar
+    // vinculada, buscada em lote pelos conta_a_pagar_id já coletados
+    const contaIds = (compras || []).map(c => c.conta_a_pagar_id).filter(Boolean);
+    const vencimentoPorConta = {};
+    if (contaIds.length > 0) {
+      const { data: contasPagar } = await db
+        .from('contas_a_pagar')
+        .select('id, data_vencimento')
+        .in('id', contaIds);
+      (contasPagar || []).forEach(c => { vencimentoPorConta[c.id] = c.data_vencimento; });
+    }
+
+    const comprasComItens = (compras || []).map(c => ({
+      ...c,
+      itens: itensPorCompra[c.id] || [],
+      data_vencimento_prazo: c.conta_a_pagar_id ? (vencimentoPorConta[c.conta_a_pagar_id] || null) : null,
+    }));
 
     // Produtos fornecidos + último preço de custo pago e quantidade da
     // última compra, derivados dos itens

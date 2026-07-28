@@ -12,6 +12,8 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 
+console.log('🔥 COMPRAS ROUTES ATUALIZADO 🔥');
+
 router.use(authUser);
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -87,7 +89,27 @@ router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (r
       .select('*')
       .eq('compra_id', id);
 
-    res.json({ ...compra, fornecedor_nome: compra.fornecedores?.nome, itens: itens || [] });
+    // Se for a prazo, busca a data de vencimento na conta a pagar
+    // vinculada — a compra em si não guarda isso, só a conta gerada.
+    let dataVencimentoPrazo = null;
+    let statusContaPagar    = null;
+    if (compra.forma_pagamento === 'a_prazo' && compra.conta_a_pagar_id) {
+      const { data: conta } = await db
+        .from('contas_a_pagar')
+        .select('data_vencimento, status')
+        .eq('id', compra.conta_a_pagar_id)
+        .single();
+      dataVencimentoPrazo = conta?.data_vencimento || null;
+      statusContaPagar    = conta?.status || null;
+    }
+
+    res.json({
+      ...compra,
+      fornecedor_nome: compra.fornecedores?.nome,
+      itens: itens || [],
+      data_vencimento_prazo: dataVencimentoPrazo,
+      status_conta_pagar:    statusContaPagar,
+    });
   } catch (err) {
     console.error('[COMPRAS] Erro detalhes:', err.message);
     res.status(500).json({ error: 'Erro ao buscar compra' });

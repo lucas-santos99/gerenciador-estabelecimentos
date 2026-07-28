@@ -21,12 +21,15 @@ router.get('/',
     //verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = req.supabase;
+    const supabaseAdmin = require('../db/supabaseAdmin');
     const { status } = req.query;
 
     try {
 
-        let query = supabase.from('contas_a_pagar').select('*');
+        let query = supabaseAdmin
+            .from('contas_a_pagar')
+            .select('*')
+            .eq('mercearia_id', req.user.mercearia_id);
 
         if (status === 'pendente') {
             query = query
@@ -154,7 +157,7 @@ router.post('/',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = req.supabase;
+    const supabaseAdmin = require('../db/supabaseAdmin');
     const { descricao, valor, data_vencimento } = req.body;
 
     if (!descricao || !valor || !data_vencimento) {
@@ -165,9 +168,10 @@ router.post('/',
 
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('contas_a_pagar')
             .insert({
+                mercearia_id: req.user.mercearia_id,
                 descricao,
                 valor: parseFloat(valor),
                 data_vencimento,
@@ -199,18 +203,19 @@ router.put('/:contaId/pagar',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = req.supabase;
+    const supabaseAdmin = require('../db/supabaseAdmin');
     const { contaId } = req.params;
 
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('contas_a_pagar')
             .update({
                 status: 'paga',
                 data_pagamento: new Date().toISOString()
             })
             .eq('id', contaId)
+            .eq('mercearia_id', req.user.mercearia_id)
             .select()
             .single();
 
@@ -374,15 +379,16 @@ router.delete('/:contaId',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = req.supabase;
+    const supabaseAdmin = require('../db/supabaseAdmin');
     const { contaId } = req.params;
 
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('contas_a_pagar')
             .delete()
             .eq('id', contaId)
+            .eq('mercearia_id', req.user.mercearia_id)
             .eq('status', 'pendente')
             .select()
             .single();
@@ -413,7 +419,7 @@ router.put('/:contaId',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const supabase = req.supabase;
+    const supabaseAdmin = require('../db/supabaseAdmin');
     const { contaId } = req.params;
     const { descricao, valor, data_vencimento } = req.body;
 
@@ -423,7 +429,7 @@ router.put('/:contaId',
 
     try {
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('contas_a_pagar')
             .update({
                 descricao,
@@ -431,6 +437,7 @@ router.put('/:contaId',
                 data_vencimento
             })
             .eq('id', contaId)
+            .eq('mercearia_id', req.user.mercearia_id)
             .eq('status', 'pendente')
             .select()
             .single();
