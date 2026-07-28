@@ -144,23 +144,27 @@ router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async 
       });
     }
 
-    // Data de vencimento das compras a prazo — vem da conta a pagar
-    // vinculada, buscada em lote pelos conta_a_pagar_id já coletados
+    // Data de vencimento e status das compras a prazo — vem da conta a
+    // pagar vinculada, buscada em lote pelos conta_a_pagar_id já coletados
     const contaIds = (compras || []).map(c => c.conta_a_pagar_id).filter(Boolean);
-    const vencimentoPorConta = {};
+    const contaPorId = {};
     if (contaIds.length > 0) {
       const { data: contasPagar } = await db
         .from('contas_a_pagar')
-        .select('id, data_vencimento')
+        .select('id, data_vencimento, status')
         .in('id', contaIds);
-      (contasPagar || []).forEach(c => { vencimentoPorConta[c.id] = c.data_vencimento; });
+      (contasPagar || []).forEach(c => { contaPorId[c.id] = c; });
     }
 
-    const comprasComItens = (compras || []).map(c => ({
-      ...c,
-      itens: itensPorCompra[c.id] || [],
-      data_vencimento_prazo: c.conta_a_pagar_id ? (vencimentoPorConta[c.conta_a_pagar_id] || null) : null,
-    }));
+    const comprasComItens = (compras || []).map(c => {
+      const conta = c.conta_a_pagar_id ? contaPorId[c.conta_a_pagar_id] : null;
+      return {
+        ...c,
+        itens: itensPorCompra[c.id] || [],
+        data_vencimento_prazo: conta?.data_vencimento || null,
+        status_conta_pagar:    conta?.status || null,
+      };
+    });
 
     // Produtos fornecidos + último preço de custo pago e quantidade da
     // última compra, derivados dos itens
