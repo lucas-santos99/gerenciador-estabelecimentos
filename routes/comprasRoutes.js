@@ -258,7 +258,7 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req
           .from('contas_a_pagar')
           .insert({
             mercearia_id:    mid,
-            descricao:       `Compra — ${fornecedor.nome}${numero_nota ? ` (Nota ${numero_nota})` : ''}`,
+            descricao:       `Compra de fornecedor — ${fornecedor.nome}${numero_nota ? ` (Nota ${numero_nota})` : ''}`,
             valor:           valorTotal,
             data_vencimento: data_vencimento,
             status:          'pendente',
