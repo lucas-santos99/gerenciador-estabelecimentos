@@ -24,17 +24,38 @@ router.get('/',
     const supabaseAdmin = require('../db/supabaseAdmin');
     const { status } = req.query;
 
+    // "Hoje" no horário de Brasília (UTC-3) — o servidor roda em UTC,
+    // então sem isso, a partir das 21h locais o servidor já "pensa"
+    // que é o dia seguinte e marca contas como atrasadas antes da hora.
+    const hojeBR = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];
+
     try {
+
+        // Contas ligadas a compras de fornecedor ficam de fora daqui —
+        // elas têm visão própria agora, dentro do módulo Fornecedores
+        // (GET /api/compras/contas-a-pagar). Aqui só sobra despesa "de
+        // verdade" (água, luz, aluguel, etc.), que é o que realmente
+        // desconta do Lucro Líquido no DRE.
+        const { data: comprasComConta } = await supabaseAdmin
+            .from('compras')
+            .select('conta_a_pagar_id')
+            .eq('mercearia_id', req.user.mercearia_id)
+            .not('conta_a_pagar_id', 'is', null);
+        const idsFornecedor = (comprasComConta || []).map(c => c.conta_a_pagar_id);
 
         let query = supabaseAdmin
             .from('contas_a_pagar')
             .select('*')
             .eq('mercearia_id', req.user.mercearia_id);
 
+        if (idsFornecedor.length > 0) {
+            query = query.not('id', 'in', `(${idsFornecedor.join(',')})`);
+        }
+
         if (status === 'pendente') {
             query = query
                 .eq('status', 'pendente')
-                .gte('data_vencimento', new Date().toISOString());
+                .gte('data_vencimento', hojeBR);
         }
 
         else if (status === 'paga') {
@@ -44,7 +65,7 @@ router.get('/',
         else if (status === 'atrasada') {
             query = query
                 .eq('status', 'pendente')
-                .lt('data_vencimento', new Date().toISOString());
+                .lt('data_vencimento', hojeBR);
         }
 
         query = query.order('data_vencimento', { ascending: true });
@@ -54,7 +75,7 @@ router.get('/',
         if (error) throw error;
 
         const contas = data.map(c => {
-            if (c.status === 'pendente' && new Date(c.data_vencimento) < new Date()) {
+            if (c.status === 'pendente' && c.data_vencimento < hojeBR) {
                 return { ...c, status: 'atrasada' };
             }
             return c;

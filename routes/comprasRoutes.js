@@ -68,6 +68,75 @@ router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req,
 });
 
 /* ════════════════════════════════════════════════════════════
+   CONTAS A PAGAR DE FORNECEDORES — visão agregada, todos os
+   fornecedores juntos (não filtrado por um fornecedor específico)
+   GET /api/compras/contas-a-pagar?status=pendente|paga|atrasada
+   ⚠️ Precisa vir ANTES de /:id, senão o Express trata
+   "contas-a-pagar" como valor do parâmetro :id.
+════════════════════════════════════════════════════════════ */
+router.get('/contas-a-pagar', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
+  const mid = mercearia(req);
+  const { status } = req.query; // 'pendente' | 'paga' | 'atrasada' — sem isso, traz tudo
+
+  try {
+    const { data: compras, error } = await db
+      .from('compras')
+      .select('id, numero_nota, data_compra, valor_total, conta_a_pagar_id, fornecedor_id, fornecedores(nome, telefone, email)')
+      .eq('mercearia_id', mid)
+      .eq('forma_pagamento', 'a_prazo')
+      .eq('status', 'ativa')
+      .not('conta_a_pagar_id', 'is', null)
+      .order('data_compra', { ascending: false });
+
+    if (error) throw error;
+
+    const contaIds = (compras || []).map(c => c.conta_a_pagar_id);
+    const contasPorId = {};
+    if (contaIds.length > 0) {
+      const { data: contas } = await db
+        .from('contas_a_pagar')
+        .select('id, data_vencimento, status, data_pagamento')
+        .in('id', contaIds);
+      (contas || []).forEach(c => { contasPorId[c.id] = c; });
+    }
+
+    // "Hoje" em Brasília (UTC-3) — mesma lógica do financeiroRoutes.js,
+    // pra marcar como atrasada só depois da meia-noite local de verdade,
+    // não da meia-noite UTC do servidor.
+    const hojeBR = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    let resultado = (compras || []).map(c => {
+      const conta = contasPorId[c.conta_a_pagar_id] || {};
+      let statusFinal = conta.status || 'pendente';
+      if (statusFinal === 'pendente' && conta.data_vencimento && conta.data_vencimento < hojeBR) {
+        statusFinal = 'atrasada';
+      }
+      return {
+        compra_id:           c.id,
+        conta_a_pagar_id:    c.conta_a_pagar_id,
+        numero_nota:         c.numero_nota,
+        data_compra:         c.data_compra,
+        valor:               c.valor_total,
+        data_vencimento:     conta.data_vencimento || null,
+        data_pagamento:      conta.data_pagamento || null,
+        status:              statusFinal,
+        fornecedor_id:       c.fornecedor_id,
+        fornecedor_nome:     c.fornecedores?.nome || null,
+        fornecedor_telefone: c.fornecedores?.telefone || null,
+      };
+    });
+
+    if (status) resultado = resultado.filter(r => r.status === status);
+    resultado.sort((a, b) => (a.data_vencimento || '9999-99-99').localeCompare(b.data_vencimento || '9999-99-99'));
+
+    res.json(resultado);
+  } catch (err) {
+    console.error('[COMPRAS] Erro listar contas a pagar de fornecedores:', err.message);
+    res.status(500).json({ error: 'Erro ao buscar contas a pagar de fornecedores' });
+  }
+});
+
+/* ════════════════════════════════════════════════════════════
    2. DETALHES DE UMA COMPRA (com itens) — GET /api/compras/:id
 ════════════════════════════════════════════════════════════ */
 router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
