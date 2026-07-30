@@ -12,6 +12,23 @@ const { registrar } = require('./auditoriaRoutes');
 
 router.use(authUser);
 
+// ── Helper: Fiado é opcional por estabelecimento agora. Mesmo que o
+// frontend já esconda a interface quando desativado, as rotas
+// específicas de fiado (não o cadastro de cliente em si, que é
+// universal) checam de novo aqui — nunca confiar só na tela escondida.
+async function garantirFiadoAtivo(req, res) {
+  const { data, error } = await supabaseAdmin
+    .from('mercearias')
+    .select('fiado_ativo')
+    .eq('id', req.user.mercearia_id)
+    .single();
+  if (error || data?.fiado_ativo === false) {
+    res.status(403).json({ error: 'O módulo de Fiado está desativado para este estabelecimento.' });
+    return false;
+  }
+  return true;
+}
+
 
 // ============================================================
 // 1) BUSCAR CLIENTES POR TERMO (PDV / BUSCA RÁPIDA)
@@ -26,12 +43,22 @@ router.get('/buscar', async (req, res) => {
 
     try {
 
-        const { data, error } = await supabaseAdmin
+        // Busca por nome, telefone, CPF (com ou sem pontuação) ou pelo
+        // código curto do cliente (ex: digitou "42" → acha o #42)
+        const termoLimpo = termo.replace(/\D/g, '');
+        let query = supabaseAdmin
             .from('clientes')
-            .select('id, nome, telefone, saldo_devedor, limite_credito')
-            .eq('mercearia_id', req.user.mercearia_id)
-            .or(`nome.ilike.${termo}%,telefone.ilike.${termo}%`)
-            .limit(10);
+            .select('id, nome, telefone, cpf, codigo_cliente, saldo_devedor, limite_credito')
+            .eq('mercearia_id', req.user.mercearia_id);
+
+        const filtros = [`nome.ilike.${termo}%`, `telefone.ilike.${termo}%`];
+        if (termoLimpo) {
+            filtros.push(`cpf.ilike.%${termoLimpo}%`);
+            if (/^\d+$/.test(termoLimpo)) filtros.push(`codigo_cliente.eq.${termoLimpo}`);
+        }
+        query = query.or(filtros.join(',')).limit(10);
+
+        const { data, error } = await query;
 
         if (error) throw error;
 
@@ -57,7 +84,7 @@ router.get('/', async (req, res) => {
 
         const { data, error } = await supabaseAdmin
             .from('clientes')
-            .select('id, nome, telefone, saldo_devedor, limite_credito, data_vencimento')
+            .select('id, nome, telefone, cpf, codigo_cliente, saldo_devedor, limite_credito, data_vencimento')
             .eq('mercearia_id', req.user.mercearia_id)
             .order('nome', { ascending: true });
 
@@ -80,6 +107,8 @@ router.get('/', async (req, res) => {
 // ============================================================
 
 router.get('/dividas', async (req, res) => {
+
+    if (!(await garantirFiadoAtivo(req, res))) return;
 
     try {
 
@@ -110,7 +139,7 @@ router.get('/dividas', async (req, res) => {
 
 router.post('/criar', async (req, res) => {
 
-    const { nome, telefone, limiteCredito, dataVencimento } = req.body;
+    const { nome, telefone, cpf, limiteCredito, dataVencimento } = req.body;
 
     if (!nome)
         return res.status(400).json({ error: 'Nome é obrigatório.' });
@@ -122,6 +151,7 @@ router.post('/criar', async (req, res) => {
             .insert({
                 nome,
                 telefone:        telefone || null,
+                cpf:             (cpf || '').replace(/\D/g, '') || null,
                 mercearia_id:    req.user.mercearia_id,
                 limite_credito:  parseFloat(limiteCredito) || 0,
                 data_vencimento: dataVencimento || null,
@@ -149,6 +179,55 @@ router.post('/criar', async (req, res) => {
         console.error('[ERRO] Criar cliente:', error.message);
 
         res.status(500).json({ error: 'Erro ao criar cliente.' });
+
+    }
+
+});
+
+
+// ============================================================
+// 5c) HISTÓRICO GERAL DE COMPRAS DO CLIENTE (qualquer forma de
+//     pagamento — não só fiado. Útil pra cliente que nunca usa
+//     fiado mas foi identificado na venda, ex: por CPF/código)
+// ============================================================
+
+router.get('/:clienteId/historico-compras', async (req, res) => {
+
+    const { clienteId } = req.params;
+
+    try {
+
+        const { data: vendas, error } = await supabaseAdmin
+            .from('vendas')
+            .select('id, data_venda, valor_total, meio_pagamento')
+            .eq('cliente_id', clienteId)
+            .eq('mercearia_id', req.user.mercearia_id)
+            .order('data_venda', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
+
+        const vendaIds = (vendas || []).map(v => v.id);
+        const itensPorVenda = {};
+        if (vendaIds.length > 0) {
+            const { data: itens } = await supabaseAdmin
+                .from('itens_venda')
+                .select('venda_id, produto_nome, quantidade, preco_unitario, unidade_medida')
+                .in('venda_id', vendaIds);
+            (itens || []).forEach(i => {
+                if (!itensPorVenda[i.venda_id]) itensPorVenda[i.venda_id] = [];
+                itensPorVenda[i.venda_id].push(i);
+            });
+        }
+
+        const resultado = (vendas || []).map(v => ({ ...v, itens: itensPorVenda[v.id] || [] }));
+
+        res.status(200).json(resultado);
+
+    } catch (error) {
+
+        console.error('[ERRO] Histórico de compras cliente:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar histórico de compras.' });
 
     }
 
@@ -191,6 +270,8 @@ router.get('/:clienteId/pagamentos', async (req, res) => {
 // ============================================================
 
 router.get('/:clienteId/itens-fiado', async (req, res) => {
+
+    if (!(await garantirFiadoAtivo(req, res))) return;
 
     const { clienteId } = req.params;
 
@@ -243,6 +324,8 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 // ============================================================
 
 router.post('/pagar-venda', async (req, res) => {
+
+    if (!(await garantirFiadoAtivo(req, res))) return;
 
     const { vendaId, clienteId, meioPagamento } = req.body;
 
@@ -299,6 +382,8 @@ router.post('/pagar-venda', async (req, res) => {
 
 router.post('/liquidar', async (req, res) => {
 
+    if (!(await garantirFiadoAtivo(req, res))) return;
+
     const { clienteId, valorPago, meioPagamento } = req.body;
 
     if (!clienteId || !valorPago || !meioPagamento)
@@ -354,7 +439,7 @@ router.post('/liquidar', async (req, res) => {
 router.put('/atualizar/:clienteId', async (req, res) => {
 
     const { clienteId } = req.params;
-    const { nome, telefone, limiteCredito, dataVencimento } = req.body;
+    const { nome, telefone, cpf, limiteCredito, dataVencimento } = req.body;
 
     if (!nome)
         return res.status(400).json({ error: 'Nome é obrigatório.' });
@@ -366,6 +451,7 @@ router.put('/atualizar/:clienteId', async (req, res) => {
             .update({
                 nome,
                 telefone:        telefone || null,
+                cpf:             (cpf || '').replace(/\D/g, '') || null,
                 limite_credito:  parseFloat(limiteCredito) || 0,
                 data_vencimento: dataVencimento || null
             })

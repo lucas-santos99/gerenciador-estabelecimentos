@@ -10,7 +10,7 @@ router.use(authUser);
 // ============================================================
 
 router.post('/finalizar', async (req, res) => {
-  const { valor_total, meio_pagamento, carrinho, clienteId } = req.body;
+  const { valor_total, meio_pagamento, carrinho, clienteId, cpfNota } = req.body;
   const totalVendaFloat = parseFloat(valor_total);
 
   if (isNaN(totalVendaFloat) || totalVendaFloat <= 0 || !meio_pagamento || !carrinho?.length) {
@@ -27,6 +27,10 @@ router.post('/finalizar', async (req, res) => {
   const operadorId = role === 'operator' ? userId : null;
 
   try {
+    // clienteId vai direto pra função em qualquer forma de pagamento —
+    // ela já só mexe em saldo_devedor quando meio_pagamento = 'Fiado'
+    // (confirmado lendo o código-fonte da função no Supabase), então
+    // não tem risco de criar dívida fantasma numa venda paga na hora.
     const { data: vendaId, error } = await db.rpc('finalizar_venda', {
       p_valor_total:    totalVendaFloat,
       p_meio_pagamento: meio_pagamento,
@@ -41,9 +45,14 @@ router.post('/finalizar', async (req, res) => {
       throw error;
     }
 
-    // Atualizar operador_id na venda (a RPC pode não fazer isso)
-    if (operadorId && vendaId) {
-      await db.from('vendas').update({ operador_id: operadorId }).eq('id', vendaId);
+    // A função não grava operador_id nem cpf_nota (esse último nem
+    // existia quando ela foi escrita) — completa isso aqui.
+    const updatesPosVenda = {};
+    if (operadorId) updatesPosVenda.operador_id = operadorId;
+    if (cpfNota) updatesPosVenda.cpf_nota = String(cpfNota).replace(/\D/g, '') || null;
+
+    if (Object.keys(updatesPosVenda).length > 0 && vendaId) {
+      await db.from('vendas').update(updatesPosVenda).eq('id', vendaId);
     }
 
     // Registrar na auditoria
@@ -56,7 +65,7 @@ router.post('/finalizar', async (req, res) => {
       usuario_email: req.user.email,
       modulo:       'pdv',
       acao:         'venda_realizada',
-      descricao:    `Venda de ${totalVendaFloat.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} — ${meioLabel}${clienteId ? ' (Fiado)' : ''}`,
+      descricao:    `Venda de ${totalVendaFloat.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} — ${meioLabel}${clienteId ? (meio_pagamento === 'Fiado' ? ' (Fiado)' : ' (cliente identificado)') : ''}`,
       meta:         { venda_id: vendaId, valor: totalVendaFloat, meio_pagamento, itens: carrinho.length },
     });
 
