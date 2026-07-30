@@ -14,30 +14,6 @@ console.log('🔥 CLIENTES ROUTES ATUALIZADO 🔥');
 
 router.use(authUser);
 
-// ── Helper: Fiado é opcional por estabelecimento agora. Mesmo que o
-// frontend já esconda a interface quando desativado, as rotas
-// específicas de fiado (não o cadastro de cliente em si, que é
-// universal) checam de novo aqui — nunca confiar só na tela escondida.
-async function garantirFiadoAtivo(req, res) {
-  const { data, error } = await supabaseAdmin
-    .from('mercearias')
-    .select('fiado_ativo')
-    .eq('id', req.user.mercearia_id)
-    .single();
-  if (error) {
-    // Erro de consulta (ex: coluna ainda não existe se a migração não
-    // rodou) NÃO deve ser tratado como "fiado desligado" — isso bloquearia
-    // todo mundo por um problema de infraestrutura. Nesse caso libera
-    // (comportamento padrão é fiado ativo).
-    console.error('[AVISO] Checar fiado_ativo falhou, liberando por padrão:', error.message);
-    return true;
-  }
-  if (data?.fiado_ativo === false) {
-    res.status(403).json({ error: 'O módulo de Fiado está desativado para este estabelecimento.' });
-    return false;
-  }
-  return true;
-}
 
 
 // ============================================================
@@ -58,7 +34,7 @@ router.get('/buscar', async (req, res) => {
         const termoLimpo = termo.replace(/\D/g, '');
         let query = supabaseAdmin
             .from('clientes')
-            .select('id, nome, telefone, cpf, codigo_cliente, saldo_devedor, limite_credito')
+            .select('id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito')
             .eq('mercearia_id', req.user.mercearia_id);
 
         const filtros = [`nome.ilike.${termo}%`, `telefone.ilike.${termo}%`];
@@ -94,7 +70,7 @@ router.get('/', async (req, res) => {
 
         const { data, error } = await supabaseAdmin
             .from('clientes')
-            .select('id, nome, telefone, cpf, codigo_cliente, saldo_devedor, limite_credito, data_vencimento')
+            .select('id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento')
             .eq('mercearia_id', req.user.mercearia_id)
             .order('nome', { ascending: true });
 
@@ -117,8 +93,6 @@ router.get('/', async (req, res) => {
 // ============================================================
 
 router.get('/dividas', async (req, res) => {
-
-    if (!(await garantirFiadoAtivo(req, res))) return;
 
     try {
 
@@ -149,7 +123,7 @@ router.get('/dividas', async (req, res) => {
 
 router.post('/criar', async (req, res) => {
 
-    const { nome, telefone, cpf, limiteCredito, dataVencimento } = req.body;
+    const { nome, telefone, cpf, permiteFiado, limiteCredito, dataVencimento } = req.body;
 
     if (!nome)
         return res.status(400).json({ error: 'Nome é obrigatório.' });
@@ -162,6 +136,7 @@ router.post('/criar', async (req, res) => {
                 nome,
                 telefone:        telefone || null,
                 cpf:             (cpf || '').replace(/\D/g, '') || null,
+                permite_fiado:   permiteFiado !== false,
                 mercearia_id:    req.user.mercearia_id,
                 limite_credito:  parseFloat(limiteCredito) || 0,
                 data_vencimento: dataVencimento || null,
@@ -281,8 +256,6 @@ router.get('/:clienteId/pagamentos', async (req, res) => {
 
 router.get('/:clienteId/itens-fiado', async (req, res) => {
 
-    if (!(await garantirFiadoAtivo(req, res))) return;
-
     const { clienteId } = req.params;
 
     try {
@@ -334,8 +307,6 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 // ============================================================
 
 router.post('/pagar-venda', async (req, res) => {
-
-    if (!(await garantirFiadoAtivo(req, res))) return;
 
     const { vendaId, clienteId, meioPagamento } = req.body;
 
@@ -392,8 +363,6 @@ router.post('/pagar-venda', async (req, res) => {
 
 router.post('/liquidar', async (req, res) => {
 
-    if (!(await garantirFiadoAtivo(req, res))) return;
-
     const { clienteId, valorPago, meioPagamento } = req.body;
 
     if (!clienteId || !valorPago || !meioPagamento)
@@ -449,7 +418,7 @@ router.post('/liquidar', async (req, res) => {
 router.put('/atualizar/:clienteId', async (req, res) => {
 
     const { clienteId } = req.params;
-    const { nome, telefone, cpf, limiteCredito, dataVencimento } = req.body;
+    const { nome, telefone, cpf, permiteFiado, limiteCredito, dataVencimento } = req.body;
 
     if (!nome)
         return res.status(400).json({ error: 'Nome é obrigatório.' });
@@ -462,6 +431,7 @@ router.put('/atualizar/:clienteId', async (req, res) => {
                 nome,
                 telefone:        telefone || null,
                 cpf:             (cpf || '').replace(/\D/g, '') || null,
+                permite_fiado:   permiteFiado !== false,
                 limite_credito:  parseFloat(limiteCredito) || 0,
                 data_vencimento: dataVencimento || null
             })

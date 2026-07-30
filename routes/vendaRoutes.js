@@ -23,6 +23,31 @@ router.post('/finalizar', async (req, res) => {
 
   const { id: userId, role, mercearia_id } = req.user;
 
+  // Fiado é opcional por estabelecimento agora — esse é o único lugar
+  // onde isso deveria bloquear alguma coisa (criar venda fiado NOVA).
+  // Cobrar dívida antiga continua liberado em qualquer configuração,
+  // então não checamos isso em nenhuma outra rota.
+  if (meio_pagamento === 'Fiado') {
+    const { data: merc } = await db
+      .from('mercearias')
+      .select('fiado_ativo')
+      .eq('id', mercearia_id)
+      .single();
+    if (merc?.fiado_ativo === false) {
+      return res.status(403).json({ error: 'O módulo de Fiado está desativado para este estabelecimento.' });
+    }
+
+    const { data: cli } = await db
+      .from('clientes')
+      .select('permite_fiado')
+      .eq('id', clienteId)
+      .eq('mercearia_id', mercearia_id)
+      .single();
+    if (cli?.permite_fiado === false) {
+      return res.status(403).json({ error: 'Esse cliente não está habilitado para comprar fiado.' });
+    }
+  }
+
   // operador_id: só preenche se for operador, merchant deixa null
   const operadorId = role === 'operator' ? userId : null;
 
