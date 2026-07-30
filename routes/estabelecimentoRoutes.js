@@ -622,6 +622,7 @@ router.put('/dados/:id', async (req, res) => {
     const {
       nome_fantasia, telefone, endereco_completo, logo_url,
       pix_chave, pix_tipo_chave, pix_cidade, pix_modo,
+      fiado_ativo,
     } = req.body;
 
     const updateData = { nome_fantasia, telefone, endereco_completo, logo_url };
@@ -638,6 +639,9 @@ router.put('/dados/:id', async (req, res) => {
       }
       updateData.pix_modo = pix_modo;
     }
+    // Liga/desliga o módulo de Fiado — mesmo princípio: só mexe se vier
+    // explicitamente no corpo da requisição.
+    if (fiado_ativo !== undefined) updateData.fiado_ativo = !!fiado_ativo;
 
     const { data, error } = await db
       .from('mercearias')
