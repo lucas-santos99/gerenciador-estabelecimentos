@@ -10,6 +10,8 @@ const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 
+console.log('🔥 CLIENTES ROUTES ATUALIZADO 🔥');
+
 router.use(authUser);
 
 // ── Helper: Fiado é opcional por estabelecimento agora. Mesmo que o
@@ -22,7 +24,15 @@ async function garantirFiadoAtivo(req, res) {
     .select('fiado_ativo')
     .eq('id', req.user.mercearia_id)
     .single();
-  if (error || data?.fiado_ativo === false) {
+  if (error) {
+    // Erro de consulta (ex: coluna ainda não existe se a migração não
+    // rodou) NÃO deve ser tratado como "fiado desligado" — isso bloquearia
+    // todo mundo por um problema de infraestrutura. Nesse caso libera
+    // (comportamento padrão é fiado ativo).
+    console.error('[AVISO] Checar fiado_ativo falhou, liberando por padrão:', error.message);
+    return true;
+  }
+  if (data?.fiado_ativo === false) {
     res.status(403).json({ error: 'O módulo de Fiado está desativado para este estabelecimento.' });
     return false;
   }
