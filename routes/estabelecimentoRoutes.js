@@ -625,6 +625,15 @@ router.put('/dados/:id', async (req, res) => {
       fiado_ativo,
     } = req.body;
 
+    // Busca os dados atuais ANTES de atualizar, pra comparar depois e
+    // saber exatamente o que mudou (a auditoria genérica "dados
+    // atualizados" não dizia nada de útil)
+    const { data: antes } = await db
+      .from('mercearias')
+      .select('nome_fantasia, telefone, endereco_completo, logo_url, pix_chave, pix_tipo_chave, pix_cidade, pix_modo, fiado_ativo')
+      .eq('id', mercearia_id)
+      .single();
+
     const updateData = { nome_fantasia, telefone, endereco_completo, logo_url };
 
     // Campos de Pix só entram no update se vierem no corpo da requisição —
@@ -660,14 +669,43 @@ router.put('/dados/:id', async (req, res) => {
         .eq('id', user.id);
     }
 
+    // Monta a descrição específica do que mudou, comparando com o que
+    // tinha antes — em vez do genérico "dados atualizados" de sempre
+    const mudancas = [];
+    if (updateData.nome_fantasia !== undefined && updateData.nome_fantasia !== antes?.nome_fantasia) {
+      mudancas.push(`Nome fantasia → "${updateData.nome_fantasia}"`);
+    }
+    if (updateData.telefone !== undefined && updateData.telefone !== antes?.telefone) {
+      mudancas.push(`Telefone → ${updateData.telefone || '(vazio)'}`);
+    }
+    if (updateData.endereco_completo !== undefined && updateData.endereco_completo !== antes?.endereco_completo) {
+      mudancas.push('Endereço alterado');
+    }
+    if (updateData.logo_url !== undefined && updateData.logo_url !== antes?.logo_url) {
+      mudancas.push('Logo alterada');
+    }
+    const pixMudou =
+      (updateData.pix_chave      !== undefined && updateData.pix_chave      !== antes?.pix_chave) ||
+      (updateData.pix_tipo_chave !== undefined && updateData.pix_tipo_chave !== antes?.pix_tipo_chave) ||
+      (updateData.pix_cidade     !== undefined && updateData.pix_cidade     !== antes?.pix_cidade) ||
+      (updateData.pix_modo       !== undefined && updateData.pix_modo       !== antes?.pix_modo);
+    if (pixMudou) mudancas.push('Configuração de Pix alterada');
+    if (updateData.fiado_ativo !== undefined && updateData.fiado_ativo !== antes?.fiado_ativo) {
+      mudancas.push(updateData.fiado_ativo ? 'Fiado ativado' : 'Fiado desativado');
+    }
+
+    const descricao = mudancas.length > 0
+      ? mudancas.join(' · ')
+      : 'Dados do estabelecimento atualizados (nenhum campo mudou de valor)';
+
     registrar({
       mercearia_id,
       operador_id:  null,
       usuario_nome: user.nome || user.email,
       usuario_email: user.email,
       modulo: 'configuracoes', acao: 'config_atualizada',
-      descricao: `Dados do estabelecimento atualizados`,
-      meta: { campos: Object.keys(req.body) },
+      descricao,
+      meta: { campos: Object.keys(req.body), antes, depois: updateData },
     });
 
     res.json({ success: true, mercearia: data });

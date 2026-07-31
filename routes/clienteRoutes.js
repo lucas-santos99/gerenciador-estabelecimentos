@@ -184,7 +184,7 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
 
         const { data: vendas, error } = await supabaseAdmin
             .from('vendas')
-            .select('id, data_venda, valor_total, meio_pagamento')
+            .select('id, data_venda, valor_total, meio_pagamento, status, motivo_cancelamento')
             .eq('cliente_id', clienteId)
             .eq('mercearia_id', req.user.mercearia_id)
             .order('data_venda', { ascending: false })
@@ -192,20 +192,23 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
 
         if (error) throw error;
 
-        const vendaIds = (vendas || []).map(v => v.id);
-        const itensPorVenda = {};
-        if (vendaIds.length > 0) {
+        const resultado = await Promise.all((vendas || []).map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
-                .select('venda_id, produto_nome, quantidade, preco_unitario, unidade_medida')
-                .in('venda_id', vendaIds);
-            (itens || []).forEach(i => {
-                if (!itensPorVenda[i.venda_id]) itensPorVenda[i.venda_id] = [];
-                itensPorVenda[i.venda_id].push(i);
-            });
-        }
+                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida )')
+                .eq('venda_id', venda.id);
 
-        const resultado = (vendas || []).map(v => ({ ...v, itens: itensPorVenda[v.id] || [] }));
+            return {
+                ...venda,
+                itens: (itens || []).map(i => ({
+                    produto_nome:   i.produtos?.nome || 'Produto',
+                    produto_marca:  i.produtos?.marca || null,
+                    quantidade:     i.quantidade,
+                    preco_unitario: i.preco_unitario,
+                    unidade_medida: i.produtos?.unidade_medida || 'un',
+                })),
+            };
+        }));
 
         res.status(200).json(resultado);
 
