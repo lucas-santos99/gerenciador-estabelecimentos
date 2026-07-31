@@ -3,6 +3,8 @@ const router  = express.Router();
 const db      = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 
+console.log('🔥 VENDAS ROUTES ATUALIZADO 🔥');
+
 router.use(authUser);
 
 // ============================================================
@@ -100,6 +102,116 @@ router.post('/finalizar', async (req, res) => {
   } catch (err) {
     console.error('[ERRO CRÍTICO] Falha ao finalizar venda:', err.message);
     res.status(500).json({ error: 'Erro ao processar a venda. O estoque não foi alterado.' });
+  }
+});
+
+// ============================================================
+// CANCELAR VENDA
+// ============================================================
+// Estorna o estoque dos itens vendidos, estorna a entrada no caixa
+// (Dinheiro/Pix/Cartão) ou a dívida no cliente (Fiado), e marca a
+// venda como cancelada. Não apaga nada — a venda continua no
+// histórico, só marcada, pra manter rastro do que aconteceu.
+
+router.post('/:id/cancelar', async (req, res) => {
+  const { id } = req.params;
+  const { motivo } = req.body;
+  const { id: userId, role, mercearia_id, permissoes = [] } = req.user;
+
+  // Merchant sempre pode. Operador só com a permissão específica —
+  // cancelar venda é uma ação sensível (mexe em estoque e caixa).
+  if (role === 'operator' && !permissoes.includes('pdv_cancelar_venda')) {
+    return res.status(403).json({ error: 'Sem permissão para cancelar vendas.' });
+  }
+
+  try {
+    const { data: venda, error: errVenda } = await db
+      .from('vendas')
+      .select('id, mercearia_id, cliente_id, valor_total, meio_pagamento, status')
+      .eq('id', id)
+      .eq('mercearia_id', mercearia_id)
+      .single();
+
+    if (errVenda || !venda) return res.status(404).json({ error: 'Venda não encontrada.' });
+    if (venda.status === 'cancelada') return res.status(400).json({ error: 'Essa venda já está cancelada.' });
+
+    // Se já teve algum pagamento registrado em cima dessa venda depois
+    // de finalizada (ex: fiado que já foi parcialmente quitado), não
+    // cancela automático — evita bagunçar o saldo do cliente sem
+    // saber ao certo o que já foi pago. Pede pra resolver manualmente.
+    const { data: pagamentosLigados } = await db
+      .from('transacoes_caixa')
+      .select('id')
+      .eq('venda_id', id)
+      .eq('tipo', 'entrada')
+      .neq('descricao', 'Venda PDV');
+    if (pagamentosLigados && pagamentosLigados.length > 0) {
+      return res.status(400).json({
+        error: 'Essa venda já teve pagamento registrado depois de finalizada (ex: fiado parcialmente quitado). Cancele manualmente com o suporte pra não bagunçar o saldo do cliente.',
+      });
+    }
+
+    // 1) Estorna o estoque de cada item vendido
+    const { data: itens } = await db
+      .from('itens_venda')
+      .select('produto_id, quantidade')
+      .eq('venda_id', id);
+
+    for (const item of itens || []) {
+      const { data: produto } = await db
+        .from('produtos')
+        .select('estoque_atual')
+        .eq('id', item.produto_id)
+        .single();
+      if (produto) {
+        await db.from('produtos')
+          .update({ estoque_atual: parseFloat(produto.estoque_atual || 0) + parseFloat(item.quantidade) })
+          .eq('id', item.produto_id);
+      }
+    }
+
+    // 2) Estorna o dinheiro — se foi fiado, tira do saldo devedor do
+    // cliente; se não, remove a entrada que tinha sido lançada no caixa
+    if (venda.meio_pagamento === 'Fiado' && venda.cliente_id) {
+      const { data: cliente } = await db
+        .from('clientes')
+        .select('saldo_devedor')
+        .eq('id', venda.cliente_id)
+        .single();
+      if (cliente) {
+        const novoSaldo = Math.max(0, parseFloat(cliente.saldo_devedor || 0) - parseFloat(venda.valor_total));
+        await db.from('clientes').update({ saldo_devedor: novoSaldo }).eq('id', venda.cliente_id);
+      }
+    } else {
+      await db.from('transacoes_caixa').delete().eq('venda_id', id);
+    }
+
+    // 3) Marca a venda como cancelada (não apaga, mantém rastro)
+    await db.from('vendas').update({
+      status:               'cancelada',
+      cancelada_em:         new Date().toISOString(),
+      motivo_cancelamento:  motivo || null,
+    }).eq('id', id);
+
+    // 4) Auditoria
+    const meioLabel = { Dinheiro:'Dinheiro', Pix:'Pix', Debito:'Débito', Credito:'Crédito', Fiado:'Fiado' }[venda.meio_pagamento] || venda.meio_pagamento;
+    await db.from('auditoria').insert({
+      mercearia_id,
+      operador_id:  role === 'operator' ? userId : null,
+      usuario_nome: req.user.nome || req.user.email,
+      usuario_email: req.user.email,
+      modulo:       'pdv',
+      acao:         'venda_cancelada',
+      descricao:    `Venda de ${parseFloat(venda.valor_total).toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} (${meioLabel}) cancelada${motivo ? ` — ${motivo}` : ''}`,
+      meta:         { venda_id: id, valor: venda.valor_total, meio_pagamento: venda.meio_pagamento, motivo: motivo || null },
+    });
+
+    console.log(`[INFO] Venda cancelada. ID: ${id}`);
+    res.status(200).json({ message: 'Venda cancelada com sucesso.' });
+
+  } catch (err) {
+    console.error('[ERRO CRÍTICO] Falha ao cancelar venda:', err.message);
+    res.status(500).json({ error: 'Erro ao cancelar venda.' });
   }
 });
 
