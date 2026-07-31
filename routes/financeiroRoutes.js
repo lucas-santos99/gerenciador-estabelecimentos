@@ -288,6 +288,7 @@ router.get('/historico',
                 valor_total,
                 meio_pagamento,
                 status,
+                motivo_cancelamento,
                 operador_id,
                 clientes ( nome )
             `)
