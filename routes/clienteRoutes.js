@@ -184,13 +184,35 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
 
         const { data: vendas, error } = await supabaseAdmin
             .from('vendas')
-            .select('id, data_venda, valor_total, meio_pagamento, status, motivo_cancelamento')
+            .select('id, data_venda, valor_total, meio_pagamento, status, motivo_cancelamento, operador_id')
             .eq('cliente_id', clienteId)
             .eq('mercearia_id', req.user.mercearia_id)
             .order('data_venda', { ascending: false })
-            .limit(100);
+            .limit(200);
 
         if (error) throw error;
+
+        // Nome de quem vendeu — mesmo padrão usado no histórico geral
+        // do Financeiro, pra ficar consistente em todo o sistema
+        const operadorIds = [...new Set((vendas || []).map(v => v.operador_id).filter(Boolean))];
+        let operadoresMap = {};
+        if (operadorIds.length > 0) {
+            const { data: ops } = await supabaseAdmin
+                .from('operadores')
+                .select('id, nome')
+                .in('id', operadorIds)
+                .eq('mercearia_id', req.user.mercearia_id);
+            (ops || []).forEach(op => { operadoresMap[op.id] = op.nome; });
+        }
+        let nomeMerchant = 'Administrador';
+        if ((vendas || []).some(v => !v.operador_id)) {
+            const { data: m } = await supabaseAdmin
+                .from('mercearias')
+                .select('nome_fantasia')
+                .eq('id', req.user.mercearia_id)
+                .single();
+            if (m?.nome_fantasia) nomeMerchant = m.nome_fantasia;
+        }
 
         const resultado = await Promise.all((vendas || []).map(async (venda) => {
             const { data: itens } = await supabaseAdmin
@@ -200,6 +222,9 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
 
             return {
                 ...venda,
+                operador_nome: venda.operador_id
+                                   ? (operadoresMap[venda.operador_id] || 'Operador removido')
+                                   : nomeMerchant,
                 itens: (itens || []).map(i => ({
                     produto_nome:   i.produtos?.nome || 'Produto',
                     produto_marca:  i.produtos?.marca || null,
