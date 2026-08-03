@@ -85,7 +85,7 @@ router.post('/finalizar', async (req, res) => {
     // Registrar na auditoria
     const nomeUsuario = req.user.email;
     const meioLabel = { Dinheiro:'Dinheiro', Pix:'Pix', Debito:'Débito', Credito:'Crédito', Fiado:'Fiado' }[meio_pagamento] || meio_pagamento;
-    await db.from('auditoria').insert({
+    const { error: errAuditoria } = await db.from('auditoria').insert({
       mercearia_id,
       operador_id:  operadorId,
       usuario_nome: req.user.nome || req.user.email,
@@ -94,7 +94,9 @@ router.post('/finalizar', async (req, res) => {
       acao:         'venda_realizada',
       descricao:    `Venda de ${totalVendaFloat.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} — ${meioLabel}${clienteId ? (meio_pagamento === 'Fiado' ? ' (Fiado)' : ' (cliente identificado)') : ''}`,
       meta:         { venda_id: vendaId, valor: totalVendaFloat, meio_pagamento, itens: carrinho.length },
+      escopo:       'estabelecimento',
     });
+    if (errAuditoria) console.error('[AUDITORIA] Falha ao registrar venda_realizada:', errAuditoria.message);
 
     console.log(`[INFO] Venda finalizada. ID: ${vendaId}`);
     res.status(201).json({ message: 'Venda registrada com sucesso!', vendaId });
@@ -195,7 +197,7 @@ router.post('/:id/cancelar', async (req, res) => {
 
     // 4) Auditoria
     const meioLabel = { Dinheiro:'Dinheiro', Pix:'Pix', Debito:'Débito', Credito:'Crédito', Fiado:'Fiado' }[venda.meio_pagamento] || venda.meio_pagamento;
-    await db.from('auditoria').insert({
+    const { error: errAuditoria } = await db.from('auditoria').insert({
       mercearia_id,
       operador_id:  role === 'operator' ? userId : null,
       usuario_nome: req.user.nome || req.user.email,
@@ -204,7 +206,9 @@ router.post('/:id/cancelar', async (req, res) => {
       acao:         'venda_cancelada',
       descricao:    `Venda de ${parseFloat(venda.valor_total).toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} (${meioLabel}) cancelada${motivo ? ` — ${motivo}` : ''}`,
       meta:         { venda_id: id, valor: venda.valor_total, meio_pagamento: venda.meio_pagamento, motivo: motivo || null },
+      escopo:       'estabelecimento',
     });
+    if (errAuditoria) console.error('[AUDITORIA] Falha ao registrar venda_cancelada:', errAuditoria.message);
 
     console.log(`[INFO] Venda cancelada. ID: ${id}`);
     res.status(200).json({ message: 'Venda cancelada com sucesso.' });

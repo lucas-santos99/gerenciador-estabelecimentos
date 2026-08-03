@@ -290,6 +290,7 @@ router.get('/historico',
                 status,
                 motivo_cancelamento,
                 operador_id,
+                cliente_id,
                 clientes ( nome )
             `)
             .eq('mercearia_id', req.user.mercearia_id)
