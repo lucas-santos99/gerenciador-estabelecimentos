@@ -17,6 +17,16 @@ function garantirMerchant(req, res) {
   return true;
 }
 
+// Filtros de data vêm como 'YYYY-MM-DD' representando um DIA NO
+// CALENDÁRIO DO BRASIL (é o que o usuário escolhe no <input type="date">).
+// Mas criado_em é salvo em UTC. Sem o offset explícito, '...T23:59:59'
+// é lido como UTC — 3h "cedo demais" — e corta registros da noite
+// (ex: venda das 21:38 BRT = 00:38 UTC do dia seguinte, fica de fora
+// do filtro "até hoje"). Anexar '-03:00' resolve isso corretamente
+// em qualquer um dos dois lados (início e fim do intervalo).
+function inicioDiaBR(dataStr) { return `${dataStr}T00:00:00-03:00`; }
+function fimDiaBR(dataStr)    { return `${dataStr}T23:59:59-03:00`; }
+
 /* ============================================================
    REGISTRAR AÇÃO (interno — chamado por outras rotas)
    Exportado como função auxiliar
@@ -107,8 +117,8 @@ router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
       query = query.eq('operador_id', operador_id);
     }
     if (acao)        query = query.eq('acao', acao);
-    if (data_inicio) query = query.gte('criado_em', data_inicio);
-    if (data_fim)    query = query.lte('criado_em', data_fim + 'T23:59:59');
+    if (data_inicio) query = query.gte('criado_em', inicioDiaBR(data_inicio));
+    if (data_fim)    query = query.lte('criado_em', fimDiaBR(data_fim));
 
     const { data, error, count } = await query;
     if (error) throw error;
@@ -158,8 +168,8 @@ router.get('/resumo', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res)
       .select('operador_id, usuario_nome, modulo, acao')
       .eq('mercearia_id', mercearia_id);
 
-    if (data_inicio) query = query.gte('criado_em', data_inicio);
-    if (data_fim)    query = query.lte('criado_em', data_fim + 'T23:59:59');
+    if (data_inicio) query = query.gte('criado_em', inicioDiaBR(data_inicio));
+    if (data_fim)    query = query.lte('criado_em', fimDiaBR(data_fim));
 
     const { data, error } = await query;
     if (error) throw error;
@@ -223,8 +233,8 @@ router.get('/admin/geral', async (req, res) => {
     if (acao)         query = query.eq('acao', acao);
     if (mercearia_id) query = query.eq('mercearia_id', mercearia_id);
     if (usuario)      query = query.ilike('usuario_nome', `%${usuario}%`);
-    if (data_inicio)  query = query.gte('criado_em', data_inicio);
-    if (data_fim)     query = query.lte('criado_em', data_fim + 'T23:59:59');
+    if (data_inicio)  query = query.gte('criado_em', inicioDiaBR(data_inicio));
+    if (data_fim)     query = query.lte('criado_em', fimDiaBR(data_fim));
 
     const { data, error, count } = await query;
     if (error) throw error;
@@ -316,8 +326,8 @@ router.get('/admin/:mercearia_id', async (req, res) => {
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (modulo)      query = query.eq('modulo', modulo);
-    if (data_inicio) query = query.gte('criado_em', data_inicio);
-    if (data_fim)    query = query.lte('criado_em', data_fim + 'T23:59:59');
+    if (data_inicio) query = query.gte('criado_em', inicioDiaBR(data_inicio));
+    if (data_fim)    query = query.lte('criado_em', fimDiaBR(data_fim));
 
     const { data, error, count } = await query;
     if (error) throw error;
