@@ -457,8 +457,10 @@ router.put("/:id", authUser, async (req, res) => {
       nome_fantasia,
       cnpj,
       telefone,
+      telefones_extras,
       email_contato,
       endereco_completo,
+      enderecos_extras,
       status_assinatura,
       data_vencimento,
       logo_url,
@@ -479,6 +481,15 @@ router.put("/:id", authUser, async (req, res) => {
       logo_url,
       tipo_estabelecimento,
     };
+
+    // Só grava se vier um array de verdade — evita salvar algo malformado
+    // vindo direto da requisição.
+    if (Array.isArray(telefones_extras)) {
+      updateData.telefones_extras = telefones_extras.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim());
+    }
+    if (Array.isArray(enderecos_extras)) {
+      updateData.enderecos_extras = enderecos_extras.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim());
+    }
 
     // Só grava se vier um fuso válido — nunca deixa salvar algo fora dos
     // 4 fusos do Brasil (ex: valor manipulado direto na requisição).
@@ -531,8 +542,10 @@ router.post("/criar", authUser, async (req, res) => {
       nome_fantasia,
       cnpj,
       telefone,
+      telefones_extras,
       email_contato,
       endereco_completo,
+      enderecos_extras,
       data_vencimento,
       status_assinatura,
       tipo_estabelecimento,
@@ -540,11 +553,19 @@ router.post("/criar", authUser, async (req, res) => {
       limite_operadores,
       valor_mensalidade,
       timezone,
+      motivo_periodo_teste,
     } = req.body;
 
     // Só aceita um dos 4 fusos válidos do Brasil — qualquer outra coisa
     // (vazio, manipulado, etc.) cai no padrão de Brasília.
     const timezoneFinal = TIMEZONES_VALIDAS.includes(timezone) ? timezone : TIMEZONE_PADRAO;
+
+    const telefonesExtrasFinal = Array.isArray(telefones_extras)
+      ? telefones_extras.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim())
+      : [];
+    const enderecosExtrasFinal = Array.isArray(enderecos_extras)
+      ? enderecos_extras.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim())
+      : [];
 
     // validação da senha
     if (!senha || senha.length < 6) {
@@ -574,8 +595,10 @@ router.post("/criar", authUser, async (req, res) => {
         nome_fantasia,
         cnpj,
         telefone,
+        telefones_extras:     telefonesExtrasFinal,
         email_contato,
         endereco_completo: endereco_completo || null,
+        enderecos_extras:     enderecosExtrasFinal,
         status_assinatura: status_assinatura || "ativa",
         logo_url: null,
         data_vencimento: data_vencimento || null,
@@ -583,6 +606,7 @@ router.post("/criar", authUser, async (req, res) => {
         limite_operadores:    parseInt(limite_operadores) || 3,
         valor_mensalidade:    valor_mensalidade ? parseFloat(valor_mensalidade) : null,
         timezone:             timezoneFinal,
+        motivo_periodo_teste: motivo_periodo_teste || null,
       })
       .select()
       .single();
@@ -620,7 +644,9 @@ router.post("/criar", authUser, async (req, res) => {
       usuario_email: req.user.email,
       modulo:        "estabelecimentos",
       acao:          "criar_estabelecimento",
-      descricao:     `Criou o estabelecimento "${nome_fantasia}"`,
+      descricao:     `Criou o estabelecimento "${nome_fantasia}"`
+                       + (motivo_periodo_teste ? ` — Motivo do teste: ${motivo_periodo_teste}` : ""),
+      meta:          motivo_periodo_teste ? { motivo_periodo_teste } : undefined,
       escopo:        "admin_global",
     });
 
