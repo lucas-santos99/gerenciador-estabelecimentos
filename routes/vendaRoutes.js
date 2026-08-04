@@ -82,17 +82,36 @@ router.post('/finalizar', async (req, res) => {
       await db.from('vendas').update(updatesPosVenda).eq('id', vendaId);
     }
 
-    // Registrar na auditoria
-    const nomeUsuario = req.user.email;
+    // Registrar na auditoria — busca nome do cliente e dos produtos
+    // vendidos, pra descrição ficar completa (não só o valor)
     const meioLabel = { Dinheiro:'Dinheiro', Pix:'Pix', Debito:'Débito', Credito:'Crédito', Fiado:'Fiado' }[meio_pagamento] || meio_pagamento;
+
+    let clienteNomeAud = null;
+    if (clienteId) {
+      const { data: cliAud } = await db.from('clientes').select('nome').eq('id', clienteId).single();
+      clienteNomeAud = cliAud?.nome || null;
+    }
+
+    const { data: itensAud } = await db
+      .from('itens_venda')
+      .select('quantidade, produtos ( nome )')
+      .eq('venda_id', vendaId);
+    const resumoItens = (itensAud || [])
+      .map(i => `${parseFloat(i.quantidade).toLocaleString('pt-BR', { maximumFractionDigits: 3 })}× ${i.produtos?.nome || 'Produto'}`)
+      .join(', ');
+
+    const descricaoVenda = `Venda de ${totalVendaFloat.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} — ${meioLabel}`
+      + (clienteNomeAud ? ` — Cliente: ${clienteNomeAud}` : '')
+      + (resumoItens ? ` — Itens: ${resumoItens}` : '');
+
     const { error: errAuditoria } = await db.from('auditoria').insert({
       mercearia_id,
       operador_id:  operadorId,
       usuario_nome: req.user.nome || req.user.email,
       modulo:       'pdv',
       acao:         'venda_realizada',
-      descricao:    `Venda de ${totalVendaFloat.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} — ${meioLabel}${clienteId ? (meio_pagamento === 'Fiado' ? ' (Fiado)' : ' (cliente identificado)') : ''}`,
-      meta:         { venda_id: vendaId, valor: totalVendaFloat, meio_pagamento, itens: carrinho.length },
+      descricao:    descricaoVenda,
+      meta:         { venda_id: vendaId, valor: totalVendaFloat, meio_pagamento, cliente_nome: clienteNomeAud, itens: itensAud?.length || 0 },
       escopo:       'estabelecimento',
     });
     if (errAuditoria) console.error('[AUDITORIA] Falha ao registrar venda_realizada:', errAuditoria.message);
@@ -155,7 +174,7 @@ router.post('/:id/cancelar', async (req, res) => {
     // 1) Estorna o estoque de cada item vendido
     const { data: itens } = await db
       .from('itens_venda')
-      .select('produto_id, quantidade')
+      .select('produto_id, quantidade, produtos ( nome )')
       .eq('venda_id', id);
 
     for (const item of itens || []) {
@@ -194,16 +213,33 @@ router.post('/:id/cancelar', async (req, res) => {
       motivo_cancelamento:  motivo || null,
     }).eq('id', id);
 
-    // 4) Auditoria
+    // 4) Auditoria — nome do cliente e resumo dos itens cancelados,
+    // pra descrição ficar completa (não só o valor)
     const meioLabel = { Dinheiro:'Dinheiro', Pix:'Pix', Debito:'Débito', Credito:'Crédito', Fiado:'Fiado' }[venda.meio_pagamento] || venda.meio_pagamento;
+
+    let clienteNomeAud = null;
+    if (venda.cliente_id) {
+      const { data: cliAud } = await db.from('clientes').select('nome').eq('id', venda.cliente_id).single();
+      clienteNomeAud = cliAud?.nome || null;
+    }
+
+    const resumoItens = (itens || [])
+      .map(i => `${parseFloat(i.quantidade).toLocaleString('pt-BR', { maximumFractionDigits: 3 })}× ${i.produtos?.nome || 'Produto'}`)
+      .join(', ');
+
+    const descricaoCancel = `Venda de ${parseFloat(venda.valor_total).toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} (${meioLabel}) cancelada`
+      + (clienteNomeAud ? ` — Cliente: ${clienteNomeAud}` : '')
+      + (resumoItens ? ` — Itens: ${resumoItens}` : '')
+      + (motivo ? ` — Motivo: ${motivo}` : '');
+
     const { error: errAuditoria } = await db.from('auditoria').insert({
       mercearia_id,
       operador_id:  role === 'operator' ? userId : null,
       usuario_nome: req.user.nome || req.user.email,
       modulo:       'pdv',
       acao:         'venda_cancelada',
-      descricao:    `Venda de ${parseFloat(venda.valor_total).toLocaleString('pt-BR', { style:'currency', currency:'BRL' })} (${meioLabel}) cancelada${motivo ? ` — ${motivo}` : ''}`,
-      meta:         { venda_id: id, valor: venda.valor_total, meio_pagamento: venda.meio_pagamento, motivo: motivo || null },
+      descricao:    descricaoCancel,
+      meta:         { venda_id: id, valor: venda.valor_total, meio_pagamento: venda.meio_pagamento, cliente_nome: clienteNomeAud, motivo: motivo || null },
       escopo:       'estabelecimento',
     });
     if (errAuditoria) console.error('[AUDITORIA] Falha ao registrar venda_cancelada:', errAuditoria.message);
