@@ -5,6 +5,9 @@ const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
+const { TIMEZONE_PADRAO, buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
+
+console.log('🔥 AUDITORIA ROUTES ATUALIZADO (fuso por estabelecimento) 🔥');
 
 router.use(authUser);
 
@@ -16,16 +19,6 @@ function garantirMerchant(req, res) {
   }
   return true;
 }
-
-// Filtros de data vêm como 'YYYY-MM-DD' representando um DIA NO
-// CALENDÁRIO DO BRASIL (é o que o usuário escolhe no <input type="date">).
-// Mas criado_em é salvo em UTC. Sem o offset explícito, '...T23:59:59'
-// é lido como UTC — 3h "cedo demais" — e corta registros da noite
-// (ex: venda das 21:38 BRT = 00:38 UTC do dia seguinte, fica de fora
-// do filtro "até hoje"). Anexar '-03:00' resolve isso corretamente
-// em qualquer um dos dois lados (início e fim do intervalo).
-function inicioDiaBR(dataStr) { return `${dataStr}T00:00:00-03:00`; }
-function fimDiaBR(dataStr)    { return `${dataStr}T23:59:59-03:00`; }
 
 /* ============================================================
    REGISTRAR AÇÃO (interno — chamado por outras rotas)
@@ -99,6 +92,8 @@ router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
   } = req.query;
 
   try {
+    const timezone = await buscarTimezone(mercearia_id);
+
     let query = db
       .from('auditoria')
       .select(`
@@ -117,8 +112,9 @@ router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
       query = query.eq('operador_id', operador_id);
     }
     if (acao)        query = query.eq('acao', acao);
-    if (data_inicio) query = query.gte('criado_em', inicioDiaBR(data_inicio));
-    if (data_fim)    query = query.lte('criado_em', fimDiaBR(data_fim));
+    if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
+    if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
+
 
     const { data, error, count } = await query;
     if (error) throw error;
@@ -163,13 +159,15 @@ router.get('/resumo', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res)
   const { data_inicio, data_fim } = req.query;
 
   try {
+    const timezone = await buscarTimezone(mercearia_id);
+
     let query = db
       .from('auditoria')
       .select('operador_id, usuario_nome, modulo, acao')
       .eq('mercearia_id', mercearia_id);
 
-    if (data_inicio) query = query.gte('criado_em', inicioDiaBR(data_inicio));
-    if (data_fim)    query = query.lte('criado_em', fimDiaBR(data_fim));
+    if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
+    if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
 
     const { data, error } = await query;
     if (error) throw error;
@@ -219,6 +217,13 @@ router.get('/admin/geral', async (req, res) => {
   const limitNum = Math.min(parseInt(limit) || 50, 1000);
 
   try {
+    // Filtro cruza vários estabelecimentos, que podem estar em fusos
+    // diferentes entre si. Se um mercearia_id específico foi selecionado
+    // no filtro, usa o fuso dele; senão (visão geral, todos os
+    // estabelecimentos), usa Brasília como referência — é a visão
+    // consolidada do próprio SuperAdmin, não de um estabelecimento.
+    const timezone = mercearia_id ? await buscarTimezone(mercearia_id) : TIMEZONE_PADRAO;
+
     let query = db
       .from('auditoria')
       .select(`
@@ -233,8 +238,8 @@ router.get('/admin/geral', async (req, res) => {
     if (acao)         query = query.eq('acao', acao);
     if (mercearia_id) query = query.eq('mercearia_id', mercearia_id);
     if (usuario)      query = query.ilike('usuario_nome', `%${usuario}%`);
-    if (data_inicio)  query = query.gte('criado_em', inicioDiaBR(data_inicio));
-    if (data_fim)     query = query.lte('criado_em', fimDiaBR(data_fim));
+    if (data_inicio)  query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
+    if (data_fim)     query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
 
     const { data, error, count } = await query;
     if (error) throw error;
@@ -318,6 +323,8 @@ router.get('/admin/:mercearia_id', async (req, res) => {
   const { limit = 100, offset = 0, modulo, data_inicio, data_fim } = req.query;
 
   try {
+    const timezone = await buscarTimezone(mercearia_id);
+
     let query = db
       .from('auditoria')
       .select('id, modulo, acao, descricao, meta, criado_em, usuario_nome, operador_id', { count: 'exact' })
@@ -326,8 +333,8 @@ router.get('/admin/:mercearia_id', async (req, res) => {
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (modulo)      query = query.eq('modulo', modulo);
-    if (data_inicio) query = query.gte('criado_em', inicioDiaBR(data_inicio));
-    if (data_fim)    query = query.lte('criado_em', fimDiaBR(data_fim));
+    if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
+    if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
 
     const { data, error, count } = await query;
     if (error) throw error;

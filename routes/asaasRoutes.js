@@ -4,6 +4,7 @@
 const express = require("express");
 const router  = express.Router();
 const db      = require("../db/supabaseAdmin");
+const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
 
 const ASAAS_API_KEY  = process.env.ASAAS_API_KEY;
 const ASAAS_API_URL  = process.env.ASAAS_API_URL || "https://api.asaas.com/v3";
@@ -108,7 +109,7 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
     // 1. Buscar dados da mercearia
     const { data: mercearia, error } = await db
       .from("mercearias")
-      .select("id, nome_fantasia, email_contato, telefone, cnpj, asaas_customer_id, asaas_payment_id, asaas_payment_status")
+      .select("id, nome_fantasia, email_contato, telefone, cnpj, asaas_customer_id, asaas_payment_id, asaas_payment_status, timezone")
       .eq("id", mercearia_id)
       .single();
 
@@ -132,11 +133,15 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
           headers: asaasHeaders(),
         });
         const dataCheck = await respCheck.json();
-        const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+        const timezone = mercearia.timezone || TIMEZONE_PADRAO;
+        // Compara como DATA, no fuso do estabelecimento — antes usava
+        // new Date() com setHours(0,0,0,0), que reflete o fuso do
+        // SERVIDOR (Railway roda em UTC), não o do Brasil.
+        const hojeStr = hojeStrTZ(timezone);
         const aindaValida = respCheck.ok
           && dataCheck.status === "PENDING"
           && dataCheck.dueDate
-          && new Date(dataCheck.dueDate + "T23:59:59") >= hoje;
+          && dataCheck.dueDate >= hojeStr;
 
         if (aindaValida) {
           return res.json({
@@ -327,15 +332,26 @@ router.post("/webhook", async (req, res) => {
     // Se já tem data futura, adiciona a partir dela (acumula)
     const { data: merc } = await db
       .from("mercearias")
-      .select("data_vencimento, nome_fantasia")
+      .select("data_vencimento, nome_fantasia, timezone")
       .eq("id", mercearia_id)
       .single();
 
-    const base = merc?.data_vencimento && new Date(merc.data_vencimento) > new Date()
-      ? new Date(merc.data_vencimento + "T12:00:00") // acumula a partir do vencimento atual
-      : new Date();                                   // começa do zero
+    // Compara como DATA ('YYYY-MM-DD'), no fuso do estabelecimento —
+    // antes usava `new Date(merc.data_vencimento) > new Date()`, que
+    // interpreta a data de vencimento como meia-noite EM UTC. Perto da
+    // virada do dia isso podia fazer o vencimento "ainda válido" ser
+    // tratado como já passado, e o cliente perder dias já pagos (a
+    // renovação recomeçava do zero em vez de acumular a partir do
+    // vencimento atual). Mesmo bug já corrigido no webhook do Efí.
+    const timezoneMerc = merc?.timezone || TIMEZONE_PADRAO;
+    const hojeStr = hojeStrTZ(timezoneMerc);
+    const vencimentoAindaValido = merc?.data_vencimento && merc.data_vencimento >= hojeStr;
 
-    base.setDate(base.getDate() + dias);
+    const base = vencimentoAindaValido
+      ? new Date(merc.data_vencimento + "T12:00:00Z") // acumula a partir do vencimento atual — 'Z' explícito, não depende do fuso do servidor
+      : new Date();                                    // começa do zero
+
+    base.setUTCDate(base.getUTCDate() + dias);
     const novaData = base.toISOString().split("T")[0];
 
     // Atualizar licença

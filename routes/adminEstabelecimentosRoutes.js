@@ -5,6 +5,7 @@ const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage() });
 const authUser = require("../middlewares/authUser");
 const { registrar } = require("./auditoriaRoutes");
+const { TIMEZONE_PADRAO, TIMEZONES_VALIDAS, hojeStrTZ } = require("../utils/fusoHorario");
 
 // ⚠️ NOTA: as demais rotas deste arquivo (listar, criar, editar, excluir,
 // limite-operadores, upload-logo) ainda não exigem authUser porque o
@@ -20,18 +21,22 @@ async function verificarVencimentos() {
   try {
     const { data, error } = await db
       .from("mercearias")
-      .select("id, data_vencimento, status_assinatura");
+      .select("id, data_vencimento, status_assinatura, timezone");
 
     if (error) return;
-
-    const hoje = new Date();
 
     for (const m of data) {
       if (!m.data_vencimento) continue;
 
-      const venc = new Date(m.data_vencimento);
+      // Compara como DATA ('YYYY-MM-DD'), no fuso do próprio
+      // estabelecimento — antes usava `new Date(m.data_vencimento)`,
+      // que o JS interpreta como meia-noite EM UTC. Isso bloqueava o
+      // acesso até 3h (ou mais, fora de Brasília) ANTES da hora certa,
+      // já na noite anterior ao vencimento de verdade.
+      const hojeEstabelecimento = hojeStrTZ(m.timezone || TIMEZONE_PADRAO);
+      const venceu = m.data_vencimento < hojeEstabelecimento;
 
-      if (venc < hoje && m.status_assinatura === "ativa") {
+      if (venceu && m.status_assinatura === "ativa") {
         await db
           .from("mercearias")
           .update({ status_assinatura: "bloqueada" })
@@ -460,6 +465,7 @@ router.put("/:id", authUser, async (req, res) => {
       tipo_estabelecimento,
       limite_operadores,
       valor_mensalidade,
+      timezone,
     } = req.body;
 
     const updateData = {
@@ -473,6 +479,12 @@ router.put("/:id", authUser, async (req, res) => {
       logo_url,
       tipo_estabelecimento,
     };
+
+    // Só grava se vier um fuso válido — nunca deixa salvar algo fora dos
+    // 4 fusos do Brasil (ex: valor manipulado direto na requisição).
+    if (timezone && TIMEZONES_VALIDAS.includes(timezone)) {
+      updateData.timezone = timezone;
+    }
 
     // Atualiza limite apenas se enviado e válido
     if (typeof limite_operadores === 'number' && limite_operadores >= 0 && limite_operadores <= 50) {
@@ -527,7 +539,12 @@ router.post("/criar", authUser, async (req, res) => {
       senha,
       limite_operadores,
       valor_mensalidade,
+      timezone,
     } = req.body;
+
+    // Só aceita um dos 4 fusos válidos do Brasil — qualquer outra coisa
+    // (vazio, manipulado, etc.) cai no padrão de Brasília.
+    const timezoneFinal = TIMEZONES_VALIDAS.includes(timezone) ? timezone : TIMEZONE_PADRAO;
 
     // validação da senha
     if (!senha || senha.length < 6) {
@@ -565,6 +582,7 @@ router.post("/criar", authUser, async (req, res) => {
         tipo_estabelecimento: tipo_estabelecimento || "mercearia",
         limite_operadores:    parseInt(limite_operadores) || 3,
         valor_mensalidade:    valor_mensalidade ? parseFloat(valor_mensalidade) : null,
+        timezone:             timezoneFinal,
       })
       .select()
       .single();

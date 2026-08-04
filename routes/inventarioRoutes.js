@@ -6,6 +6,7 @@ const authUser = require('../middlewares/authUser');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
+const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 
 router.use(authUser);
 
@@ -457,8 +458,11 @@ router.get('/movimentacoes/listar', verificarPermissao(PERMISSOES.INVENTARIO), a
 
     if (tipo)        q = q.eq('tipo', tipo);
     if (produto)     q = q.ilike('produto_nome', `%${produto}%`);
-    if (data_inicio) q = q.gte('created_at', data_inicio + 'T00:00:00-03:00');
-    if (data_fim)    q = q.lte('created_at', data_fim + 'T23:59:59-03:00');
+    if (data_inicio || data_fim) {
+      const timezoneInv = await buscarTimezone(mid);
+      if (data_inicio) q = q.gte('created_at', inicioDiaTZ(data_inicio, timezoneInv).toISOString());
+      if (data_fim)    q = q.lte('created_at', fimDiaTZ(data_fim, timezoneInv).toISOString());
+    }
     if (req.query.categoria) q = q.eq('categoria_nome', req.query.categoria);
 
     const { data, error, count } = await q;

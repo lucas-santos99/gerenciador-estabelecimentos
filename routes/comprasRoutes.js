@@ -11,6 +11,7 @@ const authUser = require('../middlewares/authUser');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
+const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 
 console.log('🔥 COMPRAS ROUTES ATUALIZADO 🔥');
 
@@ -100,10 +101,11 @@ router.get('/contas-a-pagar', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR
       (contas || []).forEach(c => { contasPorId[c.id] = c; });
     }
 
-    // "Hoje" em Brasília (UTC-3) — mesma lógica do financeiroRoutes.js,
-    // pra marcar como atrasada só depois da meia-noite local de verdade,
-    // não da meia-noite UTC do servidor.
-    const hojeBR = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];
+    // "Hoje" no fuso do próprio estabelecimento — antes usava -3h fixo
+    // (só acerta pra Brasília). Marca como atrasada só depois da meia-
+    // noite local de verdade, não da meia-noite UTC do servidor.
+    const timezoneCompras = await buscarTimezone(mid);
+    const hojeBR = hojeStrTZ(timezoneCompras);
 
     let resultado = (compras || []).map(c => {
       const conta = contasPorId[c.conta_a_pagar_id] || {};
@@ -248,7 +250,7 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req
         mercearia_id:     mid,
         fornecedor_id,
         numero_nota:      numero_nota?.trim() || null,
-        data_compra:      data_compra || new Date().toISOString().split('T')[0],
+        data_compra:      data_compra || hojeStrTZ(await buscarTimezone(mid)),
         forma_pagamento,
         valor_total:      valorTotal,
         observacoes:       observacoes?.trim() || null,

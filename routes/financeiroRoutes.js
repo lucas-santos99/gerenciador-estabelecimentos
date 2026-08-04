@@ -11,6 +11,7 @@ router.use(authUser);
 
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
+const { buscarTimezone, hojeStrTZ, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 
 
 // ============================================================
@@ -24,12 +25,13 @@ router.get('/',
     const supabaseAdmin = require('../db/supabaseAdmin');
     const { status } = req.query;
 
-    // "Hoje" no horário de Brasília (UTC-3) — o servidor roda em UTC,
-    // então sem isso, a partir das 21h locais o servidor já "pensa"
-    // que é o dia seguinte e marca contas como atrasadas antes da hora.
-    const hojeBR = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];
-
     try {
+
+        // "Hoje" no fuso do próprio estabelecimento — sem isso, a partir
+        // de ~21h locais o servidor (que roda em UTC) já "pensa" que é o
+        // dia seguinte e marca contas como atrasadas antes da hora.
+        const timezone = await buscarTimezone(req.user.mercearia_id);
+        const hojeBR = hojeStrTZ(timezone);
 
         // Contas ligadas a compras de fornecedor ficam de fora daqui —
         // elas têm visão própria agora, dentro do módulo Fornecedores
@@ -101,16 +103,15 @@ router.get('/resumo',
     verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
-    const now = new Date();
-    const todayStart = new Date(Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate(),
-        0, 0, 0, 0
-    ));
-
     try {
         const supabaseAdmin = require('../db/supabaseAdmin');
+
+        // Início do dia de HOJE no fuso do estabelecimento — antes isso
+        // usava Date.UTC() puro, ou seja, sempre meia-noite UTC (21h em
+        // Brasília do dia anterior), incluindo transações da noite
+        // anterior no resumo "de hoje" por engano.
+        const timezone   = await buscarTimezone(req.user.mercearia_id);
+        const todayStart = inicioDiaTZ(hojeStrTZ(timezone), timezone);
 
         const { data: transacoes, error } = await supabaseAdmin
             .from('transacoes_caixa')
@@ -269,14 +270,18 @@ router.get('/historico',
     const { data_inicio, data_fim } = req.query;
     const supabaseAdmin = require('../db/supabaseAdmin');
 
-    // BRT = UTC-3: deslocar datas para o fuso correto
+    // Limites do dia no fuso do próprio estabelecimento — inclusive nos
+    // defaults (quando não vem data_inicio/data_fim), que antes usavam
+    // setHours() no horário do SERVIDOR (Railway roda em UTC), não do
+    // Brasil.
+    const timezone = await buscarTimezone(req.user.mercearia_id);
     const inicio = data_inicio
-        ? new Date(data_inicio + 'T00:00:00-03:00').toISOString()
-        : new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+        ? inicioDiaTZ(data_inicio, timezone).toISOString()
+        : inicioDiaTZ(hojeStrTZ(timezone), timezone).toISOString();
 
     const fim = data_fim
-        ? new Date(data_fim + 'T23:59:59-03:00').toISOString()
-        : new Date(new Date().setHours(23, 59, 59, 999)).toISOString();
+        ? fimDiaTZ(data_fim, timezone).toISOString()
+        : fimDiaTZ(hojeStrTZ(timezone), timezone).toISOString();
 
     try {
 
@@ -374,6 +379,10 @@ router.get('/relatorio_dre',
     try {
         const supabaseAdmin = require('../db/supabaseAdmin');
 
+        // data_inicio/data_fim vão como 'YYYY-MM-DD' pra função SQL
+        // gerar_relatorio_dre(), que busca o fuso do próprio
+        // estabelecimento (mercearias.timezone) e converte certo lá
+        // dentro via AT TIME ZONE — não precisa de tratamento aqui.
         const { data, error } = await supabaseAdmin.rpc('gerar_relatorio_dre', {
             p_data_inicio:  data_inicio,
             p_data_fim:     data_fim,
@@ -500,6 +509,8 @@ router.get('/relatorio_produtos',
     try {
         const supabaseAdmin = require('../db/supabaseAdmin');
 
+        // Mesmo caso do gerar_relatorio_dre() acima — fuso resolvido
+        // dentro da função SQL, via mercearias.timezone.
         const { data, error } = await supabaseAdmin.rpc('gerar_relatorio_produtos', {
             p_data_inicio:  data_inicio,
             p_data_fim:     data_fim,
@@ -537,8 +548,9 @@ router.get('/relatorio_vendas_operador',
         });
     }
 
-    const inicio = new Date(data_inicio + 'T00:00:00.000Z').toISOString();
-    const fim    = new Date(data_fim    + 'T23:59:59.999Z').toISOString();
+    const timezone = await buscarTimezone(req.user.mercearia_id);
+    const inicio = inicioDiaTZ(data_inicio, timezone).toISOString();
+    const fim    = fimDiaTZ(data_fim, timezone).toISOString();
 
     try {
         const supabaseAdmin = require('../db/supabaseAdmin');

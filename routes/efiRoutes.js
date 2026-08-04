@@ -14,6 +14,7 @@ const https   = require("https");
 const axios   = require("axios");
 const crypto  = require("crypto");
 const db      = require("../db/supabaseAdmin");
+const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
 
 const EFI_CLIENT_ID       = process.env.EFI_CLIENT_ID;
 const EFI_CLIENT_SECRET   = process.env.EFI_CLIENT_SECRET;
@@ -286,7 +287,7 @@ router.post("/webhook/:token/pix", async (req, res) => {
 
       const { data: merc } = await db
         .from("mercearias")
-        .select("id, nome_fantasia, data_vencimento, efi_pix_dias, efi_pix_txid")
+        .select("id, nome_fantasia, data_vencimento, efi_pix_dias, efi_pix_txid, timezone")
         .eq("efi_pix_txid", txid)
         .single();
 
@@ -296,12 +297,22 @@ router.post("/webhook/:token/pix", async (req, res) => {
       }
 
       const dias = merc.efi_pix_dias || 30;
+      const timezone = merc.timezone || TIMEZONE_PADRAO;
 
-      // Mesma lógica de acumular vencimento que o webhook do Asaas usa
-      const base = merc.data_vencimento && new Date(merc.data_vencimento) > new Date()
-        ? new Date(merc.data_vencimento + "T12:00:00")
-        : new Date();
-      base.setDate(base.getDate() + dias);
+      // Compara como DATA ('YYYY-MM-DD'), no fuso do estabelecimento —
+      // antes usava `new Date(merc.data_vencimento) > new Date()`, que
+      // interpreta a data de vencimento como meia-noite EM UTC. Perto da
+      // virada do dia isso podia fazer o vencimento "ainda válido" ser
+      // tratado como já passado, e o cliente perder dias já pagos (a
+      // renovação recomeçava do zero em vez de acumular a partir do
+      // vencimento atual).
+      const hojeStr = hojeStrTZ(timezone);
+      const vencimentoAindaValido = merc.data_vencimento && merc.data_vencimento >= hojeStr;
+
+      const base = vencimentoAindaValido
+        ? new Date(merc.data_vencimento + "T12:00:00Z") // acumula a partir do vencimento atual — 'Z' explícito, não depende do fuso do servidor
+        : new Date();                                    // começa do zero
+      base.setUTCDate(base.getUTCDate() + dias);
       const novaData = base.toISOString().split("T")[0];
 
       await db.from("mercearias").update({

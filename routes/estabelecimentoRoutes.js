@@ -5,6 +5,7 @@ const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
+const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 router.use(authUser);
 
 /* Formata estoque no padrão brasileiro com unidade */
@@ -84,7 +85,7 @@ router.get('/status/:userId', async (req, res) => {
 
         const { data: mercearia, error } = await db
             .from('mercearias')
-            .select('id, nome_fantasia, status_assinatura, data_vencimento, logo_url')
+            .select('id, nome_fantasia, status_assinatura, data_vencimento, logo_url, timezone')
             .eq('id', userId)
             .single();
 
@@ -94,10 +95,17 @@ router.get('/status/:userId', async (req, res) => {
 
         let statusFinal = mercearia.status_assinatura;
 
-        const dataVencimento = mercearia.data_vencimento ? new Date(mercearia.data_vencimento) : null;
-        const hoje = new Date();
+        // Compara como DATA ('YYYY-MM-DD'), no fuso do próprio
+        // estabelecimento — antes usava `new Date(mercearia.data_vencimento)`,
+        // que o JS interpreta como meia-noite EM UTC. Isso bloqueava o
+        // acesso até 3h (ou mais, fora de Brasília) ANTES da hora certa,
+        // já na noite anterior ao vencimento de verdade. Mesmo bug já
+        // corrigido em adminEstabelecimentosRoutes.js (verificarVencimentos),
+        // essa é uma implementação separada que tinha o mesmo problema.
+        const hojeEstabelecimento = hojeStrTZ(mercearia.timezone || TIMEZONE_PADRAO);
+        const venceu = mercearia.data_vencimento && mercearia.data_vencimento < hojeEstabelecimento;
 
-        if (dataVencimento && dataVencimento < hoje && mercearia.status_assinatura === 'ativa') {
+        if (venceu && mercearia.status_assinatura === 'ativa') {
 
             console.log(`[AVISO] Assinatura expirada para ${mercearia.nome_fantasia}. Atualizando para 'bloqueada'.`);
 

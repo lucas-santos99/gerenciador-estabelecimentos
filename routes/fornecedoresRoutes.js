@@ -6,6 +6,7 @@ const authUser = require('../middlewares/authUser');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
+const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 
 console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
 
@@ -41,9 +42,14 @@ router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (re
     // Números rápidos: gasto no mês corrente + data da última compra +
     // quais formas de pagamento (à vista / a prazo) já apareceram nas
     // compras ativas desse fornecedor, numa única passada
-    const inicioMes = new Date();
-    inicioMes.setDate(1);
-    inicioMes.setHours(0, 0, 0, 0);
+    //
+    // "Mês corrente" calculado no fuso do estabelecimento, não no
+    // relógio do servidor (Railway roda em UTC) — perto da virada de
+    // mês isso podia incluir/excluir uma compra do último dia do mês
+    // errado. Comparação por string de data ('YYYY-MM-DD'), sem
+    // conversão de fuso nenhuma — mais simples e sem risco.
+    const timezoneForn = await buscarTimezone(mid);
+    const inicioMesStr = hojeStrTZ(timezoneForn).slice(0, 7) + '-01';
 
     const { data: compras } = await db
       .from('compras')
@@ -59,7 +65,7 @@ router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (re
       }
       const r = resumoPorFornecedor[c.fornecedor_id];
       if (!r.ultima_compra) r.ultima_compra = c.data_compra; // já vem ordenado desc
-      if (new Date(c.data_compra) >= inicioMes) r.gasto_mes += parseFloat(c.valor_total) || 0;
+      if (c.data_compra >= inicioMesStr) r.gasto_mes += parseFloat(c.valor_total) || 0;
       if (c.forma_pagamento) r.formasPagamento.add(c.forma_pagamento);
     });
 
