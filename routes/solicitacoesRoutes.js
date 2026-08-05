@@ -4,6 +4,7 @@ const router   = express.Router();
 const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
+const { TIMEZONE_PADRAO, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 
 console.log('🔥 SOLICITAÇÕES ROUTES ATUALIZADO 🔥');
 
@@ -46,7 +47,7 @@ router.post('/', async (req, res) => {
   try {
     const { data: merc } = await db
       .from('mercearias')
-      .select('nome_fantasia, telefone')
+      .select('nome_fantasia, telefone, email_contato, tipo_estabelecimento')
       .eq('id', mercearia_id)
       .single();
 
@@ -56,6 +57,8 @@ router.post('/', async (req, res) => {
         mercearia_id,
         nome_estabelecimento:     merc?.nome_fantasia || null,
         telefone_estabelecimento: merc?.telefone || null,
+        email_estabelecimento:    merc?.email_contato || null,
+        tipo_estabelecimento:     merc?.tipo_estabelecimento || null,
         solicitado_por_nome:  nome || email,
         campos,
         detalhes: detalhes?.trim() || null,
@@ -87,14 +90,14 @@ router.post('/', async (req, res) => {
 
 /* ════════════════════════════════════════════════════════════
    2. ADMIN — LISTAR SOLICITAÇÕES
-      GET /api/solicitacoes/admin?status=pendente
+      GET /api/solicitacoes/admin?status=&tipo_estabelecimento=&data_inicio=&data_fim=
 ════════════════════════════════════════════════════════════ */
 router.get('/admin', async (req, res) => {
   if (req.user.role !== 'super_admin') {
     return res.status(403).json({ error: 'Acesso negado.' });
   }
 
-  const { status } = req.query;
+  const { status, tipo_estabelecimento, data_inicio, data_fim } = req.query;
 
   try {
     let query = db
@@ -102,7 +105,15 @@ router.get('/admin', async (req, res) => {
       .select('*')
       .order('criado_em', { ascending: false });
 
-    if (status) query = query.eq('status', status);
+    if (status)               query = query.eq('status', status);
+    if (tipo_estabelecimento) query = query.eq('tipo_estabelecimento', tipo_estabelecimento);
+
+    // Solicitações cruzam vários estabelecimentos, que podem estar em
+    // fusos diferentes entre si — mesmo caso já resolvido na Auditoria
+    // (/admin/geral). Usa Brasília como referência da visão consolidada
+    // do próprio SuperAdmin.
+    if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, TIMEZONE_PADRAO).toISOString());
+    if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, TIMEZONE_PADRAO).toISOString());
 
     const { data, error } = await query;
     if (error) throw error;
