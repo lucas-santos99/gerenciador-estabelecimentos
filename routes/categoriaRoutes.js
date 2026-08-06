@@ -8,11 +8,13 @@ const { registrar } = require('./auditoriaRoutes');
 router.use(authUser);
 
 // --- Rota GET: Buscar categorias ---
+// Retorna a lista plana (com categoria_pai_id) — o front monta a árvore
+// de exibição agrupando por pai.
 router.get('/', async (req, res) => {
     try {
         const { data, error } = await supabaseAdmin
             .from('categorias')
-            .select('id, nome')
+            .select('id, nome, categoria_pai_id')
             .eq('mercearia_id', req.user.mercearia_id)
             .order('nome', { ascending: true });
 
@@ -26,18 +28,40 @@ router.get('/', async (req, res) => {
     }
 });
 
-// --- Rota POST: Criar categoria ---
+// --- Rota POST: Criar categoria (ou subcategoria) ---
 router.post('/', async (req, res) => {
-    const { nome } = req.body;
+    const { nome, categoria_pai_id } = req.body;
 
     if (!nome) {
         return res.status(400).json({ error: 'Nome da categoria é obrigatório.' });
     }
 
     try {
+        let paiIdFinal = null;
+
+        if (categoria_pai_id) {
+            // Só permite 1 nível: a categoria-pai escolhida precisa ser ela
+            // mesma uma categoria PRINCIPAL (sem pai) — senão viraria neto,
+            // que não é o desenho aqui.
+            const { data: pai, error: errPai } = await supabaseAdmin
+                .from('categorias')
+                .select('id, categoria_pai_id')
+                .eq('id', categoria_pai_id)
+                .eq('mercearia_id', req.user.mercearia_id)
+                .single();
+
+            if (errPai || !pai) {
+                return res.status(400).json({ error: 'Categoria principal não encontrada.' });
+            }
+            if (pai.categoria_pai_id) {
+                return res.status(400).json({ error: 'Só é permitido um nível de subcategoria — escolha uma categoria principal, não outra subcategoria.' });
+            }
+            paiIdFinal = categoria_pai_id;
+        }
+
         const { data, error } = await supabaseAdmin
             .from('categorias')
-            .insert({ nome, mercearia_id: req.user.mercearia_id })
+            .insert({ nome, mercearia_id: req.user.mercearia_id, categoria_pai_id: paiIdFinal })
             .select()
             .single();
 
@@ -50,8 +74,8 @@ router.post('/', async (req, res) => {
           usuario_nome: req.user.nome,
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_criado',
-          descricao: `Categoria "${data.nome}" criada`,
-          meta: { categoria_id: data.id },
+          descricao: paiIdFinal ? `Subcategoria "${data.nome}" criada` : `Categoria "${data.nome}" criada`,
+          meta: { categoria_id: data.id, categoria_pai_id: paiIdFinal },
         });
         res.status(201).json(data);
 
@@ -68,19 +92,57 @@ router.post('/', async (req, res) => {
     }
 });
 
-// --- Rota PUT: Atualizar categoria ---
+// --- Rota PUT: Atualizar categoria (nome e/ou categoria-pai) ---
 router.put('/:id', async (req, res) => {
     const { id } = req.params;
-    const { nome } = req.body;
+    const { nome, categoria_pai_id } = req.body;
 
     if (!nome) {
         return res.status(400).json({ error: 'Nome é obrigatório.' });
     }
 
     try {
+        const updateData = { nome };
+
+        // categoria_pai_id só é considerado se a chave vier no corpo da
+        // requisição — assim o rename simples (só nome) não mexe no pai.
+        if ('categoria_pai_id' in req.body) {
+            if (categoria_pai_id === id) {
+                return res.status(400).json({ error: 'Uma categoria não pode ser subcategoria de si mesma.' });
+            }
+
+            if (categoria_pai_id) {
+                const { data: pai, error: errPai } = await supabaseAdmin
+                    .from('categorias')
+                    .select('id, categoria_pai_id')
+                    .eq('id', categoria_pai_id)
+                    .eq('mercearia_id', req.user.mercearia_id)
+                    .single();
+
+                if (errPai || !pai) {
+                    return res.status(400).json({ error: 'Categoria principal não encontrada.' });
+                }
+                if (pai.categoria_pai_id) {
+                    return res.status(400).json({ error: 'Só é permitido um nível de subcategoria — escolha uma categoria principal, não outra subcategoria.' });
+                }
+
+                // Se ESSA categoria já tem subcategorias próprias, ela não pode
+                // virar subcategoria de outra (criaria 2 níveis de profundidade)
+                const { count } = await supabaseAdmin
+                    .from('categorias')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('categoria_pai_id', id);
+                if (count > 0) {
+                    return res.status(400).json({ error: 'Essa categoria tem subcategorias — não pode virar subcategoria de outra.' });
+                }
+            }
+
+            updateData.categoria_pai_id = categoria_pai_id || null;
+        }
+
         const { data, error } = await supabaseAdmin
             .from('categorias')
-            .update({ nome })
+            .update(updateData)
             .eq('id', id)
             .eq('mercearia_id', req.user.mercearia_id)
             .select()
@@ -118,6 +180,8 @@ router.put('/:id', async (req, res) => {
 });
 
 // --- Rota DELETE: Excluir categoria ---
+// Se tiver subcategorias, elas não são apagadas — o banco promove elas
+// pra categoria principal sozinho (ON DELETE SET NULL na migration).
 router.delete('/:id', async (req, res) => {
     const { id } = req.params;
 
