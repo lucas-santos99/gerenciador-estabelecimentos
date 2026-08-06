@@ -6,6 +6,67 @@ const { registrar } = require('./auditoriaRoutes');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
+
+// Sincroniza a lista de variações (tamanho/cor) de um produto com o que
+// veio do formulário — cria as novas, atualiza as existentes, e remove
+// (ou só desativa, se já apareceu numa venda) as que sumiram da lista.
+async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas = []) {
+  const { data: existentes } = await db
+    .from('produto_variacoes')
+    .select('id')
+    .eq('produto_id', produtoId)
+    .eq('ativo', true);
+
+  const idsExistentes = new Set((existentes || []).map(v => v.id));
+  const idsEnviados = new Set(variacoesEnviadas.filter(v => v.id).map(v => v.id));
+
+  // Removeu da lista — apaga de vez, a não ser que já tenha sido vendida
+  // alguma vez (nesse caso, só desativa, pra manter o histórico íntegro)
+  for (const idExistente of idsExistentes) {
+    if (idsEnviados.has(idExistente)) continue;
+    const { count } = await db
+      .from('itens_venda')
+      .select('id', { count: 'exact', head: true })
+      .eq('produto_variacao_id', idExistente);
+    if (count > 0) {
+      await db.from('produto_variacoes').update({ ativo: false }).eq('id', idExistente);
+    } else {
+      await db.from('produto_variacoes').delete().eq('id', idExistente);
+    }
+  }
+
+  // Cria as novas, atualiza as que já existiam
+  for (const v of variacoesEnviadas) {
+    const payload = {
+      produto_id:     produtoId,
+      mercearia_id,
+      tamanho:        v.tamanho?.trim() || null,
+      cor:            v.cor?.trim() || null,
+      preco_custo:    v.preco_custo !== '' && v.preco_custo != null ? parseFloat(v.preco_custo) : null,
+      preco_venda:    v.preco_venda !== '' && v.preco_venda != null ? parseFloat(v.preco_venda) : null,
+      estoque_atual:  parseFloat(v.estoque_atual) || 0,
+      estoque_minimo: v.estoque_minimo !== '' && v.estoque_minimo != null ? parseFloat(v.estoque_minimo) : null,
+      ativo: true,
+    };
+    if (v.id && idsExistentes.has(v.id)) {
+      await db.from('produto_variacoes').update(payload).eq('id', v.id);
+    } else {
+      await db.from('produto_variacoes').insert(payload);
+    }
+  }
+
+  // Salva valores novos digitados como sugestão pra próxima vez (só se
+  // ainda não existir esse valor pra esse tipo, nesse estabelecimento)
+  const novosPresets = [];
+  variacoesEnviadas.forEach(v => {
+    if (v.tamanho?.trim()) novosPresets.push({ tipo: 'tamanho', valor: v.tamanho.trim() });
+    if (v.cor?.trim())     novosPresets.push({ tipo: 'cor',     valor: v.cor.trim() });
+  });
+  for (const p of novosPresets) {
+    await db.from('opcoes_variacao')
+      .upsert({ mercearia_id, tipo: p.tipo, valor: p.valor }, { onConflict: 'mercearia_id,tipo,valor', ignoreDuplicates: true });
+  }
+}
 router.use(authUser);
 
 /* Formata estoque no padrão brasileiro com unidade */
@@ -47,7 +108,11 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
 
             const { data: candidatos, error: errPlu } = await db
                 .from('produtos')
-                .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca, codigo_barras, categoria_id')
+                .select(`
+                    id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
+                    vendido_por_peso, plu_balanca, codigo_barras, categoria_id, tem_variacoes,
+                    produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
                 .limit(500);
@@ -55,10 +120,15 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
             if (errPlu) {
                 console.error(`[ERRO] fallback PLU busca-global:`, errPlu.message);
             } else {
-                const porPlu = (candidatos || []).filter(p => {
-                    const pluNum = parseInt(String(p.plu_balanca).trim(), 10);
-                    return !isNaN(pluNum) && pluNum === termoNum;
-                });
+                const porPlu = (candidatos || [])
+                    .filter(p => {
+                        const pluNum = parseInt(String(p.plu_balanca).trim(), 10);
+                        return !isNaN(pluNum) && pluNum === termoNum;
+                    })
+                    .map(p => ({
+                        ...p,
+                        variacoes: (p.produto_variacoes || []).filter(v => v.ativo),
+                    }));
                 if (porPlu.length > 0) return res.status(200).json(porPlu);
             }
         }
@@ -159,6 +229,99 @@ router.get('/:id/produtos/marcas', async (req, res) => {
     }
 });
 
+// --- Rota GET: /:id/opcoes-variacao?tipo=tamanho|cor — valores já
+// cadastrados nesse estabelecimento, pra alimentar o autocomplete do
+// tamanho/cor na hora de criar uma variação. Sem ?tipo, devolve os dois. ---
+router.get('/:id/opcoes-variacao', async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const { tipo, comId } = req.query;
+    try {
+        let query = db
+            .from('opcoes_variacao')
+            .select('id, tipo, valor')
+            .eq('mercearia_id', estabelecimentoId)
+            .order('ordem')
+            .order('valor');
+        if (tipo) query = query.eq('tipo', tipo);
+
+        const { data, error } = await query;
+        if (error) throw error;
+
+        if (tipo && !comId) return res.status(200).json((data || []).map(o => o.valor));
+
+        // Modo com id — usado pela tela de gerenciar (precisa do id pra
+        // poder apagar um valor específico)
+        if (comId) {
+            return res.status(200).json({
+                tamanho: (data || []).filter(o => o.tipo === 'tamanho').map(o => ({ id: o.id, valor: o.valor })),
+                cor:     (data || []).filter(o => o.tipo === 'cor').map(o => ({ id: o.id, valor: o.valor })),
+            });
+        }
+
+        res.status(200).json({
+            tamanho: (data || []).filter(o => o.tipo === 'tamanho').map(o => o.valor),
+            cor:     (data || []).filter(o => o.tipo === 'cor').map(o => o.valor),
+        });
+    } catch (error) {
+        console.error(`[ERRO] GET /:id/opcoes-variacao:`, error.message);
+        res.status(500).json({ error: 'Erro ao buscar opções de variação.' });
+    }
+});
+
+// --- Rota POST: /:id/opcoes-variacao — adiciona um preset manualmente
+// (a tela de gerenciar usa essa; a criação "automática" ao digitar um
+// valor novo numa variação usa upsert direto, dentro de sincronizarVariacoes) ---
+router.post('/:id/opcoes-variacao', async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const { tipo, valor } = req.body;
+
+    if (!['tamanho', 'cor'].includes(tipo)) {
+        return res.status(400).json({ error: "Tipo inválido (use 'tamanho' ou 'cor')." });
+    }
+    if (!valor || !valor.trim()) {
+        return res.status(400).json({ error: 'Informe um valor.' });
+    }
+
+    try {
+        const { data, error } = await db
+            .from('opcoes_variacao')
+            .insert({ mercearia_id: estabelecimentoId, tipo, valor: valor.trim() })
+            .select()
+            .single();
+
+        if (error) {
+            if (error.code === '23505') return res.status(409).json({ error: 'Esse valor já está cadastrado.' });
+            throw error;
+        }
+
+        res.status(201).json(data);
+    } catch (error) {
+        console.error(`[ERRO] POST /:id/opcoes-variacao:`, error.message);
+        res.status(500).json({ error: 'Erro ao adicionar opção.' });
+    }
+});
+
+// --- Rota DELETE: /:id/opcoes-variacao/:optId ---
+// Remove um preset da lista de sugestões. Não afeta produtos que já
+// usam esse valor — tamanho/cor ficam gravados como texto simples em
+// cada variação, não como referência a essa tabela.
+router.delete('/:id/opcoes-variacao/:optId', async (req, res) => {
+    const { id: estabelecimentoId, optId } = req.params;
+    try {
+        const { error } = await db
+            .from('opcoes_variacao')
+            .delete()
+            .eq('id', optId)
+            .eq('mercearia_id', estabelecimentoId);
+
+        if (error) throw error;
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error(`[ERRO] DELETE /:id/opcoes-variacao/:optId:`, error.message);
+        res.status(500).json({ error: 'Erro ao remover opção.' });
+    }
+});
+
 router.get('/:id/produtos', async (req, res) => {
 
     const estabelecimentoId = req.params.id;
@@ -184,17 +347,29 @@ router.get('/:id/produtos', async (req, res) => {
                 unidade_medida,
                 vendido_por_peso,
                 plu_balanca,
-                categorias ( nome )
+                tem_variacoes,
+                categorias ( nome ),
+                produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
             .order('nome', { ascending: true });
 
         if (error) throw error;
 
-        const produtosFormatados = data.map(p => ({
-            ...p,
-            nome_categoria: p.categorias ? p.categorias.nome : null
-        }));
+        const produtosFormatados = data.map(p => {
+            const variacoesAtivas = (p.produto_variacoes || []).filter(v => v.ativo);
+            return {
+                ...p,
+                nome_categoria: p.categorias ? p.categorias.nome : null,
+                // Com variações, o estoque "do produto" pra exibição na lista
+                // é a soma de todas as variações ativas — o valor bruto da
+                // coluna estoque_atual do produto não é usado nesse caso.
+                estoque_atual: p.tem_variacoes
+                    ? variacoesAtivas.reduce((acc, v) => acc + (parseFloat(v.estoque_atual) || 0), 0)
+                    : p.estoque_atual,
+                variacoes: variacoesAtivas,
+            };
+        });
 
         res.status(200).json(produtosFormatados);
 
@@ -312,7 +487,9 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         categoria_id,
         unidade_medida,
         vendido_por_peso,
-        plu_balanca
+        plu_balanca,
+        tem_variacoes,
+        variacoes,
     } = req.body;
 
     if (!nome || !preco_venda || estoque_atual === undefined) {
@@ -336,11 +513,17 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
                 unidade_medida: unidade_medida || 'un',
                 vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
                 plu_balanca: plu_balanca || null,
+                tem_variacoes: tem_variacoes === true || tem_variacoes === 'true' || false,
             })
             .select()
             .single();
 
         if (error) throw error;
+
+        // Cria as variações já na largada, se o produto nasceu com elas
+        if ((tem_variacoes === true || tem_variacoes === 'true') && Array.isArray(variacoes) && variacoes.length > 0) {
+          await sincronizarVariacoes(data.id, estabelecimentoId, variacoes);
+        }
 
         // Contribui pro catálogo global — próximo estabelecimento que
         // bipar esse mesmo código de barras já acha nome/marca prontos
@@ -386,7 +569,9 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         categoria_id,
         unidade_medida,
         vendido_por_peso,
-        plu_balanca
+        plu_balanca,
+        tem_variacoes,
+        variacoes,
     } = req.body;
 
     if (!nome || !preco_venda || estoque_atual === undefined) {
@@ -417,6 +602,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
                 unidade_medida: unidade_medida || 'un',
                 vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
                 plu_balanca: plu_balanca || null,
+                tem_variacoes: tem_variacoes === true || tem_variacoes === 'true' || false,
             })
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
@@ -428,6 +614,12 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         if (!data) {
             return res.status(404).json({ error: 'Produto não encontrado.' });
         }
+
+        // Sincroniza as variações com o que veio do formulário — se
+        // desmarcou "tem variações", a lista enviada normalmente vem
+        // vazia, e sincronizarVariacoes já cuida de desativar/remover
+        // as que existiam antes.
+        await sincronizarVariacoes(produtoId, estabelecimentoId, Array.isArray(variacoes) ? variacoes : []);
 
         const metaAntes = produtoAtual ? {
             nome:           produtoAtual.nome,
@@ -529,19 +721,32 @@ router.get('/:id/produtos/buscar', async (req, res) => {
 
         const { data, error } = await db
             .from('produtos')
-            .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca')
+            .select(`
+                id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
+                vendido_por_peso, plu_balanca, tem_variacoes,
+                produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+            `)
             .eq('mercearia_id', estabelecimentoId)
             .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
             .limit(10);
 
         if (error) throw error;
 
+        const comVariacoes = (rows) => (rows || []).map(p => ({
+            ...p,
+            variacoes: (p.produto_variacoes || []).filter(v => v.ativo),
+        }));
+
         // Fallback por PLU, ignorando zeros à esquerda (ex: "18" == "0018")
         if ((!data || data.length === 0) && /^\d+$/.test(termo.trim())) {
             const termoNum = parseInt(termo.trim(), 10);
             const { data: candidatos } = await db
                 .from('produtos')
-                .select('id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo, vendido_por_peso, plu_balanca')
+                .select(`
+                    id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
+                    vendido_por_peso, plu_balanca, tem_variacoes,
+                    produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
                 .limit(500);
@@ -550,10 +755,10 @@ router.get('/:id/produtos/buscar', async (req, res) => {
                 const pluNum = parseInt(String(p.plu_balanca).trim(), 10);
                 return !isNaN(pluNum) && pluNum === termoNum;
             });
-            if (porPlu.length > 0) return res.status(200).json(porPlu);
+            if (porPlu.length > 0) return res.status(200).json(comVariacoes(porPlu));
         }
 
-        res.status(200).json(data);
+        res.status(200).json(comVariacoes(data));
 
     } catch (error) {
 

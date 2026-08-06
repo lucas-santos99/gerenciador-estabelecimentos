@@ -171,22 +171,37 @@ router.post('/:id/cancelar', async (req, res) => {
       });
     }
 
-    // 1) Estorna o estoque de cada item vendido
+    // 1) Estorna o estoque de cada item vendido — se o item era de uma
+    // variação específica (tamanho/cor), devolve pro estoque DA
+    // VARIAÇÃO, não do produto base.
     const { data: itens } = await db
       .from('itens_venda')
-      .select('produto_id, quantidade, produtos ( nome )')
+      .select('produto_id, produto_variacao_id, quantidade, produtos ( nome )')
       .eq('venda_id', id);
 
     for (const item of itens || []) {
-      const { data: produto } = await db
-        .from('produtos')
-        .select('estoque_atual')
-        .eq('id', item.produto_id)
-        .single();
-      if (produto) {
-        await db.from('produtos')
-          .update({ estoque_atual: parseFloat(produto.estoque_atual || 0) + parseFloat(item.quantidade) })
-          .eq('id', item.produto_id);
+      if (item.produto_variacao_id) {
+        const { data: variacao } = await db
+          .from('produto_variacoes')
+          .select('estoque_atual')
+          .eq('id', item.produto_variacao_id)
+          .single();
+        if (variacao) {
+          await db.from('produto_variacoes')
+            .update({ estoque_atual: parseFloat(variacao.estoque_atual || 0) + parseFloat(item.quantidade) })
+            .eq('id', item.produto_variacao_id);
+        }
+      } else {
+        const { data: produto } = await db
+          .from('produtos')
+          .select('estoque_atual')
+          .eq('id', item.produto_id)
+          .single();
+        if (produto) {
+          await db.from('produtos')
+            .update({ estoque_atual: parseFloat(produto.estoque_atual || 0) + parseFloat(item.quantidade) })
+            .eq('id', item.produto_id);
+        }
       }
     }
 
