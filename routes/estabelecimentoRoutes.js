@@ -42,6 +42,7 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
       mercearia_id,
       tamanho:        v.tamanho?.trim() || null,
       cor:            v.cor?.trim() || null,
+      codigo_barras:  v.codigo_barras?.trim() || null,
       preco_custo:    v.preco_custo !== '' && v.preco_custo != null ? parseFloat(v.preco_custo) : null,
       preco_venda:    v.preco_venda !== '' && v.preco_venda != null ? parseFloat(v.preco_venda) : null,
       estoque_atual:  parseFloat(v.estoque_atual) || 0,
@@ -110,8 +111,8 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
                 .from('produtos')
                 .select(`
                     id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
-                    vendido_por_peso, plu_balanca, codigo_barras, categoria_id, tem_variacoes,
-                    produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                    vendido_por_peso, plu_balanca, codigo_barras, categoria_id, tem_variacoes, imagem_url,
+                    produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
                 `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
@@ -348,8 +349,9 @@ router.get('/:id/produtos', async (req, res) => {
                 vendido_por_peso,
                 plu_balanca,
                 tem_variacoes,
+                imagem_url,
                 categorias ( nome ),
-                produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
             .order('nome', { ascending: true });
@@ -388,11 +390,11 @@ router.get('/:id/produtos', async (req, res) => {
 ============================================================ */
 
 // Consulta a Open Food Facts (API pública, gratuita, sem chave).
-// Retorna { nome, marca } ou null se não encontrar.
+// Retorna { nome, marca, imagem_url } ou null se não encontrar.
 async function consultarOpenFoodFacts(codigo) {
   try {
     const resp = await fetch(
-      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands`,
+      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands,image_front_url,image_url`,
       { headers: { 'User-Agent': 'GerenciadorEstabelecimentos - LucasJSystems - contato via app' } }
     );
     if (!resp.ok) return null;
@@ -403,9 +405,40 @@ async function consultarOpenFoodFacts(codigo) {
     const marca = (json.product.brands || '').split(',')[0].trim();
     if (!nome) return null;
 
-    return { nome, marca: marca || null };
+    // image_front_url é a foto de capa (melhor qualidade/recorte);
+    // image_url é o fallback genérico quando não tem foto de capa
+    const imagem_url = json.product.image_front_url || json.product.image_url || null;
+
+    return { nome, marca: marca || null, imagem_url };
   } catch (err) {
     console.error('[CATALOGO] Erro consultar Open Food Facts:', err.message);
+    return null;
+  }
+}
+
+// Open Products Facts — irmão do Open Food Facts, mesma estrutura de API,
+// mas pra produtos em geral (não-alimentícios). Cobertura bem menor que
+// o OFF (comunidade pequena), mas é grátis e não custa nada tentar —
+// só entra em jogo quando nem o catálogo nem o OFF acham nada.
+async function consultarOpenProductsFacts(codigo) {
+  try {
+    const resp = await fetch(
+      `https://world.openproductsfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands,image_front_url,image_url`,
+      { headers: { 'User-Agent': 'GerenciadorEstabelecimentos - LucasJSystems - contato via app' } }
+    );
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    if (json.status !== 1 || !json.product) return null;
+
+    const nome  = (json.product.product_name || '').trim();
+    const marca = (json.product.brands || '').split(',')[0].trim();
+    if (!nome) return null;
+
+    const imagem_url = json.product.image_front_url || json.product.image_url || null;
+
+    return { nome, marca: marca || null, imagem_url };
+  } catch (err) {
+    console.error('[CATALOGO] Erro consultar Open Products Facts:', err.message);
     return null;
   }
 }
@@ -416,7 +449,7 @@ async function consultarOpenFoodFacts(codigo) {
 // catálogo. O primeiro cadastro "vence"; contribuições seguintes pro
 // mesmo código são ignoradas — evita que um erro de digitação de um
 // estabelecimento estrague um dado bom que já estava lá pra todo mundo.
-async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colaborativo') {
+async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colaborativo', imagem_url = null) {
   if (!codigo_barras || !nome) return;
   try {
     await db.from('catalogo_global_produtos').upsert({
@@ -424,6 +457,7 @@ async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colab
       nome,
       marca: marca || null,
       fonte,
+      imagem_url: imagem_url || null,
       atualizado_em: new Date().toISOString(),
     }, { onConflict: 'codigo_barras', ignoreDuplicates: true });
   } catch (err) {
@@ -431,10 +465,52 @@ async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colab
   }
 }
 
+// Calcula o dígito verificador de um EAN-13 (algoritmo padrão: peso
+// 1-3-1-3... alternado nos primeiros 12 dígitos, soma, resto da divisão
+// por 10, e o dígito é o que falta pra chegar no próximo múltiplo de 10).
+function calcularDigitoVerificadorEAN13(doze) {
+  let soma = 0;
+  for (let i = 0; i < 12; i++) {
+    const d = parseInt(doze[i], 10);
+    soma += (i % 2 === 0) ? d : d * 3;
+  }
+  const resto = soma % 10;
+  return resto === 0 ? 0 : 10 - resto;
+}
+
+// Gera um código de barras EAN-13 interno — prefixo "20" (faixa 20-29 é
+// reservada pela GS1 pra uso interno de lojas, nunca colide com código
+// de fabricante de verdade) + 10 dígitos sequenciais próprios do
+// estabelecimento + dígito verificador. O contador nunca reaproveita
+// número, mesmo que um produto seja excluído depois.
+async function gerarEAN13Interno(mercearia_id) {
+  const { data, error } = await db.rpc('incrementar_codigo_interno_seq', { p_mercearia_id: mercearia_id });
+  if (error) throw error;
+  const seq = data; // já vem incrementado
+  const corpo = `20${String(seq).padStart(10, '0')}`;
+  const digito = calcularDigitoVerificadorEAN13(corpo);
+  return `${corpo}${digito}`;
+}
+
+// --- Rota GET: /:id/produtos/gerar-codigo-interno ---
+// Usada pelo botão "Gerar código interno" no cadastro de produto (e nas
+// variações) — devolve um EAN-13 pronto pra imprimir e colar na peça.
+router.get('/:id/produtos/gerar-codigo-interno', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
+  try {
+    const codigo = await gerarEAN13Interno(req.params.id);
+    res.json({ codigo });
+  } catch (err) {
+    console.error('[ERRO] gerar-codigo-interno:', err.message);
+    res.status(500).json({ error: 'Erro ao gerar código interno.' });
+  }
+});
+
 // --- Rota GET: /:id/produtos/lookup-codigo?codigo=EAN ---
-// Usada no cadastro de produto novo pra auto-preencher nome/marca.
+// Usada no cadastro de produto novo pra auto-preencher nome/marca/imagem.
 // Ordem: 1) catálogo global (grátis, instantâneo) → 2) Open Food Facts
-// (grátis, externo — e já contribui de volta pro catálogo global).
+// (grátis, externo, forte em alimentos) → 3) Open Products Facts (grátis,
+// externo, cobertura menor mas cobre produtos em geral) — os dois
+// últimos já contribuem de volta pro catálogo global.
 router.get('/:id/produtos/lookup-codigo', async (req, res) => {
   const { codigo } = req.query;
   if (!codigo || !codigo.trim()) {
@@ -446,19 +522,44 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
     // 1) Catálogo global compartilhado
     const { data: doCatalogo } = await db
       .from('catalogo_global_produtos')
-      .select('nome, marca')
+      .select('nome, marca, imagem_url')
       .eq('codigo_barras', codigoLimpo)
       .maybeSingle();
 
     if (doCatalogo) {
-      return res.json({ encontrado: true, nome: doCatalogo.nome, marca: doCatalogo.marca, fonte: 'catalogo' });
+      return res.json({
+        encontrado: true,
+        nome: doCatalogo.nome,
+        marca: doCatalogo.marca,
+        imagem_url: doCatalogo.imagem_url || null,
+        fonte: 'catalogo',
+      });
     }
 
-    // 2) Open Food Facts (fallback externo, gratuito)
+    // 2) Open Food Facts (fallback externo, gratuito — forte em alimentos)
     const doOff = await consultarOpenFoodFacts(codigoLimpo);
     if (doOff) {
-      await salvarNoCatalogoGlobal(codigoLimpo, doOff.nome, doOff.marca, 'openfoodfacts');
-      return res.json({ encontrado: true, nome: doOff.nome, marca: doOff.marca, fonte: 'openfoodfacts' });
+      await salvarNoCatalogoGlobal(codigoLimpo, doOff.nome, doOff.marca, 'openfoodfacts', doOff.imagem_url);
+      return res.json({
+        encontrado: true,
+        nome: doOff.nome,
+        marca: doOff.marca,
+        imagem_url: doOff.imagem_url,
+        fonte: 'openfoodfacts',
+      });
+    }
+
+    // 3) Open Products Facts (fallback externo, gratuito — produtos em geral)
+    const doOpf = await consultarOpenProductsFacts(codigoLimpo);
+    if (doOpf) {
+      await salvarNoCatalogoGlobal(codigoLimpo, doOpf.nome, doOpf.marca, 'openproductsfacts', doOpf.imagem_url);
+      return res.json({
+        encontrado: true,
+        nome: doOpf.nome,
+        marca: doOpf.marca,
+        imagem_url: doOpf.imagem_url,
+        fonte: 'openproductsfacts',
+      });
     }
 
     // Não encontrado em nenhuma fonte gratuita — comerciante preenche na mão
@@ -490,6 +591,8 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         plu_balanca,
         tem_variacoes,
         variacoes,
+        imagem_url,
+        imagem_origem,
     } = req.body;
 
     if (!nome || !preco_venda || estoque_atual === undefined) {
@@ -514,6 +617,8 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
                 vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
                 plu_balanca: plu_balanca || null,
                 tem_variacoes: tem_variacoes === true || tem_variacoes === 'true' || false,
+                imagem_url: imagem_url || null,
+                imagem_origem: imagem_url ? (imagem_origem || null) : null,
             })
             .select()
             .single();
@@ -526,9 +631,12 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         }
 
         // Contribui pro catálogo global — próximo estabelecimento que
-        // bipar esse mesmo código de barras já acha nome/marca prontos
+        // bipar esse mesmo código de barras já acha nome/marca prontos.
+        // Imagem só vai junto se veio do catálogo/Open Food Facts — uma
+        // foto própria do lojista nunca é compartilhada com outras lojas.
         if (codigo_barras) {
-          salvarNoCatalogoGlobal(codigo_barras, nome, marca, 'colaborativo');
+          const imagemParaCatalogo = imagem_origem === 'upload' ? null : (imagem_url || null);
+          salvarNoCatalogoGlobal(codigo_barras, nome, marca, 'colaborativo', imagemParaCatalogo);
         }
 
         registrar({
@@ -588,22 +696,32 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
             .eq('mercearia_id', estabelecimentoId)
             .single();
 
+        const updateData = {
+            nome: nome,
+            marca: marca || null,
+            codigo_barras: codigo_barras || null,
+            estoque_atual: parseFloat(estoque_atual) || 0,
+            estoque_minimo: parseFloat(estoque_minimo) || 10,
+            preco_custo: parseFloat(preco_custo) || 0,
+            preco_venda: parseFloat(preco_venda),
+            categoria_id: categoria_id || null,
+            unidade_medida: unidade_medida || 'un',
+            vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
+            plu_balanca: plu_balanca || null,
+            tem_variacoes: tem_variacoes === true || tem_variacoes === 'true' || false,
+        };
+
+        // imagem_url só é tocada se vier explicitamente no corpo — a
+        // imagem tem rotas próprias de upload/remoção, então o form
+        // geral de edição não precisa (nem deve) mexer nela sem querer.
+        if ('imagem_url' in req.body) {
+            updateData.imagem_url = req.body.imagem_url || null;
+            updateData.imagem_origem = req.body.imagem_url ? (req.body.imagem_origem || null) : null;
+        }
+
         const { data, error } = await db
             .from('produtos')
-            .update({
-                nome: nome,
-                marca: marca || null,
-                codigo_barras: codigo_barras || null,
-                estoque_atual: parseFloat(estoque_atual) || 0,
-                estoque_minimo: parseFloat(estoque_minimo) || 10,
-                preco_custo: parseFloat(preco_custo) || 0,
-                preco_venda: parseFloat(preco_venda),
-                categoria_id: categoria_id || null,
-                unidade_medida: unidade_medida || 'un',
-                vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
-                plu_balanca: plu_balanca || null,
-                tem_variacoes: tem_variacoes === true || tem_variacoes === 'true' || false,
-            })
+            .update(updateData)
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
             .select()
@@ -659,6 +777,85 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         console.error(`[ERRO] PUT /api/estabelecimentos/.../produtos/${produtoId}:`, error.message);
         res.status(500).json({ error: 'Erro ao atualizar produto.' });
 
+    }
+});
+
+// --- Rota POST: /:id/produtos/:produtoId/imagem — foto própria do lojista ---
+// Recebe a imagem já comprimida pelo navegador (canvas, ~400x400px) como
+// data URL base64. Fica só nesse estabelecimento — nunca vai pro catálogo
+// global (diferente da imagem sugerida do Open Food Facts/catálogo).
+router.post('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+    const { id: estabelecimentoId, produtoId } = req.params;
+    const { imagem_base64 } = req.body;
+
+    if (!imagem_base64 || !imagem_base64.startsWith('data:image/')) {
+        return res.status(400).json({ error: 'Envie uma imagem válida.' });
+    }
+
+    try {
+        const { data: produto } = await db
+            .from('produtos')
+            .select('id')
+            .eq('id', produtoId)
+            .eq('mercearia_id', estabelecimentoId)
+            .single();
+        if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
+
+        const match = imagem_base64.match(/^data:image\/(\w+);base64,(.+)$/);
+        if (!match) return res.status(400).json({ error: 'Formato de imagem inválido.' });
+        const [, extensao, base64Puro] = match;
+        const buffer = Buffer.from(base64Puro, 'base64');
+
+        // Limite de segurança — a compressão no navegador já deveria
+        // deixar bem menor que isso, mas evita abuso/erro de implementação
+        if (buffer.length > 2 * 1024 * 1024) {
+            return res.status(400).json({ error: 'Imagem muito grande (máx. 2MB).' });
+        }
+
+        const nomeArquivo = `produtos/${estabelecimentoId}/${produtoId}-${Date.now()}.${extensao}`;
+        const { error: uploadErr } = await db.storage
+            .from('logos')
+            .upload(nomeArquivo, buffer, { upsert: true, contentType: `image/${extensao}` });
+        if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+
+        const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
+        const url = urlData.publicUrl;
+
+        const { data: atualizado, error } = await db
+            .from('produtos')
+            .update({ imagem_url: url, imagem_origem: 'upload' })
+            .eq('id', produtoId)
+            .eq('mercearia_id', estabelecimentoId)
+            .select()
+            .single();
+        if (error) throw error;
+
+        res.status(200).json(atualizado);
+    } catch (error) {
+        console.error(`[ERRO] POST .../produtos/${produtoId}/imagem:`, error.message);
+        res.status(500).json({ error: 'Erro ao enviar imagem.' });
+    }
+});
+
+// --- Rota DELETE: /:id/produtos/:produtoId/imagem — remove a imagem atual ---
+// Volta pro estado "sem imagem" — o lojista pode buscar a sugestão de
+// novo depois, se quiser.
+router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+    const { id: estabelecimentoId, produtoId } = req.params;
+    try {
+        const { data, error } = await db
+            .from('produtos')
+            .update({ imagem_url: null, imagem_origem: null })
+            .eq('id', produtoId)
+            .eq('mercearia_id', estabelecimentoId)
+            .select()
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Produto não encontrado.' });
+        res.status(200).json(data);
+    } catch (error) {
+        console.error(`[ERRO] DELETE .../produtos/${produtoId}/imagem:`, error.message);
+        res.status(500).json({ error: 'Erro ao remover imagem.' });
     }
 });
 
@@ -723,8 +920,8 @@ router.get('/:id/produtos/buscar', async (req, res) => {
             .from('produtos')
             .select(`
                 id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
-                vendido_por_peso, plu_balanca, tem_variacoes,
-                produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                vendido_por_peso, plu_balanca, tem_variacoes, imagem_url,
+                produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
             .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
@@ -744,8 +941,8 @@ router.get('/:id/produtos/buscar', async (req, res) => {
                 .from('produtos')
                 .select(`
                     id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
-                    vendido_por_peso, plu_balanca, tem_variacoes,
-                    produto_variacoes ( id, tamanho, cor, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                    vendido_por_peso, plu_balanca, tem_variacoes, imagem_url,
+                    produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
                 `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
