@@ -36,7 +36,10 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
     }
   }
 
-  // Cria as novas, atualiza as que já existiam
+  // Cria as novas, atualiza as que já existiam — e guarda o resultado (com
+  // o id real de cada linha) pra devolver pra quem chamou, já que produtos
+  // recém-criados/variações recém-criadas só ganham um id depois desse passo.
+  const resultado = [];
   for (const v of variacoesEnviadas) {
     const payload = {
       produto_id:     produtoId,
@@ -49,12 +52,16 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
       preco_venda:    v.preco_venda !== '' && v.preco_venda != null ? parseFloat(v.preco_venda) : null,
       estoque_atual:  parseFloat(v.estoque_atual) || 0,
       estoque_minimo: v.estoque_minimo !== '' && v.estoque_minimo != null ? parseFloat(v.estoque_minimo) : null,
+      imagem_url:     v.imagem_url?.trim() || null,
+      imagem_origem:  v.imagem_url?.trim() ? (v.imagem_origem?.trim() || null) : null,
       ativo: true,
     };
     if (v.id && idsExistentes.has(v.id)) {
-      await db.from('produto_variacoes').update(payload).eq('id', v.id);
+      const { data: linha } = await db.from('produto_variacoes').update(payload).eq('id', v.id).select().single();
+      if (linha) resultado.push(linha);
     } else {
-      await db.from('produto_variacoes').insert(payload);
+      const { data: linha } = await db.from('produto_variacoes').insert(payload).select().single();
+      if (linha) resultado.push(linha);
     }
   }
 
@@ -70,6 +77,8 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
     await db.from('opcoes_variacao')
       .upsert({ mercearia_id, tipo: p.tipo, valor: p.valor }, { onConflict: 'mercearia_id,tipo,valor', ignoreDuplicates: true });
   }
+
+  return resultado;
 }
 router.use(authUser);
 
@@ -356,7 +365,7 @@ router.get('/:id/produtos', async (req, res) => {
                 tem_variacoes,
                 imagem_url,
                 categorias ( nome ),
-                produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, imagem_url, imagem_origem, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
             .order('nome', { ascending: true });
@@ -748,9 +757,11 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
 
         if (error) throw error;
 
-        // Cria as variações já na largada, se o produto nasceu com elas
+        // Cria as variações já na largada, se o produto nasceu com elas —
+        // guarda o retorno (com os ids reais) na resposta, pra o front saber
+        // pra qual linha subir foto logo em seguida, sem precisar recarregar.
         if ((tem_variacoes === true || tem_variacoes === 'true') && Array.isArray(variacoes) && variacoes.length > 0) {
-          await sincronizarVariacoes(data.id, estabelecimentoId, variacoes);
+          data.variacoes = await sincronizarVariacoes(data.id, estabelecimentoId, variacoes);
         }
 
         // Contribui pro catálogo global — próximo estabelecimento que
@@ -875,8 +886,9 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         // Sincroniza as variações com o que veio do formulário — se
         // desmarcou "tem variações", a lista enviada normalmente vem
         // vazia, e sincronizarVariacoes já cuida de desativar/remover
-        // as que existiam antes.
-        await sincronizarVariacoes(produtoId, estabelecimentoId, Array.isArray(variacoes) ? variacoes : []);
+        // as que existiam antes. Guarda o retorno (ids reais) na resposta,
+        // pra o front conseguir subir foto de uma variação recém-criada.
+        data.variacoes = await sincronizarVariacoes(produtoId, estabelecimentoId, Array.isArray(variacoes) ? variacoes : []);
 
         // Corrigir nome/marca na edição também atualiza o catálogo global
         // (diferente da criação, que só grava se ainda não existir) — assim
@@ -1002,6 +1014,83 @@ router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.E
         res.status(200).json(data);
     } catch (error) {
         console.error(`[ERRO] DELETE .../produtos/${produtoId}/imagem:`, error.message);
+        res.status(500).json({ error: 'Erro ao remover imagem.' });
+    }
+});
+
+// --- Rota POST: /:id/produtos/:produtoId/variacoes/:variacaoId/imagem ---
+// Foto própria de uma variação específica (ex: a mesma camiseta em cores
+// diferentes) — mesma lógica da imagem do produto, mas por variação.
+router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+    const { id: estabelecimentoId, produtoId, variacaoId } = req.params;
+    const { imagem_base64 } = req.body;
+
+    if (!imagem_base64 || !imagem_base64.startsWith('data:image/')) {
+        return res.status(400).json({ error: 'Envie uma imagem válida.' });
+    }
+
+    try {
+        const { data: variacao } = await db
+            .from('produto_variacoes')
+            .select('id')
+            .eq('id', variacaoId)
+            .eq('produto_id', produtoId)
+            .eq('mercearia_id', estabelecimentoId)
+            .single();
+        if (!variacao) return res.status(404).json({ error: 'Variação não encontrada.' });
+
+        const match = imagem_base64.match(/^data:image\/(\w+);base64,(.+)$/);
+        if (!match) return res.status(400).json({ error: 'Formato de imagem inválido.' });
+        const [, extensao, base64Puro] = match;
+        const buffer = Buffer.from(base64Puro, 'base64');
+
+        if (buffer.length > 2 * 1024 * 1024) {
+            return res.status(400).json({ error: 'Imagem muito grande (máx. 2MB).' });
+        }
+
+        const nomeArquivo = `produtos/${estabelecimentoId}/variacoes/${variacaoId}-${Date.now()}.${extensao}`;
+        const { error: uploadErr } = await db.storage
+            .from('logos')
+            .upload(nomeArquivo, buffer, { upsert: true, contentType: `image/${extensao}` });
+        if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+
+        const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
+        const url = urlData.publicUrl;
+
+        const { data: atualizado, error } = await db
+            .from('produto_variacoes')
+            .update({ imagem_url: url, imagem_origem: 'upload' })
+            .eq('id', variacaoId)
+            .eq('produto_id', produtoId)
+            .eq('mercearia_id', estabelecimentoId)
+            .select()
+            .single();
+        if (error) throw error;
+
+        res.status(200).json(atualizado);
+    } catch (error) {
+        console.error(`[ERRO] POST .../variacoes/${variacaoId}/imagem:`, error.message);
+        res.status(500).json({ error: 'Erro ao enviar imagem.' });
+    }
+});
+
+// --- Rota DELETE: /:id/produtos/:produtoId/variacoes/:variacaoId/imagem ---
+router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+    const { id: estabelecimentoId, produtoId, variacaoId } = req.params;
+    try {
+        const { data, error } = await db
+            .from('produto_variacoes')
+            .update({ imagem_url: null, imagem_origem: null })
+            .eq('id', variacaoId)
+            .eq('produto_id', produtoId)
+            .eq('mercearia_id', estabelecimentoId)
+            .select()
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Variação não encontrada.' });
+        res.status(200).json(data);
+    } catch (error) {
+        console.error(`[ERRO] DELETE .../variacoes/${variacaoId}/imagem:`, error.message);
         res.status(500).json({ error: 'Erro ao remover imagem.' });
     }
 });
