@@ -43,6 +43,7 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
       mercearia_id,
       tamanho:        v.tamanho?.trim() || null,
       cor:            v.cor?.trim() || null,
+      genero:         v.genero?.trim() || null,
       codigo_barras:  v.codigo_barras?.trim() || null,
       preco_custo:    v.preco_custo !== '' && v.preco_custo != null ? parseFloat(v.preco_custo) : null,
       preco_venda:    v.preco_venda !== '' && v.preco_venda != null ? parseFloat(v.preco_venda) : null,
@@ -63,6 +64,7 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
   variacoesEnviadas.forEach(v => {
     if (v.tamanho?.trim()) novosPresets.push({ tipo: 'tamanho', valor: v.tamanho.trim() });
     if (v.cor?.trim())     novosPresets.push({ tipo: 'cor',     valor: v.cor.trim() });
+    if (v.genero?.trim())  novosPresets.push({ tipo: 'genero',  valor: v.genero.trim() });
   });
   for (const p of novosPresets) {
     await db.from('opcoes_variacao')
@@ -113,7 +115,7 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
                 .select(`
                     id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
                     vendido_por_peso, plu_balanca, codigo_barras, categoria_id, tem_variacoes, imagem_url,
-                    produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                    produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
                 `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
@@ -231,9 +233,9 @@ router.get('/:id/produtos/marcas', async (req, res) => {
     }
 });
 
-// --- Rota GET: /:id/opcoes-variacao?tipo=tamanho|cor — valores já
+// --- Rota GET: /:id/opcoes-variacao?tipo=tamanho|cor|genero — valores já
 // cadastrados nesse estabelecimento, pra alimentar o autocomplete do
-// tamanho/cor na hora de criar uma variação. Sem ?tipo, devolve os dois. ---
+// tamanho/cor/gênero na hora de criar uma variação. Sem ?tipo, devolve os três. ---
 router.get('/:id/opcoes-variacao', async (req, res) => {
     const estabelecimentoId = req.params.id;
     const { tipo, comId } = req.query;
@@ -257,12 +259,14 @@ router.get('/:id/opcoes-variacao', async (req, res) => {
             return res.status(200).json({
                 tamanho: (data || []).filter(o => o.tipo === 'tamanho').map(o => ({ id: o.id, valor: o.valor })),
                 cor:     (data || []).filter(o => o.tipo === 'cor').map(o => ({ id: o.id, valor: o.valor })),
+                genero:  (data || []).filter(o => o.tipo === 'genero').map(o => ({ id: o.id, valor: o.valor })),
             });
         }
 
         res.status(200).json({
             tamanho: (data || []).filter(o => o.tipo === 'tamanho').map(o => o.valor),
             cor:     (data || []).filter(o => o.tipo === 'cor').map(o => o.valor),
+            genero:  (data || []).filter(o => o.tipo === 'genero').map(o => o.valor),
         });
     } catch (error) {
         console.error(`[ERRO] GET /:id/opcoes-variacao:`, error.message);
@@ -277,8 +281,8 @@ router.post('/:id/opcoes-variacao', async (req, res) => {
     const estabelecimentoId = req.params.id;
     const { tipo, valor } = req.body;
 
-    if (!['tamanho', 'cor'].includes(tipo)) {
-        return res.status(400).json({ error: "Tipo inválido (use 'tamanho' ou 'cor')." });
+    if (!['tamanho', 'cor', 'genero'].includes(tipo)) {
+        return res.status(400).json({ error: "Tipo inválido (use 'tamanho', 'cor' ou 'genero')." });
     }
     if (!valor || !valor.trim()) {
         return res.status(400).json({ error: 'Informe um valor.' });
@@ -352,7 +356,7 @@ router.get('/:id/produtos', async (req, res) => {
                 tem_variacoes,
                 imagem_url,
                 categorias ( nome ),
-                produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
             .order('nome', { ascending: true });
@@ -1064,7 +1068,7 @@ router.get('/:id/produtos/buscar', async (req, res) => {
             .select(`
                 id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
                 vendido_por_peso, plu_balanca, tem_variacoes, imagem_url,
-                produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
             .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
@@ -1085,7 +1089,7 @@ router.get('/:id/produtos/buscar', async (req, res) => {
                 .select(`
                     id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
                     vendido_por_peso, plu_balanca, tem_variacoes, imagem_url,
-                    produto_variacoes ( id, tamanho, cor, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                    produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
                 `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
