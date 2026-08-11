@@ -389,27 +389,68 @@ router.get('/:id/produtos', async (req, res) => {
    CATÁLOGO GLOBAL DE PRODUTOS — auto-preenchimento por código de barras
 ============================================================ */
 
-// Consulta a Open Food Facts (API pública, gratuita, sem chave).
-// Retorna { nome, marca, imagem_url } ou null se não encontrar.
-async function consultarOpenFoodFacts(codigo) {
+// Último recurso quando o produto não tem nome em português cadastrado
+// em nenhuma base (nem product_name_pt no OFF/OPF) — traduz automático.
+// Usa o endpoint público do Google Translate (o mesmo que o "traduzir
+// página" do navegador usa por trás), sem chave, com detecção automática
+// do idioma de origem (sl=auto), já que o nome pode vir em qualquer
+// idioma dependendo de quem cadastrou o produto. É um endpoint não
+// documentado oficialmente pelo Google — funciona bem na prática, mas
+// pode mudar ou ficar fora do ar sem aviso, por isso a falha aqui nunca
+// quebra o fluxo: some erro, some resultado, sem tradução, autopreenche.
+// Nunca é usado pra marca — marca de produto nunca deve ser traduzida.
+async function traduzirParaPortugues(texto) {
+  if (!texto || !texto.trim()) return null;
   try {
     const resp = await fetch(
-      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands,image_front_url,image_url`,
+      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=pt&dt=t&q=${encodeURIComponent(texto)}`
+    );
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const traduzido = (json?.[0] || []).map(seg => seg[0]).join('').trim();
+    if (!traduzido || traduzido.toLowerCase() === texto.trim().toLowerCase()) return null;
+    return traduzido;
+  } catch (err) {
+    console.error('[CATALOGO] Erro ao traduzir nome:', err.message);
+    return null;
+  }
+}
+
+// Consulta a Open Food Facts (API pública, gratuita, sem chave).
+// Retorna { nome, marca, imagem_url, traduzido } ou null se não encontrar.
+async function consultarOpenFoodFacts(codigo) {
+  try {
+    // lc=pt pede pra API priorizar o nome em português quando o produto
+    // tiver um cadastrado (comum em produto brasileiro) — e como reforço
+    // pedimos também o campo product_name_pt direto, que existe
+    // independente do idioma escolhido em lc. Sem isso, o campo genérico
+    // product_name vem no idioma que o primeiro contribuidor digitou (às
+    // vezes inglês/francês/outro), mesmo quando existe versão em PT.
+    const resp = await fetch(
+      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,product_name_pt,brands,image_front_url,image_url&lc=pt`,
       { headers: { 'User-Agent': 'GerenciadorEstabelecimentos - LucasJSystems - contato via app' } }
     );
     if (!resp.ok) return null;
     const json = await resp.json();
     if (json.status !== 1 || !json.product) return null;
 
-    const nome  = (json.product.product_name || '').trim();
+    let nome   = (json.product.product_name_pt || json.product.product_name || '').trim();
     const marca = (json.product.brands || '').split(',')[0].trim();
     if (!nome) return null;
+
+    // Não tinha product_name_pt cadastrado — tenta traduzir o nome que
+    // veio (última tentativa antes de deixar assim mesmo pro lojista ver)
+    let traduzido = false;
+    if (!json.product.product_name_pt) {
+      const nomeTraduzido = await traduzirParaPortugues(nome);
+      if (nomeTraduzido) { nome = nomeTraduzido; traduzido = true; }
+    }
 
     // image_front_url é a foto de capa (melhor qualidade/recorte);
     // image_url é o fallback genérico quando não tem foto de capa
     const imagem_url = json.product.image_front_url || json.product.image_url || null;
 
-    return { nome, marca: marca || null, imagem_url };
+    return { nome, marca: marca || null, imagem_url, traduzido };
   } catch (err) {
     console.error('[CATALOGO] Erro consultar Open Food Facts:', err.message);
     return null;
@@ -422,21 +463,30 @@ async function consultarOpenFoodFacts(codigo) {
 // só entra em jogo quando nem o catálogo nem o OFF acham nada.
 async function consultarOpenProductsFacts(codigo) {
   try {
+    // Mesmo motivo do OFF acima: pede o nome já em português (lc=pt +
+    // campo product_name_pt) em vez do nome genérico, que pode vir em
+    // qualquer idioma dependendo de quem cadastrou o produto lá.
     const resp = await fetch(
-      `https://world.openproductsfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,brands,image_front_url,image_url`,
+      `https://world.openproductsfacts.org/api/v2/product/${encodeURIComponent(codigo)}.json?fields=product_name,product_name_pt,brands,image_front_url,image_url&lc=pt`,
       { headers: { 'User-Agent': 'GerenciadorEstabelecimentos - LucasJSystems - contato via app' } }
     );
     if (!resp.ok) return null;
     const json = await resp.json();
     if (json.status !== 1 || !json.product) return null;
 
-    const nome  = (json.product.product_name || '').trim();
+    let nome   = (json.product.product_name_pt || json.product.product_name || '').trim();
     const marca = (json.product.brands || '').split(',')[0].trim();
     if (!nome) return null;
 
+    let traduzido = false;
+    if (!json.product.product_name_pt) {
+      const nomeTraduzido = await traduzirParaPortugues(nome);
+      if (nomeTraduzido) { nome = nomeTraduzido; traduzido = true; }
+    }
+
     const imagem_url = json.product.image_front_url || json.product.image_url || null;
 
-    return { nome, marca: marca || null, imagem_url };
+    return { nome, marca: marca || null, imagem_url, traduzido };
   } catch (err) {
     console.error('[CATALOGO] Erro consultar Open Products Facts:', err.message);
     return null;
@@ -462,6 +512,28 @@ async function salvarNoCatalogoGlobal(codigo_barras, nome, marca, fonte = 'colab
     }, { onConflict: 'codigo_barras', ignoreDuplicates: true });
   } catch (err) {
     console.error('[CATALOGO] Erro salvar no catálogo global:', err.message);
+  }
+}
+
+// Diferente de salvarNoCatalogoGlobal (que só grava se o código ainda não
+// existir — "primeiro cadastro vence"): esta SOBRESCREVE a entrada do
+// catálogo global quando o lojista corrige nome/marca de um produto que
+// ele já tinha cadastrado. Faz sentido porque o app é só pro Brasil —
+// uma correção pro nome certo em português deve valer pra próxima loja
+// que bipar esse mesmo código, não só ficar presa nesse estabelecimento.
+// Nunca mexe em imagem: foto do lojista nunca vai pro catálogo global.
+async function atualizarCatalogoGlobal(codigo_barras, nome, marca) {
+  if (!codigo_barras || !nome || codigoNaFaixaInterna(codigo_barras)) return;
+  try {
+    await db.from('catalogo_global_produtos').upsert({
+      codigo_barras,
+      nome,
+      marca: marca || null,
+      fonte: 'colaborativo',
+      atualizado_em: new Date().toISOString(),
+    }, { onConflict: 'codigo_barras' });
+  } catch (err) {
+    console.error('[CATALOGO] Erro atualizar catálogo global:', err.message);
   }
 }
 
@@ -492,6 +564,20 @@ async function gerarEAN13Interno(mercearia_id) {
   return `${corpo}${digito}`;
 }
 
+// Um código de barras interno (faixa GS1 20-29) é sequencial POR
+// ESTABELECIMENTO, não globalmente único — o 1º produto de cada loja
+// gera o mesmo código que o 1º produto de qualquer outra loja. Por isso
+// esses códigos nunca podem entrar no catálogo global compartilhado nem
+// ser usados pra auto-preencher via lookup: se entrassem, o produto de
+// uma loja "vazaria" o nome pro produto (completamente diferente) de
+// outra loja que gerou o mesmo número internamente.
+function codigoNaFaixaInterna(codigo) {
+  const c = String(codigo || '').trim();
+  if (!/^\d{13}$/.test(c)) return false;
+  const prefixo = parseInt(c.slice(0, 2), 10);
+  return prefixo >= 20 && prefixo <= 29;
+}
+
 // --- Rota GET: /:id/produtos/gerar-codigo-interno ---
 // Usada pelo botão "Gerar código interno" no cadastro de produto (e nas
 // variações) — devolve um EAN-13 pronto pra imprimir e colar na peça.
@@ -518,6 +604,14 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
   }
   const codigoLimpo = codigo.trim();
 
+  // Código gerado internamente (faixa 20-29) — nunca é um produto de
+  // catálogo de verdade, e o mesmo número existe em várias lojas ao
+  // mesmo tempo (cada uma com seu próprio contador). Nem consulta o
+  // catálogo/Open Food Facts/Open Products Facts pra esse código.
+  if (codigoNaFaixaInterna(codigoLimpo)) {
+    return res.json({ encontrado: false });
+  }
+
   try {
     // 1) Catálogo global compartilhado
     const { data: doCatalogo } = await db
@@ -533,12 +627,16 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
         marca: doCatalogo.marca,
         imagem_url: doCatalogo.imagem_url || null,
         fonte: 'catalogo',
+        traduzido: false,
       });
     }
 
     // 2) Open Food Facts (fallback externo, gratuito — forte em alimentos)
     const doOff = await consultarOpenFoodFacts(codigoLimpo);
     if (doOff) {
+      // Já grava no catálogo global o nome final (traduzido, se foi o caso)
+      // — a próxima loja que bipar esse código pega direto do catálogo,
+      // sem precisar traduzir de novo.
       await salvarNoCatalogoGlobal(codigoLimpo, doOff.nome, doOff.marca, 'openfoodfacts', doOff.imagem_url);
       return res.json({
         encontrado: true,
@@ -546,6 +644,7 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
         marca: doOff.marca,
         imagem_url: doOff.imagem_url,
         fonte: 'openfoodfacts',
+        traduzido: !!doOff.traduzido,
       });
     }
 
@@ -559,6 +658,7 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
         marca: doOpf.marca,
         imagem_url: doOpf.imagem_url,
         fonte: 'openproductsfacts',
+        traduzido: !!doOpf.traduzido,
       });
     }
 
@@ -634,7 +734,10 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         // bipar esse mesmo código de barras já acha nome/marca prontos.
         // Imagem só vai junto se veio do catálogo/Open Food Facts — uma
         // foto própria do lojista nunca é compartilhada com outras lojas.
-        if (codigo_barras) {
+        // Código gerado internamente (faixa 20-29) nunca entra aqui — é
+        // sequencial por estabelecimento, então o mesmo número aparece em
+        // várias lojas com produtos totalmente diferentes.
+        if (codigo_barras && !codigoNaFaixaInterna(codigo_barras)) {
           const imagemParaCatalogo = imagem_origem === 'upload' ? null : (imagem_url || null);
           salvarNoCatalogoGlobal(codigo_barras, nome, marca, 'colaborativo', imagemParaCatalogo);
         }
@@ -738,6 +841,14 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         // vazia, e sincronizarVariacoes já cuida de desativar/remover
         // as que existiam antes.
         await sincronizarVariacoes(produtoId, estabelecimentoId, Array.isArray(variacoes) ? variacoes : []);
+
+        // Corrigir nome/marca na edição também atualiza o catálogo global
+        // (diferente da criação, que só grava se ainda não existir) — assim
+        // a correção pra português beneficia a próxima loja que bipar esse
+        // código, em vez de ficar presa só nesse estabelecimento.
+        if (codigo_barras) {
+          atualizarCatalogoGlobal(codigo_barras, nome, marca);
+        }
 
         const metaAntes = produtoAtual ? {
             nome:           produtoAtual.nome,
