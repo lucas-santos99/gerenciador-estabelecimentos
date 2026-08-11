@@ -331,7 +331,7 @@ router.get('/historico',
         const vendasComItens = await Promise.all(vendas.map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
-                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida )')
+                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
                 .eq('venda_id', venda.id);
 
             return {
@@ -341,11 +341,12 @@ router.get('/historico',
                                     ? (operadoresMap[venda.operador_id] || 'Operador removido')
                                     : nomeMerchant,
                 itens: (itens || []).map(i => ({
-                    produto_nome:   i.produtos?.nome || 'Produto',
-                    produto_marca:  i.produtos?.marca || null,
-                    quantidade:     i.quantidade,
-                    preco_unitario: i.preco_unitario,
-                    unidade_medida: i.produtos?.unidade_medida || 'un',
+                    produto_nome:       i.produtos?.nome || 'Produto',
+                    produto_marca:      i.produtos?.marca || null,
+                    produto_imagem_url: i.produtos?.imagem_url || null,
+                    quantidade:         i.quantidade,
+                    preco_unitario:     i.preco_unitario,
+                    unidade_medida:     i.produtos?.unidade_medida || 'un',
                 })),
             };
         }));
