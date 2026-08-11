@@ -86,7 +86,7 @@ router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
 
   const { mercearia_id } = req.user;
   const {
-    modulo, operador_id, acao,
+    modulo, operador_id, acao, busca,
     data_inicio, data_fim,
     limit = 50, offset = 0,
   } = req.query;
@@ -112,6 +112,10 @@ router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
       query = query.eq('operador_id', operador_id);
     }
     if (acao)        query = query.eq('acao', acao);
+    // Busca livre por palavra dentro da descrição do registro — útil pra
+    // achar, por exemplo, uma tentativa de cadastro com palavra proibida
+    // (a descrição do registro guarda o nome/marca que foi digitado).
+    if (busca)       query = query.ilike('descricao', `%${busca.trim()}%`);
     if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
     if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
 

@@ -6,6 +6,7 @@ const { registrar } = require('./auditoriaRoutes');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
+const { contemPalavraProibida } = require('../utils/filtroPalavroes');
 
 // Sincroniza a lista de variações (tamanho/cor) de um produto com o que
 // veio do formulário — cria as novas, atualiza as existentes, e remove
@@ -699,6 +700,24 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         return res.status(400).json({ error: 'Nome, Preço de Venda e Estoque Atual são obrigatórios.' });
     }
 
+    // Nome/marca com palavra ofensiva nunca salva — evita vandalismo tanto
+    // no cadastro local quanto no catálogo global (que esse produto pode
+    // alimentar logo abaixo, se tiver código de barras). Fica registrado
+    // na auditoria mesmo assim (rota /:id/produtos abaixo é só a criação),
+    // pra dar pra ver quem tentou, quando, e o que tentou digitar.
+    if (contemPalavraProibida(nome) || contemPalavraProibida(marca)) {
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'produto_bloqueado_palavra',
+          descricao: `Tentativa de criar produto com nome/marca bloqueado por palavra proibida: "${nome}${marca ? ' · ' + marca : ''}"`,
+          meta: { nome, marca: marca || null },
+        });
+        return res.status(400).json({ error: 'Nome ou marca contém uma palavra não permitida. Ajuste antes de salvar.' });
+    }
+
     try {
 
         const { data, error } = await db
@@ -787,6 +806,19 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
 
     if (!nome || !preco_venda || estoque_atual === undefined) {
         return res.status(400).json({ error: 'Nome, Preço de Venda e Estoque Atual são obrigatórios.' });
+    }
+
+    if (contemPalavraProibida(nome) || contemPalavraProibida(marca)) {
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'produto_bloqueado_palavra',
+          descricao: `Tentativa de editar produto com nome/marca bloqueado por palavra proibida: "${nome}${marca ? ' · ' + marca : ''}"`,
+          meta: { produto_id: produtoId, nome, marca: marca || null },
+        });
+        return res.status(400).json({ error: 'Nome ou marca contém uma palavra não permitida. Ajuste antes de salvar.' });
     }
 
     try {
