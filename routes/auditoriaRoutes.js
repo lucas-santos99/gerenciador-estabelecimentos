@@ -206,7 +206,7 @@ router.get('/admin/geral', async (req, res) => {
   }
 
   const {
-    escopo, modulo, acao, mercearia_id, usuario,
+    escopo, modulo, acao, mercearia_id, usuario, busca,
     data_inicio, data_fim,
     sort_by = 'criado_em', sort_order = 'desc',
     limit = 50, offset = 0,
@@ -242,6 +242,10 @@ router.get('/admin/geral', async (req, res) => {
     if (acao)         query = query.eq('acao', acao);
     if (mercearia_id) query = query.eq('mercearia_id', mercearia_id);
     if (usuario)      query = query.ilike('usuario_nome', `%${usuario}%`);
+    // Busca livre por palavra na descrição — cruza todos os estabelecimentos,
+    // útil pra achar rápido uma tentativa de nome/marca com palavra proibida
+    // (ou qualquer outro evento) sem precisar saber de qual loja veio.
+    if (busca)        query = query.ilike('descricao', `%${busca.trim()}%`);
     if (data_inicio)  query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
     if (data_fim)     query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
 
@@ -324,7 +328,7 @@ router.get('/admin/:mercearia_id', async (req, res) => {
   }
 
   const { mercearia_id } = req.params;
-  const { limit = 100, offset = 0, modulo, data_inicio, data_fim } = req.query;
+  const { limit = 100, offset = 0, modulo, busca, data_inicio, data_fim } = req.query;
 
   try {
     const timezone = await buscarTimezone(mercearia_id);
@@ -337,6 +341,7 @@ router.get('/admin/:mercearia_id', async (req, res) => {
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (modulo)      query = query.eq('modulo', modulo);
+    if (busca)       query = query.ilike('descricao', `%${busca.trim()}%`);
     if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
     if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
 
