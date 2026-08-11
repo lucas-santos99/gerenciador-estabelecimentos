@@ -217,7 +217,7 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
         const resultado = await Promise.all((vendas || []).map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
-                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida )')
+                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
                 .eq('venda_id', venda.id);
 
             return {
@@ -226,11 +226,12 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
                                    ? (operadoresMap[venda.operador_id] || 'Operador removido')
                                    : nomeMerchant,
                 itens: (itens || []).map(i => ({
-                    produto_nome:   i.produtos?.nome || 'Produto',
-                    produto_marca:  i.produtos?.marca || null,
-                    quantidade:     i.quantidade,
-                    preco_unitario: i.preco_unitario,
-                    unidade_medida: i.produtos?.unidade_medida || 'un',
+                    produto_nome:       i.produtos?.nome || 'Produto',
+                    produto_marca:      i.produtos?.marca || null,
+                    produto_imagem_url: i.produtos?.imagem_url || null,
+                    quantidade:         i.quantidade,
+                    preco_unitario:     i.preco_unitario,
+                    unidade_medida:     i.produtos?.unidade_medida || 'un',
                 })),
             };
         }));
@@ -307,10 +308,11 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 
             if (item.produto_nome) {
                 acc[item.venda_id].itens.push({
-                    produto_nome:   item.produto_nome,
-                    quantidade:     item.quantidade,
-                    preco_unitario: item.preco_unitario,
-                    unidade_medida: item.unidade_medida || 'un',
+                    produto_nome:       item.produto_nome,
+                    produto_imagem_url: item.produto_imagem_url || null,
+                    quantidade:         item.quantidade,
+                    preco_unitario:     item.preco_unitario,
+                    unidade_medida:     item.unidade_medida || 'un',
                 });
             }
 
