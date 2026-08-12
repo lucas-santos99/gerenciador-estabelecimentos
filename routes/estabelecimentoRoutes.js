@@ -80,6 +80,26 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
 
   return resultado;
 }
+
+// Preço de venda "geral" do produto é obrigatório — EXCETO quando o produto
+// tem variações e cada uma delas já veio com o próprio preço de venda
+// preenchido, caso em que o preço geral nunca seria usado mesmo (o PDV só
+// recorre a ele pra variação que não tiver preço próprio). Se sobrar
+// qualquer variação sem preço, o geral volta a ser exigido, como rede de
+// segurança pra nunca deixar algo à venda sem um preço válido.
+function precoVendaEhValido(preco_venda, tem_variacoes, variacoes) {
+  const temPrecoGeral = preco_venda !== undefined && preco_venda !== null && preco_venda !== '' && parseFloat(preco_venda) > 0;
+  if (temPrecoGeral) return true;
+
+  const temVariacoes = tem_variacoes === true || tem_variacoes === 'true';
+  const lista = temVariacoes && Array.isArray(variacoes) ? variacoes : [];
+  if (lista.length === 0) return false;
+
+  return lista.every(v =>
+    v.preco_venda !== undefined && v.preco_venda !== null && v.preco_venda !== '' && parseFloat(v.preco_venda) > 0
+  );
+}
+
 router.use(authUser);
 
 /* Formata estoque no padrão brasileiro com unidade */
@@ -709,8 +729,11 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         imagem_origem,
     } = req.body;
 
-    if (!nome || !preco_venda || estoque_atual === undefined) {
-        return res.status(400).json({ error: 'Nome, Preço de Venda e Estoque Atual são obrigatórios.' });
+    if (!nome || estoque_atual === undefined) {
+        return res.status(400).json({ error: 'Nome e Estoque Atual são obrigatórios.' });
+    }
+    if (!precoVendaEhValido(preco_venda, tem_variacoes, variacoes)) {
+        return res.status(400).json({ error: 'Informe o Preço de Venda do produto, ou defina um preço de venda próprio pra cada variação.' });
     }
 
     // Nome/marca com palavra ofensiva nunca salva — evita vandalismo tanto
@@ -743,7 +766,7 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
                 estoque_atual: parseFloat(estoque_atual) || 0,
                 estoque_minimo: parseFloat(estoque_minimo) || 10,
                 preco_custo: parseFloat(preco_custo) || 0,
-                preco_venda: parseFloat(preco_venda),
+                preco_venda: parseFloat(preco_venda) || 0,
                 categoria_id: categoria_id || null,
                 unidade_medida: unidade_medida || 'un',
                 vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
@@ -783,7 +806,7 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_criado',
           descricao: `Produto "${nome}${marca ? ' · ' + marca : ''}" criado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
-          meta: { produto_id: data.id, depois: { nome, ...(marca ? { marca } : {}), preco_venda: parseFloat(preco_venda), estoque_atual: parseFloat(estoque_atual), unidade_medida } },
+          meta: { produto_id: data.id, depois: { nome, ...(marca ? { marca } : {}), preco_venda: parseFloat(preco_venda) || 0, estoque_atual: parseFloat(estoque_atual), unidade_medida } },
         });
 
         console.log(`[INFO] Novo produto adicionado: ${data.nome}`);
@@ -819,8 +842,11 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         variacoes,
     } = req.body;
 
-    if (!nome || !preco_venda || estoque_atual === undefined) {
-        return res.status(400).json({ error: 'Nome, Preço de Venda e Estoque Atual são obrigatórios.' });
+    if (!nome || estoque_atual === undefined) {
+        return res.status(400).json({ error: 'Nome e Estoque Atual são obrigatórios.' });
+    }
+    if (!precoVendaEhValido(preco_venda, tem_variacoes, variacoes)) {
+        return res.status(400).json({ error: 'Informe o Preço de Venda do produto, ou defina um preço de venda próprio pra cada variação.' });
     }
 
     if (contemPalavraProibida(nome) || contemPalavraProibida(marca)) {
@@ -853,7 +879,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
             estoque_atual: parseFloat(estoque_atual) || 0,
             estoque_minimo: parseFloat(estoque_minimo) || 10,
             preco_custo: parseFloat(preco_custo) || 0,
-            preco_venda: parseFloat(preco_venda),
+            preco_venda: parseFloat(preco_venda) || 0,
             categoria_id: categoria_id || null,
             unidade_medida: unidade_medida || 'un',
             vendido_por_peso: vendido_por_peso === true || vendido_por_peso === 'true' || false,
@@ -911,8 +937,8 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         const metaDepois = {
             nome,
             ...(marca ? { marca } : {}),
-            preco_venda:    parseFloat(preco_venda),
-            preco_custo:    parseFloat(preco_custo),
+            preco_venda:    parseFloat(preco_venda) || 0,
+            preco_custo:    parseFloat(preco_custo) || 0,
             estoque_atual:  parseFloat(estoque_atual),
             estoque_minimo: parseFloat(estoque_minimo),
             unidade_medida: unidade_medida || 'un',
