@@ -12,6 +12,7 @@ router.use(authUser);
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, hojeStrTZ, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
+const { registrar } = require('./auditoriaRoutes');
 
 
 // ============================================================
@@ -204,6 +205,16 @@ router.post('/',
 
         if (error) throw error;
 
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_criada',
+          descricao: `Conta a pagar criada — "${data.descricao}" (${parseFloat(data.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}, vence ${data.data_vencimento})`,
+          meta: { conta_id: data.id, valor: data.valor, data_vencimento: data.data_vencimento },
+        });
+
         console.log(`[INFO] Nova conta registrada: ${data.descricao}`);
         res.status(201).json(data);
 
@@ -246,6 +257,16 @@ router.put('/:contaId/pagar',
         if (!data) {
             return res.status(404).json({ error: 'Conta não encontrada.' });
         }
+
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_paga',
+          descricao: `Conta a pagar marcada como paga — "${data.descricao}" (${parseFloat(data.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`,
+          meta: { conta_id: data.id, valor: data.valor },
+        });
 
         res.status(200).json(data);
 
@@ -432,6 +453,16 @@ router.delete('/:contaId',
             return res.status(404).json({ error: 'Conta não encontrada ou já paga.' });
         }
 
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_excluida',
+          descricao: `Conta a pagar excluída — "${data.descricao}" (${parseFloat(data.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`,
+          meta: { conta_id: data.id, valor: data.valor },
+        });
+
         res.status(200).json(data);
 
     } catch (error) {
@@ -480,6 +511,16 @@ router.put('/:contaId',
         if (!data) {
             return res.status(404).json({ error: 'Conta não encontrada ou já paga.' });
         }
+
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_editada',
+          descricao: `Conta a pagar editada — "${data.descricao}" (${parseFloat(data.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}, vence ${data.data_vencimento})`,
+          meta: { conta_id: data.id, valor: data.valor, data_vencimento: data.data_vencimento },
+        });
 
         res.status(200).json(data);
 

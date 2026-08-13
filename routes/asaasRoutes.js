@@ -5,6 +5,7 @@ const express = require("express");
 const router  = express.Router();
 const db      = require("../db/supabaseAdmin");
 const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
+const { registrar } = require("./auditoriaRoutes");
 
 const ASAAS_API_KEY  = process.env.ASAAS_API_KEY;
 const ASAAS_API_URL  = process.env.ASAAS_API_URL || "https://api.asaas.com/v3";
@@ -361,6 +362,19 @@ router.post("/webhook", async (req, res) => {
       asaas_payment_id:     payment.id,
       asaas_payment_status: "RECEIVED",
     }).eq("id", mercearia_id);
+
+    // Fica no radar do SuperAdmin (aba Auditoria) mesmo sendo um evento
+    // automático — sem isso, uma renovação via cartão só aparecia no
+    // console.log do servidor, invisível no painel.
+    registrar({
+      mercearia_id,
+      usuario_nome:  "Sistema (Asaas)",
+      usuario_email: "Sistema (Asaas)", // evita o "Nome ()" que registrar() monta quando só tem nome — aqui não tem usuário autenticado, é webhook
+      modulo:       "assinatura",
+      acao:         "licenca_renovada_cartao",
+      descricao:    `Licença renovada via cartão (Asaas) — ${dias} dia(s), vence ${novaData}`,
+      meta:         { dias, data_vencimento: novaData, asaas_payment_id: payment.id },
+    });
 
     console.log(`✅ Licença renovada: ${merc?.nome_fantasia} — ${dias} dias — vence ${novaData}`);
 

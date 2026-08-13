@@ -329,6 +329,16 @@ router.post('/:id/opcoes-variacao', async (req, res) => {
             throw error;
         }
 
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'opcao_variacao_criada',
+          descricao: `Opção de variação criada — ${tipo}: "${valor.trim()}"`,
+          meta: { opcao_id: data.id, tipo, valor: valor.trim() },
+        });
+
         res.status(201).json(data);
     } catch (error) {
         console.error(`[ERRO] POST /:id/opcoes-variacao:`, error.message);
@@ -343,6 +353,15 @@ router.post('/:id/opcoes-variacao', async (req, res) => {
 router.delete('/:id/opcoes-variacao/:optId', async (req, res) => {
     const { id: estabelecimentoId, optId } = req.params;
     try {
+        // Busca antes de apagar só pra descrever direito na auditoria
+        // (depois de apagado não tem mais como saber o que era)
+        const { data: opcao } = await db
+            .from('opcoes_variacao')
+            .select('tipo, valor')
+            .eq('id', optId)
+            .eq('mercearia_id', estabelecimentoId)
+            .single();
+
         const { error } = await db
             .from('opcoes_variacao')
             .delete()
@@ -350,6 +369,17 @@ router.delete('/:id/opcoes-variacao/:optId', async (req, res) => {
             .eq('mercearia_id', estabelecimentoId);
 
         if (error) throw error;
+
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'opcao_variacao_removida',
+          descricao: `Opção de variação removida${opcao ? ` — ${opcao.tipo}: "${opcao.valor}"` : ''}`,
+          meta: { opcao_id: optId, tipo: opcao?.tipo || null, valor: opcao?.valor || null },
+        });
+
         res.status(200).json({ success: true });
     } catch (error) {
         console.error(`[ERRO] DELETE /:id/opcoes-variacao/:optId:`, error.message);
@@ -980,7 +1010,7 @@ router.post('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.EST
     try {
         const { data: produto } = await db
             .from('produtos')
-            .select('id')
+            .select('id, nome')
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
             .single();
@@ -1015,6 +1045,16 @@ router.post('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.EST
             .single();
         if (error) throw error;
 
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'produto_imagem_enviada',
+          descricao: `Foto enviada pro produto "${produto.nome}"`,
+          meta: { produto_id: produtoId },
+        });
+
         res.status(200).json(atualizado);
     } catch (error) {
         console.error(`[ERRO] POST .../produtos/${produtoId}/imagem:`, error.message);
@@ -1037,6 +1077,17 @@ router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.E
             .single();
         if (error) throw error;
         if (!data) return res.status(404).json({ error: 'Produto não encontrado.' });
+
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'produto_imagem_removida',
+          descricao: `Foto removida do produto "${data.nome}"`,
+          meta: { produto_id: produtoId },
+        });
+
         res.status(200).json(data);
     } catch (error) {
         console.error(`[ERRO] DELETE .../produtos/${produtoId}/imagem:`, error.message);
@@ -1058,7 +1109,7 @@ router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPe
     try {
         const { data: variacao } = await db
             .from('produto_variacoes')
-            .select('id')
+            .select('id, tamanho, cor, genero, produtos ( nome )')
             .eq('id', variacaoId)
             .eq('produto_id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
@@ -1093,6 +1144,17 @@ router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPe
             .single();
         if (error) throw error;
 
+        const labelVariacao = [variacao.tamanho, variacao.cor, variacao.genero].filter(Boolean).join(' · ') || 'sem descrição';
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'variacao_imagem_enviada',
+          descricao: `Foto enviada pra variação "${labelVariacao}" do produto "${variacao.produtos?.nome || 'Produto'}"`,
+          meta: { produto_id: produtoId, variacao_id: variacaoId },
+        });
+
         res.status(200).json(atualizado);
     } catch (error) {
         console.error(`[ERRO] POST .../variacoes/${variacaoId}/imagem:`, error.message);
@@ -1114,6 +1176,18 @@ router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificar
             .single();
         if (error) throw error;
         if (!data) return res.status(404).json({ error: 'Variação não encontrada.' });
+
+        const labelVariacao = [data.tamanho, data.cor, data.genero].filter(Boolean).join(' · ') || 'sem descrição';
+        registrar({
+          mercearia_id: estabelecimentoId,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'estoque', acao: 'variacao_imagem_removida',
+          descricao: `Foto removida da variação "${labelVariacao}"`,
+          meta: { produto_id: produtoId, variacao_id: variacaoId },
+        });
+
         res.status(200).json(data);
     } catch (error) {
         console.error(`[ERRO] DELETE .../variacoes/${variacaoId}/imagem:`, error.message);

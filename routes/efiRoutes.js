@@ -15,6 +15,7 @@ const axios   = require("axios");
 const crypto  = require("crypto");
 const db      = require("../db/supabaseAdmin");
 const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
+const { registrar } = require("./auditoriaRoutes");
 
 const EFI_CLIENT_ID       = process.env.EFI_CLIENT_ID;
 const EFI_CLIENT_SECRET   = process.env.EFI_CLIENT_SECRET;
@@ -320,6 +321,19 @@ router.post("/webhook/:token/pix", async (req, res) => {
         data_vencimento:   novaData,
         efi_pix_status:    "CONCLUIDA",
       }).eq("id", merc.id);
+
+      // Fica no radar do SuperAdmin (aba Auditoria) mesmo sendo um evento
+      // automático — sem isso, uma renovação via Pix só aparecia no
+      // console.log do servidor, invisível no painel.
+      registrar({
+        mercearia_id: merc.id,
+        usuario_nome:  "Sistema (Efí)",
+        usuario_email: "Sistema (Efí)", // evita o "Nome ()" que registrar() monta quando só tem nome — aqui não tem usuário autenticado, é webhook
+        modulo:       "assinatura",
+        acao:         "licenca_renovada_pix",
+        descricao:    `Licença renovada via Pix (Efí) — ${dias} dia(s), vence ${novaData}`,
+        meta:         { dias, data_vencimento: novaData },
+      });
 
       console.log(`✅ [EFÍ] Licença renovada via Pix: ${merc.nome_fantasia} — ${dias} dias — vence ${novaData}`);
     }
