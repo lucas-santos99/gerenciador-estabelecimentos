@@ -12,6 +12,7 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 console.log('🔥 COMPRAS ROUTES ATUALIZADO 🔥');
 
@@ -204,6 +205,12 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req
   if (!['a_vista', 'a_prazo'].includes(forma_pagamento)) return res.status(400).json({ error: 'Forma de pagamento inválida' });
   if (forma_pagamento === 'a_prazo' && !data_vencimento) return res.status(400).json({ error: 'Informe a data de vencimento' });
   if (!Array.isArray(itens) || itens.length === 0) return res.status(400).json({ error: 'Adicione pelo menos um produto' });
+
+  const erroTamanho = validarTamanhos(
+    { numero_nota, observacoes },
+    { numero_nota: LIMITES.CODIGO, observacoes: LIMITES.OBSERVACAO_LONGA }
+  );
+  if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
   for (const it of itens) {
     if (!it.produto_id || !it.quantidade || parseFloat(it.quantidade) <= 0) {

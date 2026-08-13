@@ -7,6 +7,7 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
 
@@ -223,6 +224,22 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (r
 
   if (!nome?.trim()) return res.status(400).json({ error: 'Nome do fornecedor é obrigatório' });
 
+  const erroTamanho = validarTamanhos(
+    { nome, razao_social, cnpj_cpf, telefone, whatsapp, email, endereco, contato_nome, observacoes },
+    {
+      nome: LIMITES.NOME,
+      razao_social: LIMITES.NOME_FANTASIA,
+      cnpj_cpf: LIMITES.CPF_CNPJ,
+      telefone: LIMITES.TELEFONE,
+      whatsapp: LIMITES.TELEFONE,
+      email: LIMITES.EMAIL,
+      endereco: LIMITES.ENDERECO,
+      contato_nome: LIMITES.NOME,
+      observacoes: LIMITES.OBSERVACAO_LONGA,
+    }
+  );
+  if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
   try {
     const { data, error } = await db
       .from('fornecedores')
@@ -274,6 +291,22 @@ router.put('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EDITAR), async (re
   } = req.body;
 
   if (!nome?.trim()) return res.status(400).json({ error: 'Nome do fornecedor é obrigatório' });
+
+  const erroTamanho = validarTamanhos(
+    { nome, razao_social, cnpj_cpf, telefone, whatsapp, email, endereco, contato_nome, observacoes },
+    {
+      nome: LIMITES.NOME,
+      razao_social: LIMITES.NOME_FANTASIA,
+      cnpj_cpf: LIMITES.CPF_CNPJ,
+      telefone: LIMITES.TELEFONE,
+      whatsapp: LIMITES.TELEFONE,
+      email: LIMITES.EMAIL,
+      endereco: LIMITES.ENDERECO,
+      contato_nome: LIMITES.NOME,
+      observacoes: LIMITES.OBSERVACAO_LONGA,
+    }
+  );
+  if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
   try {
     const { data, error } = await db

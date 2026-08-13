@@ -6,6 +6,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const authUser = require('../middlewares/authUser');
 const onlyMaster = require('../middlewares/onlyMaster');
 const { registrar } = require('./auditoriaRoutes');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 const {
   criarSuperAdmin,
@@ -165,6 +166,12 @@ router.put('/config-tela-bloqueio', onlyMaster, async (req, res) => {
     const db = require('../db/supabaseAdmin');
     const { titulo, mensagem, info, promo_ativa, promo_texto, promo_validade } = req.body;
 
+    const erroTamanho = validarTamanhos(
+      { titulo, mensagem, info, promo_texto },
+      { titulo: LIMITES.NOME_FANTASIA, mensagem: LIMITES.MENSAGEM_TEMPLATE, info: LIMITES.MENSAGEM_TEMPLATE, promo_texto: LIMITES.TITULO }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
     const updates = [
       { chave: 'tela_bloqueio_titulo',   valor: titulo   || 'Acesso Bloqueado' },
       { chave: 'tela_bloqueio_mensagem', valor: mensagem || '' },
@@ -241,6 +248,12 @@ router.put('/config-cobranca', onlyMaster, async (req, res) => {
     if (isNaN(diasNum) || diasNum < 1 || diasNum > 60) {
       return res.status(400).json({ error: 'Janela de dias inválida (1–60).' });
     }
+
+    const erroTamanho = validarTamanhos(
+      { msg_whatsapp, email_assunto, email_corpo },
+      { msg_whatsapp: LIMITES.MENSAGEM_TEMPLATE, email_assunto: LIMITES.TITULO, email_corpo: LIMITES.MENSAGEM_TEMPLATE }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     const updates = [
       { chave: 'cobranca_dias_aviso',    valor: String(diasNum) },
@@ -350,6 +363,9 @@ router.post('/contatos-suporte', onlyMaster, async (req, res) => {
     if (!valor || !valor.trim()) {
       return res.status(400).json({ error: 'Informe o valor do contato.' });
     }
+
+    const erroTamanho = validarTamanhos({ valor, label }, { valor: LIMITES.NOME_FANTASIA, label: 60 });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     const valorLimpo = tipo === 'whatsapp' ? valor.replace(/\D/g, '') : valor.trim();
 

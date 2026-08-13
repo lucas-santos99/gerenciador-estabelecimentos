@@ -6,6 +6,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const authUser = require("../middlewares/authUser");
 const { registrar } = require("./auditoriaRoutes");
 const { TIMEZONE_PADRAO, TIMEZONES_VALIDAS, hojeStrTZ } = require("../utils/fusoHorario");
+const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
 // ⚠️ NOTA: as demais rotas deste arquivo (listar, criar, editar, excluir,
 // limite-operadores, upload-logo) ainda não exigem authUser porque o
@@ -149,6 +150,9 @@ router.post("/:id/bloquear-acesso", authUser, async (req, res) => {
       return res.status(400).json({ error: "Informe o motivo do bloqueio (mínimo 3 caracteres)." });
     }
 
+    const erroTamanho = validarTamanhos({ motivo }, { motivo: LIMITES.OBSERVACAO_LONGA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
     const { data, error } = await db
       .from("mercearias")
       .update({ status_assinatura: "bloqueada" })
@@ -223,6 +227,9 @@ router.post("/:id/liberar-acesso", authUser, async (req, res) => {
     if (isNaN(diasNum) || diasNum < 1 || diasNum > 3650) {
       return res.status(400).json({ error: "Período inválido (1–3650 dias)." });
     }
+
+    const erroTamanho = validarTamanhos({ motivo }, { motivo: LIMITES.OBSERVACAO_LONGA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     // Calcular nova data de vencimento
     // Se já tem data futura, acumula; senão começa de hoje
@@ -486,6 +493,19 @@ router.put("/:id", authUser, async (req, res) => {
       timezone,
     } = req.body;
 
+    const erroTamanho = validarTamanhos(
+      { nome_fantasia, telefone, email_contato, endereco_completo, tipo_estabelecimento, cnpj },
+      {
+        nome_fantasia: LIMITES.NOME_FANTASIA,
+        telefone: LIMITES.TELEFONE,
+        email_contato: LIMITES.EMAIL,
+        endereco_completo: LIMITES.ENDERECO,
+        tipo_estabelecimento: 60,
+        cnpj: LIMITES.CPF_CNPJ,
+      }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
     const updateData = {
       nome_fantasia,
       cnpj,
@@ -590,6 +610,21 @@ router.post("/criar", authUser, async (req, res) => {
       });
     }
 
+    const erroTamanho = validarTamanhos(
+      { nome_fantasia, telefone, email_contato, endereco_completo, senha, tipo_estabelecimento, motivo_periodo_teste, cnpj },
+      {
+        nome_fantasia: LIMITES.NOME_FANTASIA,
+        telefone: LIMITES.TELEFONE,
+        email_contato: LIMITES.EMAIL,
+        endereco_completo: LIMITES.ENDERECO,
+        senha: LIMITES.SENHA,
+        tipo_estabelecimento: 60,
+        motivo_periodo_teste: LIMITES.OBSERVACAO_CURTA,
+        cnpj: LIMITES.CPF_CNPJ,
+      }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
     // 1️⃣ Criar usuário no Auth
     const { data: userData, error: userErr } =
       await db.auth.admin.createUser({
@@ -618,7 +653,7 @@ router.post("/criar", authUser, async (req, res) => {
         status_assinatura: status_assinatura || "ativa",
         logo_url: null,
         data_vencimento: data_vencimento || null,
-        tipo_estabelecimento: tipo_estabelecimento || "mercearia",
+        tipo_estabelecimento: tipo_estabelecimento || "loja",
         limite_operadores:    parseInt(limite_operadores) || 3,
         valor_mensalidade:    valor_mensalidade ? parseFloat(valor_mensalidade) : null,
         timezone:             timezoneFinal,

@@ -7,6 +7,7 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 router.use(authUser);
 
@@ -61,6 +62,9 @@ router.post('/', verificarPermissao(PERMISSOES.INVENTARIO_CONTAR), async (req, r
 
   const { nome, tipo = 'completo', categoria_id, observacoes } = req.body;
   if (!nome?.trim()) return res.status(400).json({ error: 'Nome do inventário é obrigatório.' });
+
+  const erroTamanho = validarTamanhos({ nome }, { nome: LIMITES.NOME });
+  if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
   // Verificar se já existe um inventário em andamento
   const { data: emAndamento } = await db
@@ -492,6 +496,9 @@ router.post('/ajuste-rapido', verificarPermissao(PERMISSOES.INVENTARIO_AJUSTE), 
   if (!quantidade || parseFloat(quantidade) <= 0)
     return res.status(400).json({ error: 'Quantidade deve ser maior que zero' });
   if (!motivo?.trim())                return res.status(400).json({ error: 'Motivo é obrigatório' });
+
+  const erroTamanho = validarTamanhos({ motivo }, { motivo: LIMITES.OBSERVACAO_CURTA });
+  if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
   try {
     const { data: produto } = await db

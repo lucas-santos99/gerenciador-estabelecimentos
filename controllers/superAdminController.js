@@ -1,11 +1,18 @@
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('../routes/auditoriaRoutes');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 // 🔥 CRIAR SUPERADMIN
 const criarSuperAdmin = async (req, res) => {
   const { email, senha, nome } = req.body;
 
   try {
+    const erroTamanho = validarTamanhos(
+      { nome, email, senha },
+      { nome: LIMITES.NOME, email: LIMITES.EMAIL, senha: LIMITES.SENHA }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password: senha,
@@ -163,6 +170,11 @@ async function alterarSenha(req, res) {
     if (!senha || senha.length < 6) {
       return res.status(400).json({
         error: "Senha deve ter pelo menos 6 caracteres"
+      });
+    }
+    if (senha.length > LIMITES.SENHA) {
+      return res.status(400).json({
+        error: `Senha excede o limite de ${LIMITES.SENHA} caracteres`
       });
     }
 

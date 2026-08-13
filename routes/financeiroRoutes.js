@@ -13,6 +13,7 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, hojeStrTZ, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { registrar } = require('./auditoriaRoutes');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 
 // ============================================================
@@ -188,6 +189,9 @@ router.post('/',
             error: 'Todos os campos obrigatórios devem ser preenchidos.'
         });
     }
+
+    const erroTamanho = validarTamanhos({ descricao }, { descricao: LIMITES.NOME_FANTASIA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
 
@@ -490,6 +494,9 @@ router.put('/:contaId',
     if (!descricao || !valor || !data_vencimento) {
         return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
     }
+
+    const erroTamanho = validarTamanhos({ descricao }, { descricao: LIMITES.NOME_FANTASIA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
 

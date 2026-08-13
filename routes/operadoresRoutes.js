@@ -7,6 +7,7 @@ const authUser  = require("../middlewares/authUser");
 const verificarPermissao = require("../middlewares/verificarPermissao");
 const { PERMISSOES } = require("../utils/permissoes");
 const { registrar } = require("./auditoriaRoutes");
+const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
 // Todas as rotas deste arquivo exigem autenticação
 router.use(authUser);
@@ -70,6 +71,12 @@ router.post("/criar", async (req, res) => {
     if (senha.length < 6) {
       return res.status(400).json({ error: "Senha deve ter pelo menos 6 caracteres" });
     }
+
+    const erroTamanho = validarTamanhos(
+      { nome, email, telefone, senha },
+      { nome: LIMITES.NOME, email: LIMITES.EMAIL, telefone: LIMITES.TELEFONE, senha: LIMITES.SENHA }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     /* ── Verificar limite ── */
     const { data: merc } = await db
@@ -172,6 +179,12 @@ router.put("/:id", async (req, res) => {
     await garantirDono(id, mercearia_id);
 
     const { nome, telefone, email } = req.body;
+
+    const erroTamanho = validarTamanhos(
+      { nome, telefone, email },
+      { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, email: LIMITES.EMAIL }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     const { data, error } = await db
       .from("operadores")
@@ -404,6 +417,9 @@ router.post('/:id/reset-senha', async (req, res) => {
     if (!senha || senha.length < 6) {
       return res.status(400).json({ error: 'Senha inválida (mínimo 6 caracteres)' });
     }
+
+    const erroTamanho = validarTamanhos({ senha }, { senha: LIMITES.SENHA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     const operadorAtual = await garantirDono(id, mercearia_id);
 

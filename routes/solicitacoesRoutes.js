@@ -5,6 +5,7 @@ const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
 const { TIMEZONE_PADRAO, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 console.log('🔥 SOLICITAÇÕES ROUTES ATUALIZADO 🔥');
 
@@ -43,6 +44,9 @@ router.post('/', async (req, res) => {
   if (!Array.isArray(campos) || campos.length === 0) {
     return res.status(400).json({ error: 'Selecione ao menos um campo pra alterar.' });
   }
+
+  const erroTamanho = validarTamanhos({ detalhes }, { detalhes: LIMITES.OBSERVACAO_LONGA });
+  if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
   try {
     const { data: merc } = await db
@@ -165,6 +169,9 @@ router.patch('/admin/:id', async (req, res) => {
   if (!['atendida', 'recusada'].includes(status)) {
     return res.status(400).json({ error: "Status inválido (use 'atendida' ou 'recusada')." });
   }
+
+  const erroTamanho = validarTamanhos({ resposta }, { resposta: LIMITES.OBSERVACAO_LONGA });
+  if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
   try {
     const { data, error } = await db

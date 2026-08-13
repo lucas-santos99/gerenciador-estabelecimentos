@@ -9,6 +9,7 @@ const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 console.log('🔥 CLIENTES ROUTES ATUALIZADO 🔥');
 
@@ -127,6 +128,12 @@ router.post('/criar', async (req, res) => {
 
     if (!nome)
         return res.status(400).json({ error: 'Nome é obrigatório.' });
+
+    const erroTamanho = validarTamanhos(
+        { nome, telefone, cpf },
+        { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, cpf: LIMITES.CPF_CNPJ }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
 
@@ -452,6 +459,12 @@ router.put('/atualizar/:clienteId', async (req, res) => {
 
     if (!nome)
         return res.status(400).json({ error: 'Nome é obrigatório.' });
+
+    const erroTamanho = validarTamanhos(
+        { nome, telefone, cpf },
+        { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, cpf: LIMITES.CPF_CNPJ }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
 

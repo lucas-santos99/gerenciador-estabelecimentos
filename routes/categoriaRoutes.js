@@ -4,6 +4,7 @@ const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 
 router.use(authUser);
 
@@ -35,6 +36,9 @@ router.post('/', async (req, res) => {
     if (!nome) {
         return res.status(400).json({ error: 'Nome da categoria é obrigatório.' });
     }
+
+    const erroTamanho = validarTamanhos({ nome }, { nome: LIMITES.CATEGORIA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
         let paiIdFinal = null;
@@ -100,6 +104,9 @@ router.put('/:id', async (req, res) => {
     if (!nome) {
         return res.status(400).json({ error: 'Nome é obrigatório.' });
     }
+
+    const erroTamanho = validarTamanhos({ nome }, { nome: LIMITES.CATEGORIA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
         const updateData = { nome };

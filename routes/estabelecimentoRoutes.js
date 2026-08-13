@@ -7,6 +7,21 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 const { contemPalavraProibida } = require('../utils/filtroPalavroes');
+const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+
+// Valida o tamanho dos campos de texto livre de cada variação enviada
+// (tamanho/cor/gênero/código de barras) antes de gravar no banco — mesma
+// defesa aplicada aos campos do produto "pai".
+function erroTamanhoVariacoes(variacoesEnviadas = []) {
+  for (const v of variacoesEnviadas) {
+    const erro = validarTamanhos(
+      { tamanho: v.tamanho, cor: v.cor, genero: v.genero, codigo_barras: v.codigo_barras },
+      { tamanho: LIMITES.VARIACAO, cor: LIMITES.VARIACAO, genero: LIMITES.VARIACAO, codigo_barras: LIMITES.CODIGO }
+    );
+    if (erro) return erro;
+  }
+  return null;
+}
 
 // Sincroniza a lista de variações (tamanho/cor) de um produto com o que
 // veio do formulário — cria as novas, atualiza as existentes, e remove
@@ -316,6 +331,9 @@ router.post('/:id/opcoes-variacao', async (req, res) => {
     if (!valor || !valor.trim()) {
         return res.status(400).json({ error: 'Informe um valor.' });
     }
+
+    const erroTamanho = validarTamanhos({ valor }, { valor: LIMITES.VARIACAO });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
         const { data, error } = await db
@@ -766,6 +784,15 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         return res.status(400).json({ error: 'Informe o Preço de Venda do produto, ou defina um preço de venda próprio pra cada variação.' });
     }
 
+    const erroTamanho = validarTamanhos(
+        { nome, marca, codigo_barras },
+        { nome: LIMITES.NOME_FANTASIA, marca: LIMITES.NOME, codigo_barras: LIMITES.CODIGO }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []);
+    if (erroVariacoes) return res.status(400).json({ error: erroVariacoes });
+
     // Nome/marca com palavra ofensiva nunca salva — evita vandalismo tanto
     // no cadastro local quanto no catálogo global (que esse produto pode
     // alimentar logo abaixo, se tiver código de barras). Fica registrado
@@ -878,6 +905,15 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
     if (!precoVendaEhValido(preco_venda, tem_variacoes, variacoes)) {
         return res.status(400).json({ error: 'Informe o Preço de Venda do produto, ou defina um preço de venda próprio pra cada variação.' });
     }
+
+    const erroTamanho = validarTamanhos(
+        { nome, marca, codigo_barras },
+        { nome: LIMITES.NOME_FANTASIA, marca: LIMITES.NOME, codigo_barras: LIMITES.CODIGO }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []);
+    if (erroVariacoes) return res.status(400).json({ error: erroVariacoes });
 
     if (contemPalavraProibida(nome) || contemPalavraProibida(marca)) {
         registrar({
@@ -1373,6 +1409,12 @@ router.put('/dados/:id', async (req, res) => {
       pix_chave, pix_tipo_chave, pix_cidade, pix_modo,
       fiado_ativo,
     } = req.body;
+
+    const erroTamanho = validarTamanhos(
+      { nome_fantasia, telefone, endereco_completo, pix_chave, pix_cidade },
+      { nome_fantasia: LIMITES.NOME_FANTASIA, telefone: LIMITES.TELEFONE, endereco_completo: LIMITES.ENDERECO, pix_chave: 100, pix_cidade: 15 }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     // Busca os dados atuais ANTES de atualizar, pra comparar depois e
     // saber exatamente o que mudou (a auditoria genérica "dados

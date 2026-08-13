@@ -5,6 +5,7 @@ const db = require("../db/supabaseAdmin"); // cliente SUPABASE ADMIN
 const multer = require("multer");
 const authUser = require("../middlewares/authUser");
 const { registrar } = require("./auditoriaRoutes");
+const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -74,6 +75,12 @@ router.post("/criar", authUser, async (req, res) => {
         .status(400)
         .json({ error: "Dados obrigatórios não informados." });
     }
+
+    const erroTamanho = validarTamanhos(
+      { nome, email, telefone, senha },
+      { nome: LIMITES.NOME, email: LIMITES.EMAIL, telefone: LIMITES.TELEFONE, senha: LIMITES.SENHA }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     /* ===============================
        VERIFICAR LIMITE
@@ -188,6 +195,12 @@ router.put("/:id", authUser, async (req, res) => {
   try {
     const { id } = req.params;
     const { nome, telefone, email, status } = req.body;
+
+    const erroTamanho = validarTamanhos(
+      { nome, telefone, email },
+      { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, email: LIMITES.EMAIL }
+    );
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     const updateData = {
       nome,
@@ -384,6 +397,9 @@ router.post("/:id/reset-senha", authUser, async (req, res) => {
         .status(400)
         .json({ error: "Senha inválida (mínimo 6 caracteres)" });
     }
+
+    const erroTamanho = validarTamanhos({ senha }, { senha: LIMITES.SENHA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     const { error } = await db.auth.admin.updateUserById(id, {
       password: senha,
