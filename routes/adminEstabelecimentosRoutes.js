@@ -153,12 +153,18 @@ router.post("/:id/bloquear-acesso", authUser, async (req, res) => {
       .from("mercearias")
       .update({ status_assinatura: "bloqueada" })
       .eq("id", id)
-      .select("nome_fantasia, data_vencimento")
+      .select("nome_fantasia, data_vencimento, timezone")
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
 
-    const hoje = new Date().toISOString().split("T")[0];
+    // Data de hoje no fuso do PRÓPRIO ESTABELECIMENTO — antes usava
+    // new Date().toISOString().split("T")[0], que pega o dia em UTC puro
+    // do instante do servidor (Railway roda em UTC). Entre 21h e 23h59
+    // no horário de Brasília isso já é o dia seguinte em UTC, gravando
+    // data_inicio um dia adiantado. Mesmo padrão já usado nos webhooks
+    // Asaas/Efí (hojeStrTZ).
+    const hoje = hojeStrTZ(data.timezone || TIMEZONE_PADRAO);
     const nomeUsuario = req.user.nome || req.user.email;
 
     // Histórico de licença — aparece junto com as liberações
@@ -222,17 +228,27 @@ router.post("/:id/liberar-acesso", authUser, async (req, res) => {
     // Se já tem data futura, acumula; senão começa de hoje
     const { data: mercAtual } = await db
       .from("mercearias")
-      .select("data_vencimento, nome_fantasia")
+      .select("data_vencimento, nome_fantasia, timezone")
       .eq("id", id)
       .single();
 
-    const base = mercAtual?.data_vencimento &&
-      new Date(mercAtual.data_vencimento + "T12:00:00") > new Date()
-        ? new Date(mercAtual.data_vencimento + "T12:00:00")
-        : new Date();
+    // Compara como DATA ('YYYY-MM-DD'), no fuso do estabelecimento — mesmo
+    // padrão já usado nos webhooks Asaas/Efí. Antes usava
+    // `new Date(...) > new Date()` e `.toISOString().split("T")[0]`, que
+    // dependem do fuso do SERVIDOR (Railway roda em UTC): perto da virada
+    // do dia isso podia tratar um vencimento ainda válido como já
+    // passado (perdendo dias já pagos) e gravar data_inicio um dia
+    // adiantado se a liberação fosse feita à noite.
+    const timezoneMerc = mercAtual?.timezone || TIMEZONE_PADRAO;
+    const hojeStr = hojeStrTZ(timezoneMerc);
+    const vencimentoAindaValido = mercAtual?.data_vencimento && mercAtual.data_vencimento >= hojeStr;
 
-    const dataInicio = new Date().toISOString().split("T")[0];
-    base.setDate(base.getDate() + diasNum);
+    const dataInicio = hojeStr;
+    const base = vencimentoAindaValido
+      ? new Date(mercAtual.data_vencimento + "T12:00:00Z") // acumula a partir do vencimento atual — 'Z' explícito, não depende do fuso do servidor
+      : new Date();                                          // começa do zero
+
+    base.setUTCDate(base.getUTCDate() + diasNum);
     const dataVencimento = base.toISOString().split("T")[0];
 
     // Atualizar licença

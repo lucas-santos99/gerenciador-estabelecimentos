@@ -1254,14 +1254,17 @@ router.get('/dados/:id', async (req, res) => {
     // pollam ela), diferente de /status/:userId que não é mais chamada
     // por lugar nenhum do frontend atual. Sem essa checagem aqui,
     // status_assinatura nunca vira "bloqueada" sozinho — só via ação
-    // manual no SuperAdmin. Comparação por meia-noite normalizada,
-    // mesmo padrão já usado no resto do sistema (evita depender da
-    // hora do dia em que a checagem roda).
+    // manual no SuperAdmin. Compara como DATA ('YYYY-MM-DD'), no fuso do
+    // PRÓPRIO ESTABELECIMENTO — antes usava setHours(0,0,0,0), que
+    // normaliza pra meia-noite no fuso do SERVIDOR (Railway roda em
+    // UTC), não no do estabelecimento. Isso bloqueava o acesso até 3h
+    // (ou mais, fora de Brasília) ANTES da hora certa, já na noite
+    // anterior ao vencimento de verdade. Mesmo padrão já usado em
+    // verificarVencimentos() (adminEstabelecimentosRoutes.js).
     let statusFinal = data.status_assinatura;
     if (data.data_vencimento && data.status_assinatura === 'ativa') {
-      const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-      const venc = new Date(data.data_vencimento + 'T12:00:00'); venc.setHours(0, 0, 0, 0);
-      if (venc < hoje) {
+      const hojeEstabelecimento = hojeStrTZ(data.timezone || TIMEZONE_PADRAO);
+      if (data.data_vencimento < hojeEstabelecimento) {
         console.log(`[LICENÇA] Vencimento passou pra "${data.nome_fantasia}" — atualizando status_assinatura para 'bloqueada'.`);
         await db.from('mercearias').update({ status_assinatura: 'bloqueada' }).eq('id', mercearia_id);
         statusFinal = 'bloqueada';
