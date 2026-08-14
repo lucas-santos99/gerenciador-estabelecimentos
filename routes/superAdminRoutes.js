@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
+const { createClient } = require('@supabase/supabase-js');
 
 const authUser = require('../middlewares/authUser');
 const onlyMaster = require('../middlewares/onlyMaster');
@@ -401,6 +402,120 @@ router.delete('/contatos-suporte/:id', onlyMaster, async (req, res) => {
     console.error('ERRO DELETE contatos-suporte:', err);
     res.status(500).json({ error: 'Erro ao remover contato de suporte' });
   }
+});
+
+// ============================================================
+// PERSONIFICAÇÃO (impersonation) — o SuperAdmin MASTER consegue
+// entrar como qualquer usuário (estabelecimento/operador/outro
+// superadmin não-master) usando a PRÓPRIA senha — nunca a senha
+// do usuário alvo.
+//
+// Fluxo: 1) reconfirma a senha do PRÓPRIO master aqui (step-up
+// auth, igual a "digite sua senha de novo" em qualquer ação
+// sensível); 2) gera um magic link via Admin API pro e-mail do
+// alvo (sem mandar e-mail nenhum — só usamos o token gerado);
+// 3) devolve o token_hash pro frontend trocar de sessão com
+// `supabase.auth.verifyOtp`, sem nunca conhecer/pedir a senha
+// do usuário personificado.
+// ============================================================
+
+async function personificar(req, res, alvo) {
+  try {
+    const { senha } = req.body;
+    if (!senha) {
+      return res.status(400).json({ error: 'Confirme sua senha para continuar.' });
+    }
+    if (senha.length > LIMITES.SENHA) {
+      return res.status(400).json({ error: `Senha excede o limite de ${LIMITES.SENHA} caracteres.` });
+    }
+
+    // Step-up: reconfirma a senha do PRÓPRIO master — client anônimo
+    // isolado, sem persistir sessão (isso é um backend Node, não tem
+    // localStorage — precisa desligar persistSession/autoRefreshToken
+    // explicitamente ou o supabase-js tenta usar storage que não existe).
+    const anon = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { error: senhaErr } = await anon.auth.signInWithPassword({
+      email:    req.user.email,
+      password: senha,
+    });
+    if (senhaErr) {
+      return res.status(401).json({ error: 'Senha incorreta.' });
+    }
+
+    if (!alvo) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+    if (alvo.id === req.user.id) {
+      return res.status(400).json({ error: 'Você já está logado como você mesmo.' });
+    }
+    if (alvo.is_master) {
+      return res.status(403).json({ error: 'Não é possível personificar outro usuário master.' });
+    }
+    if (!alvo.is_active) {
+      return res.status(403).json({ error: 'Este usuário está inativo — não é possível entrar como ele.' });
+    }
+    if (!alvo.email) {
+      return res.status(400).json({ error: 'Usuário alvo sem e-mail cadastrado.' });
+    }
+
+    const db = require('../db/supabaseAdmin');
+    const { data, error } = await db.auth.admin.generateLink({
+      type:  'magiclink',
+      email: alvo.email,
+    });
+    if (error) {
+      console.error('ERRO generateLink personificação:', error);
+      return res.status(500).json({ error: 'Erro ao gerar acesso.' });
+    }
+
+    await registrar({
+      mercearia_id:  alvo.mercearia_id || null,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        'superadmins',
+      acao:          'personificar_usuario',
+      descricao:     `Entrou como "${alvo.nome || alvo.email}" (${alvo.role}) usando a própria senha`,
+      meta:          { alvo_id: alvo.id, alvo_email: alvo.email, alvo_role: alvo.role },
+      escopo:        'admin_global',
+    });
+
+    return res.json({
+      email:      alvo.email,
+      token_hash: data.properties.hashed_token,
+      alvo:       { nome: alvo.nome || alvo.email, role: alvo.role },
+    });
+  } catch (err) {
+    console.error('ERRO personificar:', err);
+    return res.status(500).json({ error: 'Erro interno ao personificar.' });
+  }
+}
+
+// Personificar um usuário qualquer pelo id do profile (usado por
+// operadores — `operadores.id` é o mesmo id do Auth/profiles).
+router.post('/personificar/usuario/:userId', onlyMaster, async (req, res) => {
+  const db = require('../db/supabaseAdmin');
+  const { data: alvo } = await db
+    .from('profiles')
+    .select('*')
+    .eq('id', req.params.userId)
+    .single();
+  return personificar(req, res, alvo);
+});
+
+// Personificar o DONO (merchant) de um estabelecimento pelo id da
+// mercearia — a tela de detalhes do estabelecimento não tem o id do
+// profile do dono à mão, só o id da mercearia.
+router.post('/personificar/estabelecimento/:merceariaId', onlyMaster, async (req, res) => {
+  const db = require('../db/supabaseAdmin');
+  const { data: alvo } = await db
+    .from('profiles')
+    .select('*')
+    .eq('mercearia_id', req.params.merceariaId)
+    .eq('role', 'merchant')
+    .single();
+  return personificar(req, res, alvo);
 });
 
 module.exports = router;

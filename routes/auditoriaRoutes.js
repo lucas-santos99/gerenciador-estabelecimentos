@@ -102,6 +102,10 @@ router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
         operador_id
       `, { count: 'exact' })
       .eq('mercearia_id', mercearia_id)
+      // Personificação (admin master "entrando como" alguém) é visível
+      // só no painel do SuperAdmin — o estabelecimento/operador não
+      // precisa (nem deve) ficar sabendo disso pelo próprio log.
+      .neq('acao', 'personificar_usuario')
       .order('criado_em', { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
@@ -168,7 +172,9 @@ router.get('/resumo', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res)
     let query = db
       .from('auditoria')
       .select('operador_id, usuario_nome, modulo, acao')
-      .eq('mercearia_id', mercearia_id);
+      .eq('mercearia_id', mercearia_id)
+      // Mesma regra da rota '/': personificação não entra no resumo do estabelecimento.
+      .neq('acao', 'personificar_usuario');
 
     if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
     if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
@@ -339,6 +345,12 @@ router.get('/admin/:mercearia_id', async (req, res) => {
       .eq('mercearia_id', mercearia_id)
       .order('criado_em', { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    // Essa rota é usada tanto pelo SuperAdmin (vê tudo) quanto — em tese —
+    // pelo próprio merchant; personificação só deve aparecer pro SuperAdmin.
+    if (req.user.role !== 'super_admin') {
+      query = query.neq('acao', 'personificar_usuario');
+    }
 
     if (modulo)      query = query.eq('modulo', modulo);
     if (busca)       query = query.ilike('descricao', `%${busca.trim()}%`);
