@@ -392,6 +392,39 @@ router.post('/contatos-suporte', onlyMaster, async (req, res) => {
   }
 });
 
+router.put('/contatos-suporte/:id', onlyMaster, async (req, res) => {
+  try {
+    const db = require('../db/supabaseAdmin');
+    const { tipo, valor, label } = req.body;
+
+    if (!['whatsapp', 'email'].includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo inválido (use whatsapp ou email).' });
+    }
+    if (!valor || !valor.trim()) {
+      return res.status(400).json({ error: 'Informe o valor do contato.' });
+    }
+
+    const erroTamanho = validarTamanhos({ valor, label }, { valor: LIMITES.NOME_FANTASIA, label: 60 });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const valorLimpo = tipo === 'whatsapp' ? valor.replace(/\D/g, '') : valor.trim();
+
+    const { data, error } = await db
+      .from('contatos_suporte')
+      .update({ tipo, valor: valorLimpo, label: label?.trim() || null })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Contato não encontrado.' });
+    res.json(data);
+  } catch (err) {
+    console.error('ERRO PUT contatos-suporte:', err);
+    res.status(500).json({ error: 'Erro ao editar contato de suporte' });
+  }
+});
+
 router.delete('/contatos-suporte/:id', onlyMaster, async (req, res) => {
   try {
     const db = require('../db/supabaseAdmin');
