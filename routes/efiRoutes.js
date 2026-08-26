@@ -150,6 +150,16 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
     // fora do prazo, e o app do banco do pagador mostrava "código inválido"
     // na hora de pagar. Agora a validade real (criação + expiracao) é
     // conferida antes de decidir reaproveitar.
+    //
+    // ⚠️ SEGUNDO BUG REAL corrigido (26/08): o valor de uma cobrança Pix é
+    // travado no momento da criação (a Efí não deixa alterar depois) — se
+    // o valor_mensalidade mudar em Configurações enquanto ainda existe uma
+    // cobrança ATIVA e dentro do prazo, o código reaproveitava ela do
+    // mesmo jeito, devolvendo o valor ANTIGO no QR/copia-e-cola mesmo a
+    // prévia (`/api/asaas/planos`, que sempre lê o valor atual do banco)
+    // já mostrando o valor novo pro usuário. Agora também compara o valor
+    // da cobrança existente com o valor atual configurado antes de decidir
+    // reaproveitar.
     if (mercearia.efi_pix_txid && mercearia.efi_pix_status === "ATIVA") {
       try {
         const cobExistente = await efiPixRequest("GET", `/v2/cob/${mercearia.efi_pix_txid}`);
@@ -159,11 +169,16 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
         const expiraEm          = criacaoStr ? new Date(criacaoStr).getTime() + expiracaoSegundos * 1000 : 0;
         const aindaDentroDoPrazo = expiraEm > Date.now();
 
+        const valorExistente = parseFloat(cobExistente.data.valor?.original);
+        const valorAindaBate = Number.isFinite(valorExistente) && Math.abs(valorExistente - valor) < 0.01;
+
         if (!aindaDentroDoPrazo) {
           console.log(`[EFI] Cobrança anterior (${mercearia.efi_pix_txid}) está com status ATIVA mas já passou do prazo de expiração (calendario) — gerando nova em vez de reaproveitar.`);
+        } else if (!valorAindaBate) {
+          console.log(`[EFI] Cobrança anterior (${mercearia.efi_pix_txid}) tem valor desatualizado (R$ ${valorExistente} salva vs R$ ${valor} atual) — gerando nova em vez de reaproveitar.`);
         }
 
-        if (cobExistente.data.status === "ATIVA" && aindaDentroDoPrazo) {
+        if (cobExistente.data.status === "ATIVA" && aindaDentroDoPrazo && valorAindaBate) {
           const locId = cobExistente.data.loc?.id;
           let qrcodeBase64  = null;
           let pixCopiaECola = cobExistente.data.pixCopiaECola || null;
@@ -187,6 +202,22 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
               pix_copy_paste: pixCopiaECola,
               reaproveitada:  true,
             });
+          }
+        }
+
+        // Chegou aqui: a cobrança antiga NÃO vai ser reaproveitada (prazo
+        // vencido ou valor desatualizado), mas ainda está "ATIVA" segundo a
+        // Efí — inativa ela explicitamente (26/08) pra blindar contra
+        // alguém conseguir pagar aquele QR antigo por engano enquanto a
+        // nova é gerada (print salvo, aba ainda aberta, copia-e-cola
+        // encaminhado pra alguém, etc.). Best-effort: se falhar, não
+        // impede a criação da cobrança nova abaixo.
+        if (cobExistente.data.status === "ATIVA" && (!aindaDentroDoPrazo || !valorAindaBate)) {
+          try {
+            await efiPixRequest("PATCH", `/v2/cob/${mercearia.efi_pix_txid}`, { status: "REMOVIDA_PELO_USUARIO_RECEBEDOR" });
+            console.log(`[EFI] Cobrança anterior (${mercearia.efi_pix_txid}) inativada (${!aindaDentroDoPrazo ? "prazo vencido" : "valor desatualizado"}).`);
+          } catch (e) {
+            console.error("[EFI] Falha ao inativar cobrança anterior (não bloqueia a geração da nova):", e.response?.data || e.message);
           }
         }
       } catch (e) {

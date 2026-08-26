@@ -128,6 +128,15 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
     // vez de gerar uma nova toda vez — evita acumular cobranças
     // penduradas no painel do Asaas. Confirma o status direto com o
     // Asaas (fonte da verdade) e só reaproveita se ainda não venceu. ──
+    //
+    // ⚠️ BUG REAL corrigido (26/08): o valor de uma cobrança já criada no
+    // Asaas fica travado (não muda depois) — se `valor_mensalidade` mudar
+    // em Configurações enquanto ainda existe uma cobrança PENDING dentro
+    // do prazo, reaproveitar sem checar o valor devolvia o valor ANTIGO
+    // no link de pagamento mesmo a prévia (`/api/asaas/planos`, que lê o
+    // valor atual do banco) já mostrando o valor novo pro usuário. Mesma
+    // causa do bug já corrigido no Pix (Efí) — agora também compara o
+    // valor da cobrança existente com o valor atual configurado.
     if (mercearia.asaas_payment_id && mercearia.asaas_payment_status === "PENDING") {
       try {
         const respCheck = await fetch(`${ASAAS_API_URL}/payments/${mercearia.asaas_payment_id}`, {
@@ -139,10 +148,16 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
         // new Date() com setHours(0,0,0,0), que reflete o fuso do
         // SERVIDOR (Railway roda em UTC), não o do Brasil.
         const hojeStr = hojeStrTZ(timezone);
+        const valorAindaBate = Number.isFinite(dataCheck.value) && Math.abs(dataCheck.value - valor) < 0.01;
         const aindaValida = respCheck.ok
           && dataCheck.status === "PENDING"
           && dataCheck.dueDate
-          && dataCheck.dueDate >= hojeStr;
+          && dataCheck.dueDate >= hojeStr
+          && valorAindaBate;
+
+        if (respCheck.ok && dataCheck.status === "PENDING" && !valorAindaBate) {
+          console.log(`[ASAAS] Cobrança anterior (${mercearia.asaas_payment_id}) tem valor desatualizado (R$ ${dataCheck.value} salva vs R$ ${valor} atual) — gerando nova em vez de reaproveitar.`);
+        }
 
         if (aindaValida) {
           return res.json({
@@ -155,6 +170,24 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
             invoice_url_cartao: dataCheck.invoiceUrl || null,
             reaproveitada:      true,
           });
+        }
+
+        // Chegou aqui: a cobrança antiga NÃO vai ser reaproveitada (vencida
+        // ou valor desatualizado), mas ainda está "PENDING" no Asaas —
+        // cancela ela explicitamente (26/08) pra blindar contra alguém
+        // conseguir pagar aquele link antigo por engano enquanto o novo é
+        // gerado. Best-effort: se falhar, não impede a criação da nova
+        // cobrança abaixo.
+        if (respCheck.ok && dataCheck.status === "PENDING" && !aindaValida) {
+          try {
+            await fetch(`${ASAAS_API_URL}/payments/${mercearia.asaas_payment_id}`, {
+              method:  "DELETE",
+              headers: asaasHeaders(),
+            });
+            console.log(`[ASAAS] Cobrança anterior (${mercearia.asaas_payment_id}) cancelada (${dataCheck.dueDate < hojeStr ? "vencida" : "valor desatualizado"}).`);
+          } catch (e) {
+            console.error("[ASAAS] Falha ao cancelar cobrança anterior (não bloqueia a geração da nova):", e.message);
+          }
         }
       } catch (e) {
         // Cobrança antiga não existe mais / erro ao consultar — segue
