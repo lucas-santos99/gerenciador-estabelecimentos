@@ -138,10 +138,32 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
     // painel do Efí quando alguém clica em "cobrar" várias vezes sem o
     // cliente pagar. Confirma o status direto com o Efí (fonte da
     // verdade), não confia só no que está salvo no banco. ──
+    //
+    // ⚠️ BUG REAL corrigido (21/08): o campo `status` de uma cobrança Pix
+    // NÃO muda sozinho pra "expirada" quando o prazo (`calendario.expiracao`)
+    // vence — continua "ATIVA" até alguém inativar explicitamente (mesmo
+    // comportamento confirmado com outros PSPs, não é bug só do Efí). Sem
+    // checar isso aqui, o sistema reaproveitava cobranças velhas (criadas
+    // há mais de 3 dias) que a Efí ainda reportava como "ATIVA" — o QR/
+    // copia-e-cola gerado saía tecnicamente perfeito (CRC, campos, tudo
+    // certo), mas a própria Efí recusava o pagamento por trás por já estar
+    // fora do prazo, e o app do banco do pagador mostrava "código inválido"
+    // na hora de pagar. Agora a validade real (criação + expiracao) é
+    // conferida antes de decidir reaproveitar.
     if (mercearia.efi_pix_txid && mercearia.efi_pix_status === "ATIVA") {
       try {
         const cobExistente = await efiPixRequest("GET", `/v2/cob/${mercearia.efi_pix_txid}`);
-        if (cobExistente.data.status === "ATIVA") {
+
+        const criacaoStr        = cobExistente.data.calendario?.criacao;
+        const expiracaoSegundos = cobExistente.data.calendario?.expiracao || 0;
+        const expiraEm          = criacaoStr ? new Date(criacaoStr).getTime() + expiracaoSegundos * 1000 : 0;
+        const aindaDentroDoPrazo = expiraEm > Date.now();
+
+        if (!aindaDentroDoPrazo) {
+          console.log(`[EFI] Cobrança anterior (${mercearia.efi_pix_txid}) está com status ATIVA mas já passou do prazo de expiração (calendario) — gerando nova em vez de reaproveitar.`);
+        }
+
+        if (cobExistente.data.status === "ATIVA" && aindaDentroDoPrazo) {
           const locId = cobExistente.data.loc?.id;
           let qrcodeBase64  = null;
           let pixCopiaECola = cobExistente.data.pixCopiaECola || null;
