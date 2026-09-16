@@ -187,13 +187,42 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
 
     const { clienteId } = req.params;
 
+    // Validação de formato antes de usar clienteId dentro de uma string de
+    // filtro .or() do PostgREST logo abaixo — sem isso, um clienteId
+    // malicioso na URL poderia injetar sintaxe de filtro extra.
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_REGEX.test(clienteId)) {
+        return res.status(400).json({ error: 'clienteId inválido.' });
+    }
+
     try {
 
-        const { data: vendas, error } = await supabaseAdmin
+        // Numa venda 'Dividido' (backlog item 19), vendas.cliente_id fica
+        // NULL de propósito — pode ter mais de um cliente fiado na mesma
+        // venda, então o vínculo real é por fatia, em
+        // pagamentos_venda.cliente_id. Sem isso, uma compra em que esse
+        // cliente pagou só uma fatia (fiado) de uma venda dividida nunca
+        // aparecia aqui — a venda simplesmente sumia do histórico dele.
+        const { data: fatiasDoCliente, error: erroFatiasCliente } = await supabaseAdmin
+            .from('pagamentos_venda')
+            .select('venda_id')
+            .eq('cliente_id', clienteId)
+            .eq('mercearia_id', req.user.mercearia_id);
+
+        if (erroFatiasCliente) throw erroFatiasCliente;
+
+        const vendaIdsViaFatia = [...new Set((fatiasDoCliente || []).map(f => f.venda_id))];
+
+        let query = supabaseAdmin
             .from('vendas')
             .select('id, data_venda, valor_total, meio_pagamento, status, motivo_cancelamento, operador_id')
-            .eq('cliente_id', clienteId)
-            .eq('mercearia_id', req.user.mercearia_id)
+            .eq('mercearia_id', req.user.mercearia_id);
+
+        query = vendaIdsViaFatia.length > 0
+            ? query.or(`cliente_id.eq.${clienteId},id.in.(${vendaIdsViaFatia.join(',')})`)
+            : query.eq('cliente_id', clienteId);
+
+        const { data: vendas, error } = await query
             .order('data_venda', { ascending: false })
             .limit(200);
 
@@ -221,10 +250,49 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
             if (m?.nome_fantasia) nomeMerchant = m.nome_fantasia;
         }
 
+        // Mesmo padrão do histórico geral (financeiroRoutes.js): abre o
+        // detalhe das fatias de cada venda 'Dividido' em lote, com o
+        // nome dos clientes citados nas fatias resolvido de uma vez.
+        const vendasDivididasIds = (vendas || []).filter(v => v.meio_pagamento === 'Dividido').map(v => v.id);
+        let fatiasPorVenda = {};
+        if (vendasDivididasIds.length > 0) {
+            const { data: fatias, error: erroFatias } = await supabaseAdmin
+                .from('pagamentos_venda')
+                .select('id, venda_id, ordem, pessoa_label, meio_pagamento, valor, cliente_id')
+                .eq('mercearia_id', req.user.mercearia_id)
+                .in('venda_id', vendasDivididasIds)
+                .order('ordem', { ascending: true });
+
+            if (erroFatias) throw erroFatias;
+
+            const clienteIdsFatias = [...new Set((fatias || []).map(f => f.cliente_id).filter(Boolean))];
+            let clientesFatiasMap = {};
+            if (clienteIdsFatias.length > 0) {
+                const { data: cls } = await supabaseAdmin
+                    .from('clientes')
+                    .select('id, nome')
+                    .in('id', clienteIdsFatias);
+                (cls || []).forEach(c => { clientesFatiasMap[c.id] = c.nome; });
+            }
+
+            (fatias || []).forEach(f => {
+                if (!fatiasPorVenda[f.venda_id]) fatiasPorVenda[f.venda_id] = [];
+                fatiasPorVenda[f.venda_id].push({
+                    id:             f.id,
+                    ordem:          f.ordem,
+                    pessoa_label:   f.pessoa_label,
+                    meio_pagamento: f.meio_pagamento,
+                    valor:          f.valor,
+                    cliente_id:     f.cliente_id || null,
+                    cliente_nome:   f.cliente_id ? (clientesFatiasMap[f.cliente_id] || null) : null,
+                });
+            });
+        }
+
         const resultado = await Promise.all((vendas || []).map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
-                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
+                .select('pagamento_venda_id, quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
                 .eq('venda_id', venda.id);
 
             return {
@@ -232,6 +300,11 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
                 operador_nome: venda.operador_id
                                    ? (operadoresMap[venda.operador_id] || 'Operador removido')
                                    : nomeMerchant,
+                pagamentos: venda.meio_pagamento === 'Dividido' ? (fatiasPorVenda[venda.id] || []) : undefined,
+                // pagamento_venda_id: de qual fatia esse item é, quando a
+                // venda foi dividida por item (Fase 2, item 19) — null se
+                // foi dividido por valor ou o item caiu no "resto" sem
+                // atribuição. Mesmo padrão de financeiroRoutes.js.
                 itens: (itens || []).map(i => ({
                     produto_nome:       i.produtos?.nome || 'Produto',
                     produto_marca:      i.produtos?.marca || null,
@@ -239,6 +312,7 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
                     quantidade:         i.quantidade,
                     preco_unitario:     i.preco_unitario,
                     unidade_medida:     i.produtos?.unidade_medida || 'un',
+                    pagamento_venda_id: i.pagamento_venda_id || null,
                 })),
             };
         }));

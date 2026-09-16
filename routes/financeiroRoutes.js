@@ -353,10 +353,51 @@ router.get('/historico',
             if (m?.nome_fantasia) nomeMerchant = m.nome_fantasia;
         }
 
+        // Venda 'Dividido' (backlog item 19, passo 6) não tem um único
+        // meio_pagamento — busca em lote as fatias (pagamentos_venda) de
+        // todas as vendas divididas do período, pra anexar o detalhe em
+        // cada uma (o front usa isso pra abrir "Dividido (N formas)").
+        const vendasDivididasIds = vendas.filter(v => v.meio_pagamento === 'Dividido').map(v => v.id);
+        let fatiasPorVenda = {};
+        if (vendasDivididasIds.length > 0) {
+            const { data: fatias, error: erroFatias } = await supabaseAdmin
+                .from('pagamentos_venda')
+                .select('id, venda_id, ordem, pessoa_label, meio_pagamento, valor, cliente_id')
+                .eq('mercearia_id', req.user.mercearia_id)
+                .in('venda_id', vendasDivididasIds)
+                .order('ordem', { ascending: true });
+
+            if (erroFatias) throw erroFatias;
+
+            // Resolve nome dos clientes citados nas fatias (fatias Fiado)
+            const clienteIdsFatias = [...new Set((fatias || []).map(f => f.cliente_id).filter(Boolean))];
+            let clientesFatiasMap = {};
+            if (clienteIdsFatias.length > 0) {
+                const { data: cls } = await supabaseAdmin
+                    .from('clientes')
+                    .select('id, nome')
+                    .in('id', clienteIdsFatias);
+                (cls || []).forEach(c => { clientesFatiasMap[c.id] = c.nome; });
+            }
+
+            (fatias || []).forEach(f => {
+                if (!fatiasPorVenda[f.venda_id]) fatiasPorVenda[f.venda_id] = [];
+                fatiasPorVenda[f.venda_id].push({
+                    id:             f.id,
+                    ordem:          f.ordem,
+                    pessoa_label:   f.pessoa_label,
+                    meio_pagamento: f.meio_pagamento,
+                    valor:          f.valor,
+                    cliente_id:     f.cliente_id || null,
+                    cliente_nome:   f.cliente_id ? (clientesFatiasMap[f.cliente_id] || null) : null,
+                });
+            });
+        }
+
         const vendasComItens = await Promise.all(vendas.map(async (venda) => {
             const { data: itens } = await supabaseAdmin
                 .from('itens_venda')
-                .select('quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
+                .select('pagamento_venda_id, quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
                 .eq('venda_id', venda.id);
 
             return {
@@ -365,6 +406,12 @@ router.get('/historico',
                 operador_nome:  venda.operador_id
                                     ? (operadoresMap[venda.operador_id] || 'Operador removido')
                                     : nomeMerchant,
+                pagamentos:     venda.meio_pagamento === 'Dividido' ? (fatiasPorVenda[venda.id] || []) : undefined,
+                // pagamento_venda_id: em venda dividida por item (Fase 2 do
+                // item 19), diz de qual fatia esse item específico é —
+                // null quando foi dividido por valor (sem dono por item) ou
+                // caiu no "resto" sem atribuição. Usado no front pra abrir
+                // o detalhe de itens dentro de cada fatia.
                 itens: (itens || []).map(i => ({
                     produto_nome:       i.produtos?.nome || 'Produto',
                     produto_marca:      i.produtos?.marca || null,
@@ -372,6 +419,7 @@ router.get('/historico',
                     quantidade:         i.quantidade,
                     preco_unitario:     i.preco_unitario,
                     unidade_medida:     i.produtos?.unidade_medida || 'un',
+                    pagamento_venda_id: i.pagamento_venda_id || null,
                 })),
             };
         }));
@@ -619,6 +667,28 @@ router.get('/relatorio_vendas_operador',
             return res.status(200).json([]);
         }
 
+        // 1b) Venda dividida (backlog item 19) não tem um meio_pagamento
+        // único — o valor dela precisa ser aberto por fatia
+        // (pagamentos_venda) antes de cair nos baldes de dinheiro/pix/
+        // cartão/fiado abaixo, senão os baldes por forma de pagamento
+        // ficariam subcontados (o total_vendas continua batendo certo,
+        // já que soma direto de v.valor_total, sem depender disso).
+        const vendasDivididasIds = vendas.filter(v => v.meio_pagamento === 'Dividido').map(v => v.id);
+        let fatiasPorVenda = {};
+        if (vendasDivididasIds.length > 0) {
+            const { data: fatias, error: erroFatias } = await supabaseAdmin
+                .from('pagamentos_venda')
+                .select('venda_id, meio_pagamento, valor')
+                .in('venda_id', vendasDivididasIds);
+
+            if (erroFatias) throw erroFatias;
+
+            (fatias || []).forEach(f => {
+                if (!fatiasPorVenda[f.venda_id]) fatiasPorVenda[f.venda_id] = [];
+                fatiasPorVenda[f.venda_id].push(f);
+            });
+        }
+
         // 2) Coleta IDs únicos de operadores presentes nas vendas
         const operadorIds = [...new Set(vendas.map(v => v.operador_id).filter(Boolean))];
 
@@ -679,7 +749,19 @@ router.get('/relatorio_vendas_operador',
             agrupado[chave].total_vendas += valor;
             agrupado[chave].qtd_vendas   += 1;
 
-            if (meio === 'dinheiro')                               agrupado[chave].total_dinheiro += valor;
+            if (meio === 'dividido') {
+                // Abre cada fatia no balde certo em vez de jogar o
+                // valor_total inteiro num balde só.
+                (fatiasPorVenda[v.id] || []).forEach(f => {
+                    const valorFatia = parseFloat(f.valor || 0);
+                    const meioFatia  = (f.meio_pagamento || '').toLowerCase();
+                    if (meioFatia === 'dinheiro')                               agrupado[chave].total_dinheiro += valorFatia;
+                    else if (meioFatia === 'pix')                               agrupado[chave].total_pix      += valorFatia;
+                    else if (['debito','credito','cartao'].includes(meioFatia)) agrupado[chave].total_cartao   += valorFatia;
+                    else if (meioFatia === 'fiado')                             agrupado[chave].total_fiado    += valorFatia;
+                });
+            }
+            else if (meio === 'dinheiro')                               agrupado[chave].total_dinheiro += valor;
             else if (meio === 'pix')                               agrupado[chave].total_pix      += valor;
             else if (['debito','credito','cartao'].includes(meio)) agrupado[chave].total_cartao   += valor;
             else if (meio === 'fiado')                             agrupado[chave].total_fiado    += valor;
