@@ -55,7 +55,7 @@ router.post('/finalizar', async (req, res) => {
       }
     }
     const somaFatias = pagamentos.reduce((s, p) => s + parseFloat(p.valor), 0);
-    if (Math.abs(somaFatias - totalVendaFloat) > 0.01) {
+    if (Math.abs(somaFatias - totalVendaFloat) > 0.001) {
       return res.status(400).json({ error: `A soma das fatias (${fmtBRL(somaFatias)}) não bate com o total da venda (${fmtBRL(totalVendaFloat)}).` });
     }
 
