@@ -18,10 +18,17 @@
 // específicos (a mesma tabela de junção cobre "um" e "vários").
 const express  = require('express');
 const router   = express.Router();
+const multer   = require('multer');
 const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+
+// Upload de imagem do comunicado — mesmo padrão já usado pra logo de
+// estabelecimento (adminEstabelecimentosRoutes.js): multer em memória,
+// bucket "logos" (bucket genérico de imagens do projeto, com prefixo de
+// pasta por finalidade), URL pública salva direto na linha.
+const upload = multer({ storage: multer.memoryStorage() });
 
 router.use(authUser);
 
@@ -64,6 +71,19 @@ function validarAlvo({ alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_id
     if (!Array.isArray(estabelecimento_ids) || estabelecimento_ids.length === 0) {
       return 'Selecione ao menos um estabelecimento.';
     }
+  }
+  return null;
+}
+
+// Agendamento automático: ambos os campos são opcionais — sem nenhum dos
+// dois o comunicado vale desde já e não expira sozinho (comportamento de
+// antes desta funcionalidade). Com só um dos dois, vale a partir dele ou
+// até ele, respectivamente.
+function validarDatas({ data_inicio, data_fim }) {
+  if (data_inicio && isNaN(Date.parse(data_inicio))) return 'Data de início inválida.';
+  if (data_fim && isNaN(Date.parse(data_fim)))       return 'Data de término inválida.';
+  if (data_inicio && data_fim && new Date(data_fim) <= new Date(data_inicio)) {
+    return 'A data de término deve ser depois da data de início.';
   }
   return null;
 }
@@ -206,16 +226,17 @@ router.post('/admin', async (req, res) => {
   }
 
   const {
-    titulo, mensagem, formatos, ativo,
+    titulo, mensagem, mensagem_html, formatos, ativo,
     alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids,
+    data_inicio, data_fim,
   } = req.body;
 
   if (!titulo?.trim())   return res.status(400).json({ error: 'Informe o título do comunicado.' });
   if (!mensagem?.trim()) return res.status(400).json({ error: 'Informe a mensagem do comunicado.' });
 
   const erroTamanho = validarTamanhos(
-    { titulo, mensagem },
-    { titulo: LIMITES.TITULO, mensagem: LIMITES.MENSAGEM_TEMPLATE }
+    { titulo, mensagem, mensagem_html },
+    { titulo: LIMITES.TITULO, mensagem: LIMITES.MENSAGEM_TEMPLATE, mensagem_html: LIMITES.MENSAGEM_HTML }
   );
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
@@ -225,16 +246,23 @@ router.post('/admin', async (req, res) => {
   const erroAlvo = validarAlvo({ alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids });
   if (erroAlvo) return res.status(400).json({ error: erroAlvo });
 
+  const erroDatas = validarDatas({ data_inicio, data_fim });
+  if (erroDatas) return res.status(400).json({ error: erroDatas });
+
   try {
     const { data, error } = await db
       .from('comunicados')
       .insert({
         titulo:   titulo.trim(),
         mensagem: mensagem.trim(),
+        mensagem_html: mensagem_html?.trim() || null,
         formatos,
         ativo: ativo !== false,
         alvo_tipo,
         alvo_tipos_estabelecimento: alvo_tipo === 'tipo_estabelecimento' ? alvo_tipos_estabelecimento : null,
+        data_inicio: data_inicio || null,
+        data_fim:    data_fim || null,
+        criado_por_nome: req.user.nome || req.user.email || null,
       })
       .select()
       .single();
@@ -276,16 +304,17 @@ router.put('/admin/:id', async (req, res) => {
 
   const { id } = req.params;
   const {
-    titulo, mensagem, formatos, ativo,
+    titulo, mensagem, mensagem_html, formatos, ativo,
     alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids,
+    data_inicio, data_fim, imagem_url,
   } = req.body;
 
   if (!titulo?.trim())   return res.status(400).json({ error: 'Informe o título do comunicado.' });
   if (!mensagem?.trim()) return res.status(400).json({ error: 'Informe a mensagem do comunicado.' });
 
   const erroTamanho = validarTamanhos(
-    { titulo, mensagem },
-    { titulo: LIMITES.TITULO, mensagem: LIMITES.MENSAGEM_TEMPLATE }
+    { titulo, mensagem, mensagem_html },
+    { titulo: LIMITES.TITULO, mensagem: LIMITES.MENSAGEM_TEMPLATE, mensagem_html: LIMITES.MENSAGEM_HTML }
   );
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
@@ -295,16 +324,26 @@ router.put('/admin/:id', async (req, res) => {
   const erroAlvo = validarAlvo({ alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids });
   if (erroAlvo) return res.status(400).json({ error: erroAlvo });
 
+  const erroDatas = validarDatas({ data_inicio, data_fim });
+  if (erroDatas) return res.status(400).json({ error: erroDatas });
+
   try {
     const { data, error } = await db
       .from('comunicados')
       .update({
         titulo:   titulo.trim(),
         mensagem: mensagem.trim(),
+        mensagem_html: mensagem_html?.trim() || null,
         formatos,
         ativo: ativo !== false,
         alvo_tipo,
         alvo_tipos_estabelecimento: alvo_tipo === 'tipo_estabelecimento' ? alvo_tipos_estabelecimento : null,
+        data_inicio: data_inicio || null,
+        data_fim:    data_fim || null,
+        // imagem_url só é tocado aqui quando explicitamente enviado (ex:
+        // botão "Remover imagem" manda null) — enviar uma nova imagem
+        // acontece pelo upload dedicado abaixo, que já grava direto.
+        ...(imagem_url === null ? { imagem_url: null } : {}),
       })
       .eq('id', id)
       .select()
@@ -329,6 +368,54 @@ router.put('/admin/:id', async (req, res) => {
   } catch (err) {
     console.error('[COMUNICADOS] Erro editar:', err.message);
     res.status(500).json({ error: 'Erro ao editar comunicado.' });
+  }
+});
+
+/* ════════════════════════════════════════════════════════════
+   ADMIN — UPLOAD DE IMAGEM DO COMUNICADO
+   POST /api/comunicados/admin/:id/upload-imagem  (multipart, campo "imagem")
+   Mesmo padrão do upload de logo de estabelecimento: sobe pro bucket
+   "logos" (bucket genérico de imagens do projeto) sob um prefixo próprio,
+   grava a URL pública direto na linha e já devolve pro frontend — sem
+   passo intermediário de PUT. O comunicado precisa já existir (criar
+   primeiro, com "Salvar", e só depois anexar a imagem).
+════════════════════════════════════════════════════════════ */
+router.post('/admin/:id/upload-imagem', upload.single('imagem'), async (req, res) => {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Acesso negado.' });
+  }
+
+  const { id } = req.params;
+  if (!req.file) return res.status(400).json({ error: 'Arquivo não enviado.' });
+  if (!req.file.mimetype?.startsWith('image/')) {
+    return res.status(400).json({ error: 'Envie um arquivo de imagem.' });
+  }
+
+  try {
+    const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
+    const nomeArquivo = `comunicados/${id}/${Date.now()}.${ext}`;
+
+    const { error: uploadErr } = await db.storage
+      .from('logos')
+      .upload(nomeArquivo, req.file.buffer, { upsert: true, contentType: req.file.mimetype });
+    if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+
+    const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
+    const url = urlData.publicUrl;
+
+    const { data, error } = await db
+      .from('comunicados')
+      .update({ imagem_url: url })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Comunicado não encontrado.' });
+
+    res.json({ success: true, imagem_url: url });
+  } catch (err) {
+    console.error('[COMUNICADOS] Erro upload imagem:', err.message);
+    res.status(500).json({ error: 'Erro ao enviar a imagem.' });
   }
 });
 
@@ -429,14 +516,26 @@ router.get('/ativos', async (req, res) => {
   if (!mercearia_id) return res.status(403).json({ error: 'Sem estabelecimento vinculado.' });
 
   try {
-    const { data: comunicados, error } = await db
+    const { data: todosAtivos, error } = await db
       .from('comunicados')
-      .select('id, titulo, mensagem, formatos, criado_em, alvo_tipo, alvo_tipos_estabelecimento')
+      .select('id, titulo, mensagem, mensagem_html, imagem_url, formatos, criado_em, alvo_tipo, alvo_tipos_estabelecimento, data_inicio, data_fim')
       .eq('ativo', true)
       .order('criado_em', { ascending: false });
 
     if (error) throw error;
-    if (!comunicados?.length) return res.json([]);
+    if (!todosAtivos?.length) return res.json([]);
+
+    // Agendamento automático: fora da janela [data_inicio, data_fim] o
+    // comunicado existe e está "ativo" no cadastro, mas ainda não chegou
+    // a hora (ou já passou) — não deve aparecer pro comerciante.
+    const agora = Date.now();
+    const dentroDoPeriodo = (c) => {
+      if (c.data_inicio && new Date(c.data_inicio).getTime() > agora) return false;
+      if (c.data_fim && new Date(c.data_fim).getTime() < agora)       return false;
+      return true;
+    };
+    const comunicados = todosAtivos.filter(dentroDoPeriodo);
+    if (!comunicados.length) return res.json([]);
 
     // Só precisa saber o tipo_estabelecimento dessa mercearia se existir
     // ao menos um comunicado segmentado por tipo.
@@ -487,7 +586,9 @@ router.get('/ativos', async (req, res) => {
     // Só devolve comunicados que ainda têm pelo menos um formato pendente.
     const pendentes = comunicadosDoAlvo
       .map(c => ({
-        id: c.id, titulo: c.titulo, mensagem: c.mensagem, criado_em: c.criado_em,
+        id: c.id, titulo: c.titulo, mensagem: c.mensagem,
+        mensagem_html: c.mensagem_html, imagem_url: c.imagem_url,
+        criado_em: c.criado_em,
         formatos: c.formatos.filter(f => !vistosPorComunicado[c.id]?.has(f.tipo)),
       }))
       .filter(c => c.formatos.length > 0);

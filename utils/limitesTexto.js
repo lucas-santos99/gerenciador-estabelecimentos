@@ -25,6 +25,8 @@ const LIMITES = {
   OBSERVACAO_CURTA: 300,   // motivo de bloqueio/ajuste/liberação, uma linha
   OBSERVACAO_LONGA: 500,   // textarea de observações gerais
   MENSAGEM_TEMPLATE: 3000, // templates de cobrança (WhatsApp/e-mail), avisos globais
+  MENSAGEM_HTML: 8000,    // versão formatada (negrito/cor/fonte) do texto acima — mais
+                           // larga por causa das tags <span style="..."> geradas pelo editor
   TITULO: 200,             // assunto de e-mail, título de tela, texto promocional
   BUSCA: 100,              // termos de busca/filtro (não persistidos, mas por segurança)
   CODIGO: 50,              // código de barras, número de nota fiscal
