@@ -17,13 +17,47 @@ router.use(authUser);
 function mercearia(req) { return req.user.mercearia_id; }
 function operadorId(req) { return req.user.role === 'operator' ? req.user.id : null; }
 
+// Substitui todos os vínculos de categoria de um fornecedor (apaga e
+// recria) — lista é sempre pequena, não vale a pena calcular diff.
+// Valida cada categoria_id contra a mercearia antes de vincular, nunca
+// confia cegamente no que veio do corpo da requisição.
+async function sincronizarCategoriasFornecedor(mid, fornecedorId, categoriaIds) {
+  await db.from('fornecedor_categorias').delete().eq('fornecedor_id', fornecedorId).eq('mercearia_id', mid);
+  const ids = Array.isArray(categoriaIds) ? [...new Set(categoriaIds.filter(Boolean))] : [];
+  if (ids.length === 0) return;
+  const { data: validas } = await db.from('categorias').select('id').eq('mercearia_id', mid).in('id', ids);
+  const idsValidos = (validas || []).map(c => c.id);
+  if (idsValidos.length === 0) return;
+  await db.from('fornecedor_categorias').insert(
+    idsValidos.map(categoria_id => ({ fornecedor_id: fornecedorId, categoria_id, mercearia_id: mid }))
+  );
+}
+
+// Busca em lote as categorias vinculadas de vários fornecedores de uma vez
+// (evita N+1) — devolve um mapa fornecedor_id -> [{id, nome}]
+async function buscarCategoriasPorFornecedor(mid, fornecedorIds) {
+  const mapa = {};
+  if (!fornecedorIds || fornecedorIds.length === 0) return mapa;
+  const { data: rels } = await db
+    .from('fornecedor_categorias')
+    .select('fornecedor_id, categorias(id, nome)')
+    .eq('mercearia_id', mid)
+    .in('fornecedor_id', fornecedorIds);
+  (rels || []).forEach(r => {
+    if (!r.categorias) return;
+    if (!mapa[r.fornecedor_id]) mapa[r.fornecedor_id] = [];
+    mapa[r.fornecedor_id].push(r.categorias);
+  });
+  return mapa;
+}
+
 /* ════════════════════════════════════════════════════════════
    1. LISTAR FORNECEDORES (com números rápidos: gasto no mês,
       última compra, formas de pagamento já usadas) — GET /api/fornecedores?busca=
 ════════════════════════════════════════════════════════════ */
 router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (req, res) => {
   const mid = mercearia(req);
-  const { busca } = req.query;
+  const { busca, categoria_id } = req.query;
 
   try {
     let query = db
@@ -35,10 +69,26 @@ router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (re
 
     if (busca) query = query.ilike('nome', `%${busca}%`);
 
+    // Filtro por categoria de produto (item 21) — resolve primeiro quais
+    // fornecedores têm vínculo com essa categoria, depois restringe a
+    // query principal a esses ids.
+    if (categoria_id) {
+      const { data: idsCat } = await db
+        .from('fornecedor_categorias')
+        .select('fornecedor_id')
+        .eq('mercearia_id', mid)
+        .eq('categoria_id', categoria_id);
+      const idsPermitidos = (idsCat || []).map(r => r.fornecedor_id);
+      if (idsPermitidos.length === 0) return res.json([]);
+      query = query.in('id', idsPermitidos);
+    }
+
     const { data: fornecedores, error } = await query;
     if (error) throw error;
 
     if (!fornecedores || fornecedores.length === 0) return res.json([]);
+
+    const categoriasPorFornecedor = await buscarCategoriasPorFornecedor(mid, fornecedores.map(f => f.id));
 
     // Números rápidos: gasto no mês corrente + data da última compra +
     // quais formas de pagamento (à vista / a prazo) já apareceram nas
@@ -75,6 +125,7 @@ router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (re
       gasto_mes:        resumoPorFornecedor[f.id]?.gasto_mes || 0,
       ultima_compra:    resumoPorFornecedor[f.id]?.ultima_compra || null,
       formas_pagamento: Array.from(resumoPorFornecedor[f.id]?.formasPagamento || []),
+      categorias:       categoriasPorFornecedor[f.id] || [],
     }));
 
     res.json(resultado);
@@ -199,12 +250,15 @@ router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async 
     const comprasAtivas = (comprasComItens || []).filter(c => c.status === 'ativa');
     const totalGasto = comprasAtivas.reduce((acc, c) => acc + (parseFloat(c.valor_total) || 0), 0);
 
+    const categoriasPorFornecedor = await buscarCategoriasPorFornecedor(mid, [id]);
+
     res.json({
       ...fornecedor,
       total_gasto_historico: totalGasto,
       total_compras: comprasAtivas.length,
       compras: comprasComItens,
       produtos_fornecidos: Object.values(produtosMap),
+      categorias: categoriasPorFornecedor[id] || [],
     });
   } catch (err) {
     console.error('[FORNECEDORES] Erro detalhes:', err.message);
@@ -220,6 +274,7 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (r
   const {
     nome, razao_social, cnpj_cpf, telefone, whatsapp, email,
     endereco, contato_nome, prazo_entrega_dias, condicao_pagamento, observacoes,
+    categoria_ids,
   } = req.body;
 
   if (!nome?.trim()) return res.status(400).json({ error: 'Nome do fornecedor é obrigatório' });
@@ -262,6 +317,8 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (r
 
     if (error) throw error;
 
+    await sincronizarCategoriasFornecedor(mid, data.id, categoria_ids);
+
     registrar({
       mercearia_id: mid,
       operador_id: operadorId(req),
@@ -272,7 +329,8 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (r
       meta: { fornecedor_id: data.id },
     });
 
-    res.status(201).json(data);
+    const categoriasPorFornecedor = await buscarCategoriasPorFornecedor(mid, [data.id]);
+    res.status(201).json({ ...data, categorias: categoriasPorFornecedor[data.id] || [] });
   } catch (err) {
     console.error('[FORNECEDORES] Erro criar:', err.message);
     res.status(500).json({ error: 'Erro ao criar fornecedor' });
@@ -288,6 +346,7 @@ router.put('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EDITAR), async (re
   const {
     nome, razao_social, cnpj_cpf, telefone, whatsapp, email,
     endereco, contato_nome, prazo_entrega_dias, condicao_pagamento, observacoes,
+    categoria_ids,
   } = req.body;
 
   if (!nome?.trim()) return res.status(400).json({ error: 'Nome do fornecedor é obrigatório' });
@@ -332,6 +391,12 @@ router.put('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EDITAR), async (re
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Fornecedor não encontrado' });
 
+    // categoria_ids só é sincronizado se a chave vier no corpo — assim uma
+    // chamada que não mande esse campo não apaga vínculos já existentes.
+    if ('categoria_ids' in req.body) {
+      await sincronizarCategoriasFornecedor(mid, id, categoria_ids);
+    }
+
     registrar({
       mercearia_id: mid,
       operador_id: operadorId(req),
@@ -342,7 +407,8 @@ router.put('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EDITAR), async (re
       meta: { fornecedor_id: id },
     });
 
-    res.json(data);
+    const categoriasPorFornecedor = await buscarCategoriasPorFornecedor(mid, [id]);
+    res.json({ ...data, categorias: categoriasPorFornecedor[id] || [] });
   } catch (err) {
     console.error('[FORNECEDORES] Erro editar:', err.message);
     res.status(500).json({ error: 'Erro ao editar fornecedor' });
