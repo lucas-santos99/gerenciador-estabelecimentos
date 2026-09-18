@@ -27,6 +27,8 @@ const LIMITES = {
   MENSAGEM_TEMPLATE: 3000, // templates de cobrança (WhatsApp/e-mail), avisos globais
   MENSAGEM_HTML: 8000,    // versão formatada (negrito/cor/fonte) do texto acima — mais
                            // larga por causa das tags <span style="..."> geradas pelo editor
+  TITULO_HTML: 800,        // versão formatada (negrito/cor/fonte/tamanho) do título — o
+                           // título em si é curto, mas cada span de formatação pesa
   TITULO: 200,             // assunto de e-mail, título de tela, texto promocional
   BUSCA: 100,              // termos de busca/filtro (não persistidos, mas por segurança)
   CODIGO: 50,              // código de barras, número de nota fiscal

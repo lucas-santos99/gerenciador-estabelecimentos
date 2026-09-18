@@ -226,7 +226,7 @@ router.post('/admin', async (req, res) => {
   }
 
   const {
-    titulo, mensagem, mensagem_html, formatos, ativo,
+    titulo, titulo_html, mensagem, mensagem_html, formatos, ativo,
     alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids,
     data_inicio, data_fim,
   } = req.body;
@@ -235,8 +235,8 @@ router.post('/admin', async (req, res) => {
   if (!mensagem?.trim()) return res.status(400).json({ error: 'Informe a mensagem do comunicado.' });
 
   const erroTamanho = validarTamanhos(
-    { titulo, mensagem, mensagem_html },
-    { titulo: LIMITES.TITULO, mensagem: LIMITES.MENSAGEM_TEMPLATE, mensagem_html: LIMITES.MENSAGEM_HTML }
+    { titulo, titulo_html, mensagem, mensagem_html },
+    { titulo: LIMITES.TITULO, titulo_html: LIMITES.TITULO_HTML, mensagem: LIMITES.MENSAGEM_TEMPLATE, mensagem_html: LIMITES.MENSAGEM_HTML }
   );
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
@@ -254,6 +254,7 @@ router.post('/admin', async (req, res) => {
       .from('comunicados')
       .insert({
         titulo:   titulo.trim(),
+        titulo_html: titulo_html?.trim() || null,
         mensagem: mensagem.trim(),
         mensagem_html: mensagem_html?.trim() || null,
         formatos,
@@ -304,7 +305,7 @@ router.put('/admin/:id', async (req, res) => {
 
   const { id } = req.params;
   const {
-    titulo, mensagem, mensagem_html, formatos, ativo,
+    titulo, titulo_html, mensagem, mensagem_html, formatos, ativo,
     alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids,
     data_inicio, data_fim, imagem_url,
   } = req.body;
@@ -313,8 +314,8 @@ router.put('/admin/:id', async (req, res) => {
   if (!mensagem?.trim()) return res.status(400).json({ error: 'Informe a mensagem do comunicado.' });
 
   const erroTamanho = validarTamanhos(
-    { titulo, mensagem, mensagem_html },
-    { titulo: LIMITES.TITULO, mensagem: LIMITES.MENSAGEM_TEMPLATE, mensagem_html: LIMITES.MENSAGEM_HTML }
+    { titulo, titulo_html, mensagem, mensagem_html },
+    { titulo: LIMITES.TITULO, titulo_html: LIMITES.TITULO_HTML, mensagem: LIMITES.MENSAGEM_TEMPLATE, mensagem_html: LIMITES.MENSAGEM_HTML }
   );
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
@@ -332,6 +333,7 @@ router.put('/admin/:id', async (req, res) => {
       .from('comunicados')
       .update({
         titulo:   titulo.trim(),
+        titulo_html: titulo_html?.trim() || null,
         mensagem: mensagem.trim(),
         mensagem_html: mensagem_html?.trim() || null,
         formatos,
@@ -518,7 +520,7 @@ router.get('/ativos', async (req, res) => {
   try {
     const { data: todosAtivos, error } = await db
       .from('comunicados')
-      .select('id, titulo, mensagem, mensagem_html, imagem_url, formatos, criado_em, alvo_tipo, alvo_tipos_estabelecimento, data_inicio, data_fim')
+      .select('id, titulo, titulo_html, mensagem, mensagem_html, imagem_url, formatos, criado_em, alvo_tipo, alvo_tipos_estabelecimento, data_inicio, data_fim')
       .eq('ativo', true)
       .order('criado_em', { ascending: false });
 
@@ -586,7 +588,7 @@ router.get('/ativos', async (req, res) => {
     // Só devolve comunicados que ainda têm pelo menos um formato pendente.
     const pendentes = comunicadosDoAlvo
       .map(c => ({
-        id: c.id, titulo: c.titulo, mensagem: c.mensagem,
+        id: c.id, titulo: c.titulo, titulo_html: c.titulo_html, mensagem: c.mensagem,
         mensagem_html: c.mensagem_html, imagem_url: c.imagem_url,
         criado_em: c.criado_em,
         formatos: c.formatos.filter(f => !vistosPorComunicado[c.id]?.has(f.tipo)),
