@@ -575,6 +575,53 @@ async function consultarOpenProductsFacts(codigo) {
   }
 }
 
+// Baixa a imagem encontrada no Open Food Facts/Open Products Facts e
+// hospeda no nosso próprio Supabase Storage (bucket "logos", mesmo usado
+// pra foto que o lojista envia) em vez de guardar o link externo direto.
+// Motivo: guardando o link externo, é o NAVEGADOR DE CADA FUNCIONÁRIO que
+// busca a imagem direto no servidor do Open Food Facts toda vez que não
+// estiver em cache (primeiro acesso naquele aparelho, cache limpo,
+// navegação anônima, etc.) — ficando na mão da velocidade/disponibilidade
+// de terceiros, e isso acontece de novo pra cada funcionário/dispositivo
+// separadamente. Guardando nosso próprio link, o download de verdade só
+// acontece AQUI, UMA VEZ (quando o código é bipado pela primeira vez em
+// qualquer loja do sistema — o catálogo é global), e todo mundo depois
+// carrega rápido do nosso storage. Falha no download/upload nunca quebra
+// o autopreenchimento: cai pro link original do OFF/OPF como estava antes.
+async function rehospedarImagemCatalogo(urlOriginal, codigoBarras) {
+  if (!urlOriginal || !codigoBarras) return urlOriginal || null;
+  try {
+    const resp = await fetch(urlOriginal, {
+      headers: { 'User-Agent': 'GerenciadorEstabelecimentos - LucasJSystems - contato via app' },
+    });
+    if (!resp.ok) return urlOriginal;
+
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    // Limite de segurança — a foto de capa do OFF/OPF nunca deveria chegar
+    // perto disso, mas evita guardar algo anormalmente grande no storage.
+    if (buffer.length > 3 * 1024 * 1024) return urlOriginal;
+
+    const contentType = (resp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+    const extensao = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+    // Nome do arquivo = o próprio código de barras — como o catálogo é
+    // global, existe uma imagem só por código (nunca uma por loja), e
+    // upsert:true faz uma nova tentativa pro mesmo código sobrescrever
+    // sem duplicar arquivo.
+    const nomeArquivo = `catalogo/${codigoBarras}.${extensao}`;
+
+    const { error: uploadErr } = await db.storage
+      .from('logos')
+      .upload(nomeArquivo, buffer, { upsert: true, contentType });
+    if (uploadErr) throw uploadErr;
+
+    const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
+    return urlData.publicUrl;
+  } catch (err) {
+    console.error('[CATALOGO] Erro ao re-hospedar imagem, usando link original do OFF/OPF:', err.message);
+    return urlOriginal;
+  }
+}
+
 // Salva no catálogo global — usado tanto pelo fallback do Open Food Facts
 // quanto pelo cadastro manual de produtos (contribuição colaborativa).
 // IMPORTANTE: nunca sobrescreve um código de barras que já existe no
@@ -716,15 +763,21 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
     // 2) Open Food Facts (fallback externo, gratuito — forte em alimentos)
     const doOff = await consultarOpenFoodFacts(codigoLimpo);
     if (doOff) {
+      // Baixa e hospeda a imagem no nosso próprio storage antes de salvar
+      // no catálogo/responder — ver comentário de rehospedarImagemCatalogo
+      // acima pra entender o motivo (cache por dispositivo/funcionário).
+      const imagemHospedada = doOff.imagem_url
+        ? await rehospedarImagemCatalogo(doOff.imagem_url, codigoLimpo)
+        : null;
       // Já grava no catálogo global o nome final (traduzido, se foi o caso)
       // — a próxima loja que bipar esse código pega direto do catálogo,
       // sem precisar traduzir de novo.
-      await salvarNoCatalogoGlobal(codigoLimpo, doOff.nome, doOff.marca, 'openfoodfacts', doOff.imagem_url);
+      await salvarNoCatalogoGlobal(codigoLimpo, doOff.nome, doOff.marca, 'openfoodfacts', imagemHospedada);
       return res.json({
         encontrado: true,
         nome: doOff.nome,
         marca: doOff.marca,
-        imagem_url: doOff.imagem_url,
+        imagem_url: imagemHospedada,
         fonte: 'openfoodfacts',
         traduzido: !!doOff.traduzido,
       });
@@ -733,12 +786,15 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
     // 3) Open Products Facts (fallback externo, gratuito — produtos em geral)
     const doOpf = await consultarOpenProductsFacts(codigoLimpo);
     if (doOpf) {
-      await salvarNoCatalogoGlobal(codigoLimpo, doOpf.nome, doOpf.marca, 'openproductsfacts', doOpf.imagem_url);
+      const imagemHospedada = doOpf.imagem_url
+        ? await rehospedarImagemCatalogo(doOpf.imagem_url, codigoLimpo)
+        : null;
+      await salvarNoCatalogoGlobal(codigoLimpo, doOpf.nome, doOpf.marca, 'openproductsfacts', imagemHospedada);
       return res.json({
         encontrado: true,
         nome: doOpf.nome,
         marca: doOpf.marca,
-        imagem_url: doOpf.imagem_url,
+        imagem_url: imagemHospedada,
         fonte: 'openproductsfacts',
         traduzido: !!doOpf.traduzido,
       });
