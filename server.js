@@ -21,6 +21,7 @@ const inventarioRoutes  = require("./routes/inventarioRoutes");
 const fornecedoresRoutes = require("./routes/fornecedoresRoutes");
 const comprasRoutes      = require("./routes/comprasRoutes");
 const solicitacoesRoutes = require("./routes/solicitacoesRoutes");
+const comunicadosRoutes  = require("./routes/comunicadosRoutes");
 
 // --- IMPORTAÇÃO DAS ROTAS DO ASAAS ---
 const asaasRoutes = require("./routes/asaasRoutes");
@@ -82,6 +83,7 @@ app.use("/api/inventario",   inventarioRoutes);
 app.use("/api/fornecedores", fornecedoresRoutes);
 app.use("/api/compras",      comprasRoutes);
 app.use("/api/solicitacoes", solicitacoesRoutes);
+app.use("/api/comunicados",  comunicadosRoutes);
 
 app.use("/superadmin", superAdminRoutes);
 
