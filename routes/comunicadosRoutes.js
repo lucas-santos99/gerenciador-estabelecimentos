@@ -88,6 +88,26 @@ function validarDatas({ data_inicio, data_fim }) {
   return null;
 }
 
+// Frequência de exibição pro comerciante/operador: 'uma_vez' (comportamento
+// de antes desta funcionalidade — some depois do primeiro "Ok, entendi"/
+// fechar), 'quantidade' (aparece até N vezes, contando por estabelecimento)
+// ou 'sempre' (aparece em todo login, nunca some sozinho). Controlado via
+// contagem em `comunicados_vistos.vezes` (ver GET /ativos e /marcar-visto).
+const FREQUENCIA_TIPOS_VALIDOS = ['uma_vez', 'quantidade', 'sempre'];
+
+function validarFrequencia({ frequencia_tipo, frequencia_quantidade }) {
+  if (!FREQUENCIA_TIPOS_VALIDOS.includes(frequencia_tipo)) {
+    return `Frequência inválida (use: ${FREQUENCIA_TIPOS_VALIDOS.join(', ')}).`;
+  }
+  if (frequencia_tipo === 'quantidade') {
+    const n = Number(frequencia_quantidade);
+    if (!Number.isInteger(n) || n < 1) {
+      return 'Informe quantas vezes o comunicado deve aparecer (mínimo 1).';
+    }
+  }
+  return null;
+}
+
 // Sincroniza a tabela de junção comunicado_estabelecimentos com a lista
 // atual de estabelecimento_ids. Usada tanto na criação quanto na edição —
 // na edição, se o alvo deixou de ser "especificos", isso também limpa
@@ -228,7 +248,7 @@ router.post('/admin', async (req, res) => {
   const {
     titulo, titulo_html, mensagem, mensagem_html, formatos, ativo,
     alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids,
-    data_inicio, data_fim,
+    data_inicio, data_fim, frequencia_tipo, frequencia_quantidade,
   } = req.body;
 
   if (!titulo?.trim())   return res.status(400).json({ error: 'Informe o título do comunicado.' });
@@ -249,6 +269,9 @@ router.post('/admin', async (req, res) => {
   const erroDatas = validarDatas({ data_inicio, data_fim });
   if (erroDatas) return res.status(400).json({ error: erroDatas });
 
+  const erroFrequencia = validarFrequencia({ frequencia_tipo, frequencia_quantidade });
+  if (erroFrequencia) return res.status(400).json({ error: erroFrequencia });
+
   try {
     const { data, error } = await db
       .from('comunicados')
@@ -263,6 +286,8 @@ router.post('/admin', async (req, res) => {
         alvo_tipos_estabelecimento: alvo_tipo === 'tipo_estabelecimento' ? alvo_tipos_estabelecimento : null,
         data_inicio: data_inicio || null,
         data_fim:    data_fim || null,
+        frequencia_tipo,
+        frequencia_quantidade: frequencia_tipo === 'quantidade' ? Number(frequencia_quantidade) : null,
         criado_por_nome: req.user.nome || req.user.email || null,
       })
       .select()
@@ -307,7 +332,7 @@ router.put('/admin/:id', async (req, res) => {
   const {
     titulo, titulo_html, mensagem, mensagem_html, formatos, ativo,
     alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids,
-    data_inicio, data_fim, imagem_url,
+    data_inicio, data_fim, imagem_url, frequencia_tipo, frequencia_quantidade,
   } = req.body;
 
   if (!titulo?.trim())   return res.status(400).json({ error: 'Informe o título do comunicado.' });
@@ -328,6 +353,9 @@ router.put('/admin/:id', async (req, res) => {
   const erroDatas = validarDatas({ data_inicio, data_fim });
   if (erroDatas) return res.status(400).json({ error: erroDatas });
 
+  const erroFrequencia = validarFrequencia({ frequencia_tipo, frequencia_quantidade });
+  if (erroFrequencia) return res.status(400).json({ error: erroFrequencia });
+
   try {
     const { data, error } = await db
       .from('comunicados')
@@ -342,6 +370,8 @@ router.put('/admin/:id', async (req, res) => {
         alvo_tipos_estabelecimento: alvo_tipo === 'tipo_estabelecimento' ? alvo_tipos_estabelecimento : null,
         data_inicio: data_inicio || null,
         data_fim:    data_fim || null,
+        frequencia_tipo,
+        frequencia_quantidade: frequencia_tipo === 'quantidade' ? Number(frequencia_quantidade) : null,
         // imagem_url só é tocado aqui quando explicitamente enviado (ex:
         // botão "Remover imagem" manda null) — enviar uma nova imagem
         // acontece pelo upload dedicado abaixo, que já grava direto.
@@ -520,7 +550,7 @@ router.get('/ativos', async (req, res) => {
   try {
     const { data: todosAtivos, error } = await db
       .from('comunicados')
-      .select('id, titulo, titulo_html, mensagem, mensagem_html, imagem_url, formatos, criado_em, alvo_tipo, alvo_tipos_estabelecimento, data_inicio, data_fim')
+      .select('id, titulo, titulo_html, mensagem, mensagem_html, imagem_url, formatos, criado_em, alvo_tipo, alvo_tipos_estabelecimento, data_inicio, data_fim, frequencia_tipo, frequencia_quantidade')
       .eq('ativo', true)
       .order('criado_em', { ascending: false });
 
@@ -576,14 +606,27 @@ router.get('/ativos', async (req, res) => {
 
     const { data: vistos } = await db
       .from('comunicados_vistos')
-      .select('comunicado_id, formato')
+      .select('comunicado_id, formato, vezes')
       .eq('mercearia_id', mercearia_id)
       .in('comunicado_id', comunicadosDoAlvo.map(c => c.id));
 
+    // Guarda quantas vezes CADA formato já foi visto (não só se foi ou
+    // não) — precisa da contagem pra frequência 'quantidade'.
     const vistosPorComunicado = {};
     (vistos || []).forEach(v => {
-      (vistosPorComunicado[v.comunicado_id] ||= new Set()).add(v.formato);
+      (vistosPorComunicado[v.comunicado_id] ||= {})[v.formato] = v.vezes;
     });
+
+    // Frequência de exibição: 'sempre' ignora a contagem (sempre aparece);
+    // 'quantidade' aparece enquanto não bater o número configurado;
+    // 'uma_vez' (padrão) some assim que visto uma vez — igual ao
+    // comportamento de antes dessa funcionalidade existir.
+    function aindaDeveAparecer(c, formatoTipo) {
+      const vezesVisto = vistosPorComunicado[c.id]?.[formatoTipo] || 0;
+      if (c.frequencia_tipo === 'sempre') return true;
+      if (c.frequencia_tipo === 'quantidade') return vezesVisto < (c.frequencia_quantidade || 1);
+      return vezesVisto < 1;
+    }
 
     // Só devolve comunicados que ainda têm pelo menos um formato pendente.
     const pendentes = comunicadosDoAlvo
@@ -591,7 +634,7 @@ router.get('/ativos', async (req, res) => {
         id: c.id, titulo: c.titulo, titulo_html: c.titulo_html, mensagem: c.mensagem,
         mensagem_html: c.mensagem_html, imagem_url: c.imagem_url,
         criado_em: c.criado_em,
-        formatos: c.formatos.filter(f => !vistosPorComunicado[c.id]?.has(f.tipo)),
+        formatos: c.formatos.filter(f => aindaDeveAparecer(c, f.tipo)),
       }))
       .filter(c => c.formatos.length > 0);
 
@@ -618,14 +661,32 @@ router.post('/:id/marcar-visto', async (req, res) => {
   }
 
   try {
-    const { error } = await db
+    // Incrementa em vez de só marcar presença — a frequência 'quantidade'
+    // precisa saber QUANTAS vezes já apareceu, não só se apareceu.
+    // Supabase não tem um "upsert com incremento" direto, então busca a
+    // linha primeiro (baixo volume: no máximo 1 chamada por formato por
+    // login de um comerciante/operador).
+    const { data: existente } = await db
       .from('comunicados_vistos')
-      .upsert(
-        { comunicado_id: id, mercearia_id, formato },
-        { onConflict: 'comunicado_id,mercearia_id,formato' }
-      );
+      .select('id, vezes')
+      .eq('comunicado_id', id)
+      .eq('mercearia_id', mercearia_id)
+      .eq('formato', formato)
+      .maybeSingle();
 
-    if (error) throw error;
+    if (existente) {
+      const { error } = await db
+        .from('comunicados_vistos')
+        .update({ vezes: existente.vezes + 1, visto_em: new Date().toISOString() })
+        .eq('id', existente.id);
+      if (error) throw error;
+    } else {
+      const { error } = await db
+        .from('comunicados_vistos')
+        .insert({ comunicado_id: id, mercearia_id, formato, vezes: 1 });
+      if (error) throw error;
+    }
+
     res.json({ success: true });
   } catch (err) {
     console.error('[COMUNICADOS] Erro marcar visto:', err.message);
