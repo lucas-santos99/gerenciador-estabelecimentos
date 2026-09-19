@@ -38,6 +38,7 @@ router.get('/estado', async (req, res) => {
       .in('chave', [
         'cobranca_notif_ativo',
         'cobranca_notif_titulo',
+        'cobranca_notif_titulo_html',
         'cobranca_notif_mensagem',
         'cobranca_notif_mensagem_html',
         'cobranca_notif_frequencia_tipo',
@@ -97,6 +98,7 @@ router.get('/estado', async (req, res) => {
     res.json({
       deve_mostrar:    true,
       titulo:          cfg.cobranca_notif_titulo || 'Sua assinatura está vencendo',
+      titulo_html:     cfg.cobranca_notif_titulo_html || '',
       mensagem:        cfg.cobranca_notif_mensagem || '',
       mensagem_html:   cfg.cobranca_notif_mensagem_html || '',
       imagem_url:      cfg.cobranca_imagem_url || '',

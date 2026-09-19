@@ -225,6 +225,7 @@ router.get('/config-cobranca', async (req, res) => {
         'cobranca_imagem_url',
         'cobranca_notif_ativo',
         'cobranca_notif_titulo',
+        'cobranca_notif_titulo_html',
         'cobranca_notif_mensagem',
         'cobranca_notif_mensagem_html',
         'cobranca_notif_frequencia_tipo',
@@ -242,6 +243,7 @@ router.get('/config-cobranca', async (req, res) => {
       // Notificação de canto de tela (aparece junto do banner "Renovar Antecipado")
       notif_ativo:                 cfg.cobranca_notif_ativo === 'true',
       notif_titulo:                cfg.cobranca_notif_titulo || 'Sua assinatura está vencendo',
+      notif_titulo_html:           cfg.cobranca_notif_titulo_html || '',
       notif_mensagem:              cfg.cobranca_notif_mensagem || '',
       notif_mensagem_html:         cfg.cobranca_notif_mensagem_html || '',
       notif_frequencia_tipo:       cfg.cobranca_notif_frequencia_tipo || 'sempre',
@@ -260,7 +262,7 @@ router.put('/config-cobranca', onlyMaster, async (req, res) => {
     const db = require('../db/supabaseAdmin');
     const {
       dias_aviso, msg_whatsapp, email_assunto, email_corpo,
-      notif_ativo, notif_titulo, notif_mensagem, notif_mensagem_html,
+      notif_ativo, notif_titulo, notif_titulo_html, notif_mensagem, notif_mensagem_html,
       notif_frequencia_tipo, notif_frequencia_quantidade,
     } = req.body;
 
@@ -270,10 +272,10 @@ router.put('/config-cobranca', onlyMaster, async (req, res) => {
     }
 
     const erroTamanho = validarTamanhos(
-      { msg_whatsapp, email_assunto, email_corpo, notif_titulo, notif_mensagem_html },
+      { msg_whatsapp, email_assunto, email_corpo, notif_titulo, notif_titulo_html, notif_mensagem_html },
       {
         msg_whatsapp: LIMITES.MENSAGEM_TEMPLATE, email_assunto: LIMITES.TITULO, email_corpo: LIMITES.MENSAGEM_TEMPLATE,
-        notif_titulo: LIMITES.TITULO, notif_mensagem_html: LIMITES.MENSAGEM_HTML,
+        notif_titulo: LIMITES.TITULO, notif_titulo_html: LIMITES.TITULO_HTML, notif_mensagem_html: LIMITES.MENSAGEM_HTML,
       }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
@@ -298,6 +300,7 @@ router.put('/config-cobranca', onlyMaster, async (req, res) => {
       { chave: 'cobranca_email_corpo',   valor: email_corpo   || '' },
       { chave: 'cobranca_notif_ativo',                 valor: notif_ativo ? 'true' : 'false' },
       { chave: 'cobranca_notif_titulo',                valor: notif_titulo || '' },
+      { chave: 'cobranca_notif_titulo_html',            valor: notif_titulo_html || '' },
       { chave: 'cobranca_notif_mensagem',               valor: notif_mensagem || '' },
       { chave: 'cobranca_notif_mensagem_html',          valor: notif_mensagem_html || '' },
       { chave: 'cobranca_notif_frequencia_tipo',        valor: frequenciaTipoNotif },
