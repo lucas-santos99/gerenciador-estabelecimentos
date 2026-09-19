@@ -223,6 +223,12 @@ router.get('/config-cobranca', async (req, res) => {
         'cobranca_email_assunto',
         'cobranca_email_corpo',
         'cobranca_imagem_url',
+        'cobranca_notif_ativo',
+        'cobranca_notif_titulo',
+        'cobranca_notif_mensagem',
+        'cobranca_notif_mensagem_html',
+        'cobranca_notif_frequencia_tipo',
+        'cobranca_notif_frequencia_quantidade',
       ]);
     const cfg = {};
     (data || []).forEach(r => { cfg[r.chave] = r.valor; });
@@ -233,6 +239,13 @@ router.get('/config-cobranca', async (req, res) => {
       email_assunto:  cfg.cobranca_email_assunto  || 'Sua mensalidade — {situacao}',
       email_corpo:    cfg.cobranca_email_corpo    || 'Olá {nome},\n\nSua mensalidade do sistema {situacao}, no dia {vencimento}.\n\n{link_pagamento}\n\nQualquer dúvida, estou à disposição.',
       imagem_url:     cfg.cobranca_imagem_url     || '',
+      // Notificação de canto de tela (aparece junto do banner "Renovar Antecipado")
+      notif_ativo:                 cfg.cobranca_notif_ativo === 'true',
+      notif_titulo:                cfg.cobranca_notif_titulo || 'Sua assinatura está vencendo',
+      notif_mensagem:              cfg.cobranca_notif_mensagem || '',
+      notif_mensagem_html:         cfg.cobranca_notif_mensagem_html || '',
+      notif_frequencia_tipo:       cfg.cobranca_notif_frequencia_tipo || 'sempre',
+      notif_frequencia_quantidade: parseInt(cfg.cobranca_notif_frequencia_quantidade) || 1,
     });
   } catch (err) {
     console.error('ERRO GET config-cobranca:', err);
@@ -240,10 +253,16 @@ router.get('/config-cobranca', async (req, res) => {
   }
 });
 
+const FREQUENCIA_TIPOS_VALIDOS_NOTIF = ['uma_vez', 'quantidade', 'sempre'];
+
 router.put('/config-cobranca', onlyMaster, async (req, res) => {
   try {
     const db = require('../db/supabaseAdmin');
-    const { dias_aviso, msg_whatsapp, email_assunto, email_corpo } = req.body;
+    const {
+      dias_aviso, msg_whatsapp, email_assunto, email_corpo,
+      notif_ativo, notif_titulo, notif_mensagem, notif_mensagem_html,
+      notif_frequencia_tipo, notif_frequencia_quantidade,
+    } = req.body;
 
     const diasNum = parseInt(dias_aviso);
     if (isNaN(diasNum) || diasNum < 1 || diasNum > 60) {
@@ -251,16 +270,38 @@ router.put('/config-cobranca', onlyMaster, async (req, res) => {
     }
 
     const erroTamanho = validarTamanhos(
-      { msg_whatsapp, email_assunto, email_corpo },
-      { msg_whatsapp: LIMITES.MENSAGEM_TEMPLATE, email_assunto: LIMITES.TITULO, email_corpo: LIMITES.MENSAGEM_TEMPLATE }
+      { msg_whatsapp, email_assunto, email_corpo, notif_titulo, notif_mensagem_html },
+      {
+        msg_whatsapp: LIMITES.MENSAGEM_TEMPLATE, email_assunto: LIMITES.TITULO, email_corpo: LIMITES.MENSAGEM_TEMPLATE,
+        notif_titulo: LIMITES.TITULO, notif_mensagem_html: LIMITES.MENSAGEM_HTML,
+      }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    // Notificação de canto de tela é opcional (notif_ativo pode vir undefined
+    // em telas antigas do painel) — só valida frequência quando ativada.
+    const frequenciaTipoNotif = notif_frequencia_tipo || 'sempre';
+    if (notif_ativo && !FREQUENCIA_TIPOS_VALIDOS_NOTIF.includes(frequenciaTipoNotif)) {
+      return res.status(400).json({ error: `Frequência da notificação inválida (use: ${FREQUENCIA_TIPOS_VALIDOS_NOTIF.join(', ')}).` });
+    }
+    if (notif_ativo && frequenciaTipoNotif === 'quantidade') {
+      const qtdNum = parseInt(notif_frequencia_quantidade);
+      if (isNaN(qtdNum) || qtdNum < 1) {
+        return res.status(400).json({ error: 'Quantidade de exibições da notificação inválida.' });
+      }
+    }
 
     const updates = [
       { chave: 'cobranca_dias_aviso',    valor: String(diasNum) },
       { chave: 'cobranca_msg_whatsapp',  valor: msg_whatsapp  || '' },
       { chave: 'cobranca_email_assunto', valor: email_assunto || '' },
       { chave: 'cobranca_email_corpo',   valor: email_corpo   || '' },
+      { chave: 'cobranca_notif_ativo',                 valor: notif_ativo ? 'true' : 'false' },
+      { chave: 'cobranca_notif_titulo',                valor: notif_titulo || '' },
+      { chave: 'cobranca_notif_mensagem',               valor: notif_mensagem || '' },
+      { chave: 'cobranca_notif_mensagem_html',          valor: notif_mensagem_html || '' },
+      { chave: 'cobranca_notif_frequencia_tipo',        valor: frequenciaTipoNotif },
+      { chave: 'cobranca_notif_frequencia_quantidade',  valor: String(parseInt(notif_frequencia_quantidade) || 1) },
     ];
 
     for (const u of updates) {
