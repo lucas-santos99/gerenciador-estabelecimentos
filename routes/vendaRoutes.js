@@ -75,6 +75,104 @@ router.post('/finalizar', async (req, res) => {
 
   const { id: userId, role, mercearia_id } = req.user;
 
+  // ── Preço e total conferidos com o cadastro (22/09/2026) ──────────
+  // Antes o backend gravava o preço e o total que o PDV mandava, sem
+  // conferir. Agora cada item é comparado com o preço ATUAL do cadastro
+  // (preço da variação, se tiver um próprio; senão o do produto). Se
+  // algum preço mudou desde que o item entrou no carrinho (outra pessoa
+  // editou o produto nesse meio-tempo), a venda NÃO é gravada: volta 409
+  // com a lista do que mudou, e o PDV mostra o aviso pro caixa aplicar o
+  // preço novo antes de finalizar.
+  try {
+    for (const [i, item] of carrinho.entries()) {
+      const qtd = parseFloat(item.quantidade);
+      if (!item.produto_id || isNaN(qtd) || qtd <= 0 || isNaN(parseFloat(item.valor_unitario))) {
+        return res.status(400).json({ error: `Item ${i + 1} do carrinho está com dados inválidos.` });
+      }
+    }
+
+    const produtoIds  = [...new Set(carrinho.map(i => i.produto_id))];
+    const variacaoIds = [...new Set(carrinho.map(i => i.produto_variacao_id).filter(Boolean))];
+
+    const { data: produtosCadastro, error: errProd } = await db
+      .from('produtos')
+      .select('id, nome, preco_venda')
+      .in('id', produtoIds)
+      .eq('mercearia_id', mercearia_id);
+    if (errProd) throw errProd;
+
+    let variacoesCadastro = [];
+    if (variacaoIds.length > 0) {
+      const { data: vars, error: errVar } = await db
+        .from('produto_variacoes')
+        .select('id, produto_id, preco_venda')
+        .in('id', variacaoIds)
+        .eq('mercearia_id', mercearia_id);
+      if (errVar) throw errVar;
+      variacoesCadastro = vars || [];
+    }
+
+    const precosAlterados = [];
+    let totalConferido = 0;
+
+    for (const [i, item] of carrinho.entries()) {
+      const prod = (produtosCadastro || []).find(p => p.id === item.produto_id);
+      if (!prod) {
+        return res.status(409).json({
+          codigo: 'PRODUTO_INDISPONIVEL',
+          error: 'Um dos produtos do carrinho não existe mais no cadastro. Remova-o e tente de novo.',
+          produto_id: item.produto_id,
+        });
+      }
+
+      let precoAtual = parseFloat(prod.preco_venda);
+      if (item.produto_variacao_id) {
+        const v = variacoesCadastro.find(x => x.id === item.produto_variacao_id && x.produto_id === item.produto_id);
+        if (!v) {
+          return res.status(409).json({
+            codigo: 'PRODUTO_INDISPONIVEL',
+            error: `A variação escolhida de "${prod.nome}" não existe mais no cadastro. Remova-a e tente de novo.`,
+            produto_id: item.produto_id,
+          });
+        }
+        if (v.preco_venda != null) precoAtual = parseFloat(v.preco_venda);
+      }
+
+      const precoEnviado = parseFloat(item.valor_unitario);
+      if (Math.abs(precoEnviado - precoAtual) > 0.005) {
+        precosAlterados.push({
+          index: i,
+          produto_id: item.produto_id,
+          produto_variacao_id: item.produto_variacao_id || null,
+          nome: prod.nome,
+          preco_anterior: precoEnviado,
+          preco_atual: precoAtual,
+        });
+      }
+      totalConferido += precoAtual * parseFloat(item.quantidade);
+    }
+
+    if (precosAlterados.length > 0) {
+      const nomes = precosAlterados.map(p => `"${p.nome}"`).join(', ');
+      return res.status(409).json({
+        codigo: 'PRECO_ALTERADO',
+        error: `O preço de ${nomes} foi alterado no cadastro enquanto a venda estava aberta. Confira e aplique o preço novo antes de finalizar.`,
+        itens: precosAlterados,
+      });
+    }
+
+    // Mesma tolerância de centavo já usada na soma das fatias.
+    if (Math.abs(totalConferido - totalVendaFloat) > 0.01) {
+      return res.status(400).json({
+        codigo: 'TOTAL_DIVERGENTE',
+        error: `O total da venda (${fmtBRL(totalVendaFloat)}) não confere com os itens (${fmtBRL(totalConferido)}). Atualize a tela e tente de novo.`,
+      });
+    }
+  } catch (err) {
+    console.error('[ERRO] Conferência de preços da venda:', err.message);
+    return res.status(500).json({ error: 'Não foi possível conferir os preços da venda. Tente de novo.' });
+  }
+
   // Fiado é opcional por estabelecimento agora — esse é o único lugar
   // onde isso deveria bloquear alguma coisa (criar venda fiado NOVA).
   // Cobrar dívida antiga continua liberado em qualquer configuração,
@@ -232,6 +330,40 @@ router.post('/finalizar', async (req, res) => {
 
   } catch (err) {
     console.error('[ERRO CRÍTICO] Falha ao finalizar venda:', err.message);
+
+    // Estoque acabou entre o item entrar no carrinho e a venda ser
+    // finalizada (outro caixa vendeu, ou alguém ajustou o estoque). A
+    // função no banco desfaz a venda inteira nesse caso — nada é gravado.
+    const msg = String(err?.message || '');
+    const m = msg.match(/ESTOQUE_INSUFICIENTE:([0-9a-f-]{36}):([0-9a-f-]{36})?/i);
+    if (m) {
+      const [, produtoId, variacaoId] = m;
+      let nome = 'um dos produtos';
+      let disponivel = null;
+      try {
+        const { data: p } = await db.from('produtos').select('nome, estoque_atual, unidade_medida')
+          .eq('id', produtoId).eq('mercearia_id', mercearia_id).single();
+        if (p) {
+          nome = `"${p.nome}"`;
+          disponivel = p.estoque_atual;
+          if (variacaoId) {
+            const { data: v } = await db.from('produto_variacoes').select('estoque_atual')
+              .eq('id', variacaoId).eq('mercearia_id', mercearia_id).single();
+            if (v) disponivel = v.estoque_atual;
+          }
+        }
+      } catch { /* só enriquece a mensagem */ }
+      const dispTxt = disponivel != null
+        ? ` Disponível agora: ${parseFloat(disponivel).toLocaleString('pt-BR', { maximumFractionDigits: 3 })}.`
+        : '';
+      return res.status(409).json({
+        codigo: 'ESTOQUE_INSUFICIENTE',
+        error: `Estoque insuficiente para ${nome} — ele mudou enquanto a venda estava aberta.${dispTxt} Ajuste a quantidade e finalize de novo.`,
+        produto_id: produtoId,
+        produto_variacao_id: variacaoId || null,
+      });
+    }
+
     res.status(500).json({ error: 'Erro ao processar a venda. O estoque não foi alterado.' });
   }
 });
@@ -288,45 +420,19 @@ router.post('/:id/cancelar', async (req, res) => {
       });
     }
 
-    // 1) Estorna o estoque de cada item vendido — se o item era de uma
-    // variação específica (tamanho/cor), devolve pro estoque DA
-    // VARIAÇÃO, não do produto base.
+    // 1-3) Estorno de estoque, dinheiro (saldo do cliente / caixa) e
+    // status — tudo numa transação só, dentro do banco
+    // (`cancelar_venda_atomico`, 22/09/2026). Antes eram várias chamadas
+    // separadas lendo e regravando o estoque: duas pessoas cancelando a
+    // mesma venda ao mesmo tempo estornavam em dobro, e uma venda feita
+    // no meio do estorno podia ter a baixa "apagada". Agora a venda fica
+    // travada durante o cancelamento e cada soma é feita no próprio
+    // UPDATE. As leituras abaixo são só pra descrição da auditoria.
     const { data: itens } = await db
       .from('itens_venda')
       .select('produto_id, produto_variacao_id, quantidade, produtos ( nome )')
       .eq('venda_id', id);
 
-    for (const item of itens || []) {
-      if (item.produto_variacao_id) {
-        const { data: variacao } = await db
-          .from('produto_variacoes')
-          .select('estoque_atual')
-          .eq('id', item.produto_variacao_id)
-          .single();
-        if (variacao) {
-          await db.from('produto_variacoes')
-            .update({ estoque_atual: parseFloat(variacao.estoque_atual || 0) + parseFloat(item.quantidade) })
-            .eq('id', item.produto_variacao_id);
-        }
-      } else {
-        const { data: produto } = await db
-          .from('produtos')
-          .select('estoque_atual')
-          .eq('id', item.produto_id)
-          .single();
-        if (produto) {
-          await db.from('produtos')
-            .update({ estoque_atual: parseFloat(produto.estoque_atual || 0) + parseFloat(item.quantidade) })
-            .eq('id', item.produto_id);
-        }
-      }
-    }
-
-    // 2) Estorna o dinheiro — se foi fiado, tira do saldo devedor do
-    // cliente; se foi dividida, tira o saldo de CADA cliente fiado
-    // envolvido (pode ter mais de um) e ainda apaga as entradas de
-    // caixa das fatias não-fiado; se não, só remove a(s) entrada(s)
-    // que tinham sido lançadas no caixa.
     let fatiasDivididas = null;
     if (venda.meio_pagamento === 'Dividido') {
       const { data: fatias } = await db
@@ -335,39 +441,23 @@ router.post('/:id/cancelar', async (req, res) => {
         .eq('venda_id', id)
         .order('ordem');
       fatiasDivididas = fatias || [];
-
-      for (const fatia of fatiasDivididas.filter(f => f.meio_pagamento === 'Fiado' && f.cliente_id)) {
-        const { data: cliente } = await db
-          .from('clientes')
-          .select('saldo_devedor')
-          .eq('id', fatia.cliente_id)
-          .single();
-        if (cliente) {
-          const novoSaldo = Math.max(0, parseFloat(cliente.saldo_devedor || 0) - parseFloat(fatia.valor));
-          await db.from('clientes').update({ saldo_devedor: novoSaldo }).eq('id', fatia.cliente_id);
-        }
-      }
-      await db.from('transacoes_caixa').delete().eq('venda_id', id);
-    } else if (venda.meio_pagamento === 'Fiado' && venda.cliente_id) {
-      const { data: cliente } = await db
-        .from('clientes')
-        .select('saldo_devedor')
-        .eq('id', venda.cliente_id)
-        .single();
-      if (cliente) {
-        const novoSaldo = Math.max(0, parseFloat(cliente.saldo_devedor || 0) - parseFloat(venda.valor_total));
-        await db.from('clientes').update({ saldo_devedor: novoSaldo }).eq('id', venda.cliente_id);
-      }
-    } else {
-      await db.from('transacoes_caixa').delete().eq('venda_id', id);
     }
 
-    // 3) Marca a venda como cancelada (não apaga, mantém rastro)
-    await db.from('vendas').update({
-      status:               'cancelada',
-      cancelada_em:         new Date().toISOString(),
-      motivo_cancelamento:  motivo || null,
-    }).eq('id', id);
+    const { error: errCancel } = await db.rpc('cancelar_venda_atomico', {
+      p_venda_id:     id,
+      p_mercearia_id: mercearia_id,
+      p_motivo:       motivo || null,
+    });
+    if (errCancel) {
+      const msgCancel = String(errCancel.message || '');
+      if (msgCancel.includes('VENDA_JA_CANCELADA')) {
+        return res.status(400).json({ error: 'Essa venda já está cancelada.' });
+      }
+      if (msgCancel.includes('VENDA_NAO_ENCONTRADA')) {
+        return res.status(404).json({ error: 'Venda não encontrada.' });
+      }
+      throw errCancel;
+    }
 
     // 4) Auditoria — nome do cliente e resumo dos itens cancelados,
     // pra descrição ficar completa (não só o valor)

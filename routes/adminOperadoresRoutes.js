@@ -9,10 +9,16 @@ const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// ⚠️ NOTA: upload-foto, remover-foto e reset-senha continuam sem authUser
-// porque o componente que os chama (provavelmente ResetSenhaModal.jsx e
-// algum uploader de foto) ainda não foi revisado. Aplicar authUser sem
-// corrigir o frontend correspondente quebraria essas ações.
+const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
+
+// 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
+// super_admin. Antes, listar operadores, detalhes, permissões (GET),
+// limite, upload-foto e remover-foto não exigiam login nenhum, e as
+// demais (criar, editar, excluir, reset de senha, status, permissões)
+// aceitavam qualquer usuário logado — inclusive trocar a senha de um
+// operador de outra loja. Todas as telas que chamam /admin/operadores
+// são do painel do SuperAdmin e já mandam o token (apiFetch).
+router.use(authUser, somenteSuperAdmin);
 
 /* ============================================================
    LISTAR OPERADORES DE UM ESTABELECIMENTO

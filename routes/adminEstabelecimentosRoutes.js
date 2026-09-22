@@ -8,12 +8,18 @@ const { registrar } = require("./auditoriaRoutes");
 const { TIMEZONE_PADRAO, TIMEZONES_VALIDAS, hojeStrTZ } = require("../utils/fusoHorario");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
-// ⚠️ NOTA: as demais rotas deste arquivo (listar, criar, editar, excluir,
-// limite-operadores, upload-logo) ainda não exigem authUser porque o
-// frontend correspondente (NovoEstabelecimento/EditarEstabelecimento/
-// Excluidas) ainda não envia o Bearer token. Aplicado authUser apenas
-// em bloquear-acesso e liberar-acesso, que já são chamadas com token
-// pelo DashboardAdmin.jsx e DetalhesEstabelecimento.jsx.
+const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
+
+// 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
+// super_admin. Antes: listar, excluidas, /:id, /:id/liberacoes e
+// /:id/limite-operadores (GET) não exigiam login nenhum (qualquer pessoa
+// na internet lia os dados de todos os estabelecimentos), e as demais só
+// exigiam estar logado — um comerciante/operador conseguia editar,
+// excluir ou apagar de vez o estabelecimento de outra pessoa. O frontend
+// do SuperAdmin passou a mandar o token em todas as chamadas (apiFetch).
+// O authUser que já existia em algumas rotas individuais continua lá e
+// não refaz o trabalho (authUser é idempotente por requisição).
+router.use(authUser, somenteSuperAdmin);
 
 // =======================================================
 // 🔴 FUNÇÃO: BLOQUEAR VENCIDOS AUTOMATICAMENTE

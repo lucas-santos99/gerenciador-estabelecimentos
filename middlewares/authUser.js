@@ -3,23 +3,53 @@ const jwt = require('jsonwebtoken');
 const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 
+// ── Validação do token (assinatura + sessão) com cache em memória ──
+// Cada token validado fica guardado por até CACHE_MS (ou até expirar,
+// o que vier antes). Um token revogado (logout em outro lugar, usuário
+// excluído) deixa de ser aceito em no máximo CACHE_MS.
+const CACHE_MS = 60 * 1000;
+const CACHE_MAX = 5000;
+const cacheTokens = new Map(); // token -> { userId, ate }
+
+async function validarToken(token) {
+  if (!token) return null;
+  const agora = Date.now();
+
+  const emCache = cacheTokens.get(token);
+  if (emCache && emCache.ate > agora) return emCache.userId;
+  if (emCache) cacheTokens.delete(token);
+
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data?.user?.id) return null;
+
+  // `exp` só é lido DEPOIS da validação acima — aqui já é seguro.
+  const exp = jwt.decode(token)?.exp;
+  const expiraEm = exp ? exp * 1000 : agora + CACHE_MS;
+  const ate = Math.min(agora + CACHE_MS, expiraEm);
+  if (ate <= agora) return null;
+
+  if (cacheTokens.size >= CACHE_MAX) cacheTokens.clear();
+  cacheTokens.set(token, { userId: data.user.id, ate });
+  return data.user.id;
+}
+
 module.exports = async function authUser(req, res, next) {
+  // Já autenticado nesta mesma requisição (ex: router.use(authUser) no
+  // topo do arquivo + authUser de novo na rota) — não refaz o trabalho.
+  if (req.user && req.authUserOk) return next();
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader) return res.status(401).json({ error: 'Token não enviado' });
 
     const token = authHeader.replace('Bearer ', '');
 
-    let decoded;
-    try {
-      decoded = jwt.decode(token);
-    } catch (e) {
-      return res.status(401).json({ error: 'Token inválido' });
-    }
-
-    if (!decoded?.sub) return res.status(401).json({ error: 'Token inválido' });
-
-    const userId = decoded.sub;
+    // 22/09/2026 — antes era só `jwt.decode(token)`, que LÊ o token sem
+    // conferir a assinatura: qualquer um que soubesse o UUID de um
+    // usuário conseguia montar um token falso e ser aceito como ele.
+    // Agora o token é validado de verdade no Supabase Auth (com cache
+    // curto em memória pra não pagar uma ida ao Auth a cada requisição).
+    const userId = await validarToken(token);
+    if (!userId) return res.status(401).json({ error: 'Token inválido ou expirado' });
 
     req.supabase  = createSupabaseUserClient(token);
     req.userToken = token;
@@ -82,6 +112,7 @@ module.exports = async function authUser(req, res, next) {
       }
     }
 
+    req.authUserOk = true;
     next();
   } catch (err) {
     console.error('ERRO GERAL authUser:', err);

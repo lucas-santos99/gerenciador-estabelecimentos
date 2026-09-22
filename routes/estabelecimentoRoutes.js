@@ -117,6 +117,21 @@ function precoVendaEhValido(preco_venda, tem_variacoes, variacoes) {
 
 router.use(authUser);
 
+// ── Isolamento entre estabelecimentos (22/09/2026) ─────────────────
+// Várias rotas deste arquivo usam o `:id` da URL como estabelecimento
+// (produtos, variações, imagens, busca, código interno...) e, antes, não
+// conferiam se esse id era o do usuário logado — trocando o id na URL,
+// um usuário de uma loja lia/alterava produtos de outra. Agora qualquer
+// rota com `:id` só passa se o id for o do próprio estabelecimento de
+// quem está logado. O frontend só chama essas rotas a partir do painel
+// do comerciante/operador (rota /estabelecimentos/:id, liberada só pra
+// merchant/operator), sempre com o próprio id — nenhum fluxo legítimo
+// é afetado. Personificação também passa: o master vira o usuário-alvo.
+router.param('id', (req, res, next, id) => {
+  if (req.user?.mercearia_id && String(id) === String(req.user.mercearia_id)) return next();
+  return res.status(403).json({ error: 'Acesso negado a este estabelecimento.' });
+});
+
 /* Formata estoque no padrão brasileiro com unidade */
 function fmtEstoque(valor, unidade) {
   const v = parseFloat(valor) || 0;
@@ -186,6 +201,46 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
     } catch (error) {
         console.error(`[ERRO] GET /api/estabelecimentos/${estabelecimentoId}/produtos/buscar-global:`, error.message);
         return res.status(500).json({ error: 'Erro ao buscar produto (global).' });
+    }
+});
+
+
+// --- Rota GET: /:id/produtos/por-ids?ids=a,b,c ---
+// Tempo real (22/09/2026): quando chega um aviso de que produtos mudaram,
+// o PDV usa isso pra reler SÓ os produtos que estão no carrinho / na
+// lista de resultados (preço e estoque atuais), sem baixar o catálogo
+// inteiro. Mesmos campos da busca do PDV. Declarada antes de qualquer
+// rota /:id/produtos/:produtoId (convenção: específicas antes de params).
+router.get('/:id/produtos/por-ids', async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const ids = String(req.query.ids || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => /^[0-9a-f-]{36}$/i.test(s))
+        .slice(0, 200);
+
+    if (ids.length === 0) return res.status(200).json([]);
+
+    try {
+        const { data, error } = await db
+            .from('produtos')
+            .select(`
+                id, nome, preco_venda, estoque_atual, estoque_minimo, unidade_medida, tem_variacoes,
+                produto_variacoes ( id, tamanho, cor, genero, preco_venda, estoque_atual, ativo )
+            `)
+            .eq('mercearia_id', estabelecimentoId)
+            .in('id', ids);
+
+        if (error) throw error;
+
+        res.status(200).json((data || []).map(p => ({
+            ...p,
+            variacoes: (p.produto_variacoes || []).filter(v => v.ativo),
+            produto_variacoes: undefined,
+        })));
+    } catch (error) {
+        console.error(`[ERRO] GET /api/estabelecimentos/${estabelecimentoId}/produtos/por-ids:`, error.message);
+        return res.status(500).json({ error: 'Erro ao buscar produtos.' });
     }
 });
 
