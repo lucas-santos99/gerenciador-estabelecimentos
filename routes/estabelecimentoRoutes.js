@@ -250,6 +250,12 @@ router.get('/status/:userId', async (req, res) => {
 
     const { userId } = req.params;
 
+    // 🔒 22/09/2026: só a própria loja (ou SuperAdmin) — antes devolvia
+    // status/vencimento de qualquer estabelecimento pelo id.
+    if (req.user.role !== 'super_admin' && String(req.user.mercearia_id) !== String(userId)) {
+        return res.status(403).json({ error: 'Acesso negado a este estabelecimento.' });
+    }
+
     if (!userId) {
         return res.status(400).json({ error: 'ID do usuário é obrigatório.' });
     }

@@ -9,6 +9,7 @@ const { TIMEZONE_PADRAO, TIMEZONES_VALIDAS, hojeStrTZ } = require("../utils/fuso
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
+const { erroSenhaFraca } = require("../utils/senha");
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
 // super_admin. Antes: listar, excluidas, /:id, /:id/liberacoes e
@@ -610,11 +611,8 @@ router.post("/criar", authUser, async (req, res) => {
       : [];
 
     // validação da senha
-    if (!senha || senha.length < 6) {
-      return res.status(400).json({
-        error: "Senha deve ter no mínimo 6 caracteres."
-      });
-    }
+    const erroSenha = erroSenhaFraca(senha);
+    if (erroSenha) return res.status(400).json({ error: erroSenha });
 
     const erroTamanho = validarTamanhos(
       { nome_fantasia, telefone, email_contato, endereco_completo, senha, tipo_estabelecimento, motivo_periodo_teste, cnpj },

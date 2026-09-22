@@ -45,17 +45,13 @@ app.use(express.json({ limit: "20mb" }));
 // --- CORS CONFIGURAÇÃO ---
 app.use(
   cors({
+    // 22/09/2026: removidos os dois domínios antigos do Render
+    // (gerenciador-mercearia-frontend / gerenciador-estabelecimentos-frontend
+    // .onrender.com) — o frontend em produção é o da Vercel. Se algum dia
+    // voltar a usar outro domínio, adicionar aqui.
     origin: [
-      "http://localhost:5173",
-
-      // FRONTEND ANTIGO
-      "https://gerenciador-mercearia-frontend.onrender.com",
-
-      // FRONTEND NOVO
-      "https://gerenciador-estabelecimentos-frontend.onrender.com",
-
-      // VERCEL
-      "https://gerenciador-estabelecimentos-fronte.vercel.app",
+      "http://localhost:5173", // desenvolvimento local
+      "https://gerenciador-estabelecimentos-fronte.vercel.app", // produção (Vercel)
     ],
     credentials: true,
   })

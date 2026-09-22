@@ -95,9 +95,12 @@ module.exports = async function authUser(req, res, next) {
     // continua liberado de propósito — é o que a tela usa pra descobrir
     // que está bloqueada e redirecionar pro /bloqueado; travar leitura
     // junto deixaria a pessoa presa sem nem conseguir ver o motivo.
-    // SuperAdmin sempre passa direto (acesso irrestrito).
+    // SuperAdmin sempre passa direto (acesso irrestrito). Rotas de
+    // renovação da licença também (req.permitirLicencaBloqueada, ver
+    // middlewares/acessoCobranca.js) — senão quem está bloqueado nunca
+    // conseguiria pagar pra desbloquear.
     const metodosQueAlteramAlgo = ['POST', 'PUT', 'PATCH', 'DELETE'];
-    if (!req.user.is_superadmin && req.user.mercearia_id && metodosQueAlteramAlgo.includes(req.method)) {
+    if (!req.user.is_superadmin && !req.permitirLicencaBloqueada && req.user.mercearia_id && metodosQueAlteramAlgo.includes(req.method)) {
       const { data: merc } = await supabaseAdmin
         .from('mercearias')
         .select('status_assinatura')

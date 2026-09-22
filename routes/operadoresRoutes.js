@@ -8,6 +8,7 @@ const verificarPermissao = require("../middlewares/verificarPermissao");
 const { PERMISSOES } = require("../utils/permissoes");
 const { registrar } = require("./auditoriaRoutes");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
+const { erroSenhaFraca } = require("../utils/senha");
 
 // Todas as rotas deste arquivo exigem autenticação
 router.use(authUser);
@@ -68,9 +69,8 @@ router.post("/criar", async (req, res) => {
     if (!nome || !email || !senha) {
       return res.status(400).json({ error: "Nome, email e senha são obrigatórios" });
     }
-    if (senha.length < 6) {
-      return res.status(400).json({ error: "Senha deve ter pelo menos 6 caracteres" });
-    }
+    const erroSenha = erroSenhaFraca(senha);
+    if (erroSenha) return res.status(400).json({ error: erroSenha });
 
     const erroTamanho = validarTamanhos(
       { nome, email, telefone, senha },
@@ -414,9 +414,8 @@ router.post('/:id/reset-senha', async (req, res) => {
     const { mercearia_id } = req.user;
     const { senha } = req.body;
 
-    if (!senha || senha.length < 6) {
-      return res.status(400).json({ error: 'Senha inválida (mínimo 6 caracteres)' });
-    }
+    const erroSenha = erroSenhaFraca(senha);
+    if (erroSenha) return res.status(400).json({ error: erroSenha });
 
     const erroTamanho = validarTamanhos({ senha }, { senha: LIMITES.SENHA });
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
@@ -444,34 +443,10 @@ router.post('/:id/reset-senha', async (req, res) => {
 });
 
 /* ============================================================
-   DIAGNÓSTICO USUÁRIO (mantido do original)
+   DIAGNÓSTICO USUÁRIO — REMOVIDO em 22/09/2026
+   Dizia se um e-mail pertencia a operador/comerciante pra qualquer
+   usuário logado (permitia descobrir e-mails cadastrados) e não era
+   chamado por nenhuma tela.
 ============================================================ */
-router.post("/diagnostico", async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: "E-mail não informado" });
-
-  try {
-    const { data: operador } = await db
-      .from("operadores")
-      .select("status")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (operador) return res.json({ tipo: "operador", status: operador.status });
-
-    const { data: mercearia } = await db
-      .from("mercearias")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (mercearia) return res.json({ tipo: "mercearia" });
-
-    return res.json({ tipo: "admin" });
-  } catch (err) {
-    console.error("Erro diagnóstico:", err);
-    res.status(500).json({ error: "Erro interno no diagnóstico" });
-  }
-});
 
 module.exports = router;

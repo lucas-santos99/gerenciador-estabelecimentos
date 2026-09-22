@@ -6,6 +6,8 @@ const router  = express.Router();
 const db      = require("../db/supabaseAdmin");
 const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
 const { registrar } = require("./auditoriaRoutes");
+const authUser = require("../middlewares/authUser");
+const { liberarComLicencaBloqueada, donoDaMerceariaOuSuperAdmin } = require("../middlewares/acessoCobranca");
 
 const ASAAS_API_KEY  = process.env.ASAAS_API_KEY;
 const ASAAS_API_URL  = process.env.ASAAS_API_URL || "https://api.asaas.com/v3";
@@ -102,7 +104,7 @@ async function obterOuCriarClienteAsaas(mercearia) {
 // ⚠️ O Pix saiu daqui — agora é gerado pelo Efí (efiRoutes.js),
 // que tem taxa bem menor. O frontend chama os dois em paralelo.
 // ═══════════════════════════════════════════════════════════
-router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
+router.post("/gerar-cobranca/:mercearia_id", liberarComLicencaBloqueada, authUser, donoDaMerceariaOuSuperAdmin, async (req, res) => {
   try {
     const { mercearia_id } = req.params;
     const { plano = "mensal" } = req.body; // mensal | anual
@@ -253,7 +255,7 @@ router.post("/gerar-cobranca/:mercearia_id", async (req, res) => {
 // GET /api/asaas/status-pagamento/:payment_id
 // Consulta status de uma cobrança (polling do frontend)
 // ═══════════════════════════════════════════════════════════
-router.get("/status-pagamento/:payment_id", async (req, res) => {
+router.get("/status-pagamento/:payment_id", authUser, async (req, res) => {
   try {
     const { payment_id } = req.params;
 
@@ -280,7 +282,7 @@ router.get("/status-pagamento/:payment_id", async (req, res) => {
 // GET /api/asaas/planos
 // Retorna valores dos planos configurados no sistema
 // ═══════════════════════════════════════════════════════════
-router.get("/planos", async (req, res) => {
+router.get("/planos", authUser, async (req, res) => {
   try {
     const valorMensal = await buscarValorPlano();
     const valorAnual  = parseFloat((valorMensal * 12 * 0.8).toFixed(2));
@@ -301,7 +303,7 @@ router.get("/planos", async (req, res) => {
 // GET /api/asaas/config-tela-bloqueio
 // Retorna textos editáveis da tela de bloqueio
 // ═══════════════════════════════════════════════════════════
-router.get("/config-tela-bloqueio", async (req, res) => {
+router.get("/config-tela-bloqueio", authUser, async (req, res) => {
   try {
     const { data } = await db
       .from("config_sistema")

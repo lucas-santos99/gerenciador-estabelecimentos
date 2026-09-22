@@ -10,6 +10,7 @@ const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 const upload = multer({ storage: multer.memoryStorage() });
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
+const { erroSenhaFraca } = require("../utils/senha");
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
 // super_admin. Antes, listar operadores, detalhes, permissões (GET),
@@ -81,6 +82,9 @@ router.post("/criar", authUser, async (req, res) => {
         .status(400)
         .json({ error: "Dados obrigatórios não informados." });
     }
+
+    const erroSenhaCriar = erroSenhaFraca(senha);
+    if (erroSenhaCriar) return res.status(400).json({ error: erroSenhaCriar });
 
     const erroTamanho = validarTamanhos(
       { nome, email, telefone, senha },
@@ -398,11 +402,8 @@ router.post("/:id/reset-senha", authUser, async (req, res) => {
     const { id } = req.params;
     const { senha } = req.body;
 
-    if (!senha || senha.length < 6) {
-      return res
-        .status(400)
-        .json({ error: "Senha inválida (mínimo 6 caracteres)" });
-    }
+    const erroSenha = erroSenhaFraca(senha);
+    if (erroSenha) return res.status(400).json({ error: erroSenha });
 
     const erroTamanho = validarTamanhos({ senha }, { senha: LIMITES.SENHA });
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });

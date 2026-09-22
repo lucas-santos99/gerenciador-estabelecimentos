@@ -336,6 +336,12 @@ router.get('/admin/:mercearia_id', async (req, res) => {
   const { mercearia_id } = req.params;
   const { limit = 100, offset = 0, modulo, busca, data_inicio, data_fim } = req.query;
 
+  // 🔒 22/09/2026: comerciante só lê a auditoria da PRÓPRIA loja — antes,
+  // trocando o id na URL, lia a de qualquer estabelecimento.
+  if (req.user.role !== 'super_admin' && String(req.user.mercearia_id) !== String(mercearia_id)) {
+    return res.status(403).json({ error: 'Acesso negado' });
+  }
+
   try {
     const timezone = await buscarTimezone(mercearia_id);
 

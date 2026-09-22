@@ -343,6 +343,7 @@ router.get('/:clienteId/pagamentos', async (req, res) => {
             .from('transacoes_caixa')
             .select('id, valor, meio_pagamento, data_transacao, descricao')
             .eq('cliente_id', clienteId)
+            .eq('mercearia_id', req.user.mercearia_id) // 🔒 22/09/2026: só da própria loja
             .eq('tipo', 'entrada')
             .order('data_transacao', { ascending: false });
 

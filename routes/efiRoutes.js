@@ -16,6 +16,9 @@ const crypto  = require("crypto");
 const db      = require("../db/supabaseAdmin");
 const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
 const { registrar } = require("./auditoriaRoutes");
+const authUser = require("../middlewares/authUser");
+const onlyMaster = require("../middlewares/onlyMaster");
+const { liberarComLicencaBloqueada, donoDaMerceariaOuSuperAdmin } = require("../middlewares/acessoCobranca");
 
 const EFI_CLIENT_ID       = process.env.EFI_CLIENT_ID;
 const EFI_CLIENT_SECRET   = process.env.EFI_CLIENT_SECRET;
@@ -108,7 +111,7 @@ async function efiPixRequest(method, path, data, extraHeaders = {}) {
 // Gera a cobrança Pix da mensalidade (equivalente ao Pix do
 // gerar-cobranca do Asaas — o cartão continua vindo de lá, separado)
 // ═══════════════════════════════════════════════════════════
-router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
+router.post("/gerar-cobranca-pix/:mercearia_id", liberarComLicencaBloqueada, authUser, donoDaMerceariaOuSuperAdmin, async (req, res) => {
   try {
     const { mercearia_id } = req.params;
     const { plano = "mensal" } = req.body; // mensal | anual
@@ -287,7 +290,7 @@ router.post("/gerar-cobranca-pix/:mercearia_id", async (req, res) => {
 // GET /api/efi/status-pagamento/:txid
 // Consulta status da cobrança (polling do frontend, mesmo padrão do Asaas)
 // ═══════════════════════════════════════════════════════════
-router.get("/status-pagamento/:txid", async (req, res) => {
+router.get("/status-pagamento/:txid", authUser, async (req, res) => {
   try {
     const { txid } = req.params;
     const resp = await efiPixRequest("GET", `/v2/cob/${txid}`);
@@ -405,7 +408,11 @@ router.post("/webhook/:token/pix", async (req, res) => {
 // Pix. Chame isso UMA VEZ (via Postman/curl) depois do deploy, não
 // precisa disso toda vez que uma cobrança é gerada.
 // ═══════════════════════════════════════════════════════════
-router.post("/configurar-webhook", async (req, res) => {
+// 🔒 22/09/2026: antes sem proteção nenhuma — qualquer pessoa conseguia
+// apontar o webhook do Pix pra outro endereço (renovação automática para
+// de funcionar e os dados de quem pagou vão pra terceiros). Agora só o
+// SuperAdmin master, logado (mande o Bearer token no Postman/curl).
+router.post("/configurar-webhook", authUser, onlyMaster, async (req, res) => {
   try {
     const { url } = req.body; // ex: https://seu-backend.up.railway.app/api/efi/webhook/SEU_TOKEN — NÃO inclua "/pix" no final, o Efí adiciona sozinho
     if (!url) return res.status(400).json({ error: "Informe a URL do webhook." });
