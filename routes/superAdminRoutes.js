@@ -21,6 +21,12 @@ const {
 // 🔥 TODAS ROTAS PRECISAM ESTAR AUTENTICADAS
 router.use(authUser);
 
+// Identidade dos relatórios (cabeçalho/rodapé de PDFs, impressões, Excel e
+// recibo) — 23/09/2026. Montado aqui no topo, antes das rotas "/:id",
+// pra nunca cair nelas por engano. Leitura: qualquer logado; gravação:
+// qualquer SuperAdmin (ver o próprio arquivo).
+router.use('/identidade-relatorios', require('./identidadeRelatoriosRoutes'));
+
 // ============================================================
 // 🔥 PERFIL (IMPORTANTE PRO LOGIN)
 // ============================================================
