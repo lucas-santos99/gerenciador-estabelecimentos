@@ -13,8 +13,8 @@
 //   { versao: 1, padrao: { ...campos }, por_tipo: { <tipo>: { ...campos } } }
 // - padrao   → vale pra todos os relatórios (opção 1, em uso hoje)
 // - por_tipo → sobrescreve campos só de um tipo de relatório (opção 2,
-//              estrutura pronta; a tela ainda não edita isso). O frontend
-//              já resolve na ordem: valores de fábrica → padrao → por_tipo.
+//              aba "Por tipo de relatório" da tela). O frontend resolve na
+//              ordem: valores de fábrica → padrao → por_tipo.
 //
 // Leitura (GET) liberada pra qualquer usuário logado: comerciante e
 // operador precisam dela pra montar o relatório. Não tem nada sigiloso
@@ -40,13 +40,17 @@ const upload = multer({
 
 // ── Campos aceitos (qualquer outro é descartado) ─────────────
 // tipo: 'texto' (com limite), 'bool', 'cor' (#rrggbb), 'url' (https),
-//       'enum' (lista fechada)
+//       'enum' (lista fechada), 'numero' (inteiro entre min e max)
 const CAMPOS = {
   cabecalho_modo:        { tipo: 'enum', valores: ['loja', 'loja_e_marca'] },
   nome_sistema:          { tipo: 'texto', max: 80 },
   marca_nome:            { tipo: 'texto', max: 80 },
   marca_logo_url:        { tipo: 'url' },
   sistema_logo_url:      { tipo: 'url' },
+  marca_exibicao:        { tipo: 'enum', valores: ['logo', 'nome', 'logo_e_nome'] },
+  sistema_exibicao:      { tipo: 'enum', valores: ['logo', 'nome', 'logo_e_nome'] },
+  escala_cabecalho:      { tipo: 'numero', min: 70, max: 160 },
+  escala_rodape:         { tipo: 'numero', min: 70, max: 160 },
   cor_faixa:             { tipo: 'cor' },
   cor_texto_faixa:       { tipo: 'cor' },
   cor_destaque:          { tipo: 'cor' },
@@ -111,6 +115,12 @@ function limparBloco(entrada) {
         if (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) saida[campo] = v.toLowerCase();
         else erros.push(`Cor inválida em "${campo}" (use o formato #RRGGBB).`);
         break;
+      case 'numero': {
+        const n = Math.round(Number(v));
+        if (Number.isFinite(n) && n >= regra.min && n <= regra.max) saida[campo] = n;
+        else erros.push(`Valor fora do limite em "${campo}" (${regra.min} a ${regra.max}).`);
+        break;
+      }
       case 'url':
         if (v === '' || v === null) saida[campo] = '';
         else if (typeof v === 'string' && /^https:\/\/[^\s"'<>]+$/.test(v) && v.length <= 500) saida[campo] = v;
