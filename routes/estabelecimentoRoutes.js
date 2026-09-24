@@ -23,6 +23,66 @@ function erroTamanhoVariacoes(variacoesEnviadas = []) {
   return null;
 }
 
+// ── Códigos de barras e variações sem repetição (23/09/2026) ─────────
+// Dentro de UM estabelecimento, cada código de barras aponta pra um único
+// produto ou variação — senão o PDV não sabe o que vender ao bipar. Entre
+// estabelecimentos diferentes o mesmo número pode existir (cada loja só
+// enxerga os próprios produtos e o código interno nunca vai pro catálogo
+// global), então a checagem é sempre por loja.
+function chaveVariacao(v) {
+  return ['tamanho', 'cor', 'genero'].map(k => String(v?.[k] || '').trim().toLowerCase()).join('|');
+}
+function rotuloVariacao(v) {
+  return ['tamanho', 'cor', 'genero'].map(k => String(v?.[k] || '').trim()).filter(Boolean).join(' · ') || 'sem nome';
+}
+
+async function erroCodigosEVariacoes(mercearia_id, produtoIdAtual, codigo_barras, tem_variacoes, variacoes) {
+  const temVar = (tem_variacoes === true || tem_variacoes === 'true') && Array.isArray(variacoes);
+  const lista = temVar ? variacoes : [];
+
+  // Variações repetidas (mesmo tamanho + cor + gênero) no mesmo produto
+  const vistas = new Map();
+  for (const v of lista) {
+    const k = chaveVariacao(v);
+    if (k === '||') continue; // variação vazia já é barrada pelo formulário
+    if (vistas.has(k)) return `Há duas variações iguais (${rotuloVariacao(v)}). Mude o tamanho, a cor ou o gênero de uma delas.`;
+    vistas.set(k, true);
+  }
+
+  // Códigos repetidos dentro do próprio formulário
+  const codigos = [];
+  const cProd = String(codigo_barras || '').trim();
+  if (cProd) codigos.push({ codigo: cProd, onde: 'o produto' });
+  lista.forEach(v => {
+    const c = String(v.codigo_barras || '').trim();
+    if (c) codigos.push({ codigo: c, onde: `a variação ${rotuloVariacao(v)}` });
+  });
+  const usados = new Map();
+  for (const c of codigos) {
+    if (usados.has(c.codigo)) return `O código de barras ${c.codigo} está repetido (${usados.get(c.codigo)} e ${c.onde}). Cada um precisa de um código diferente.`;
+    usados.set(c.codigo, c.onde);
+  }
+  if (codigos.length === 0) return null;
+
+  // Códigos já usados por OUTRO produto/variação desta loja
+  const valores = codigos.map(c => c.codigo);
+  let qProd = db.from('produtos').select('id, nome, codigo_barras').eq('mercearia_id', mercearia_id).in('codigo_barras', valores).limit(1);
+  if (produtoIdAtual) qProd = qProd.neq('id', produtoIdAtual);
+  const { data: emProduto } = await qProd;
+  if (emProduto && emProduto.length) {
+    return `O código de barras ${emProduto[0].codigo_barras} já está cadastrado no produto "${emProduto[0].nome}".`;
+  }
+  let qVar = db.from('produto_variacoes').select('codigo_barras, tamanho, cor, genero, produtos!inner(nome)')
+    .eq('mercearia_id', mercearia_id).eq('ativo', true).in('codigo_barras', valores).limit(1);
+  if (produtoIdAtual) qVar = qVar.neq('produto_id', produtoIdAtual);
+  const { data: emVariacao } = await qVar;
+  if (emVariacao && emVariacao.length) {
+    const v = emVariacao[0];
+    return `O código de barras ${v.codigo_barras} já está cadastrado na variação ${rotuloVariacao(v)} do produto "${v.produtos?.nome || ''}".`;
+  }
+  return null;
+}
+
 // Sincroniza a lista de variações (tamanho/cor) de um produto com o que
 // veio do formulário — cria as novas, atualiza as existentes, e remove
 // (ou só desativa, se já apareceu numa venda) as que sumiram da lista.
@@ -72,10 +132,12 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
       ativo: true,
     };
     if (v.id && idsExistentes.has(v.id)) {
-      const { data: linha } = await db.from('produto_variacoes').update(payload).eq('id', v.id).select().single();
+      const { data: linha, error: errUpd } = await db.from('produto_variacoes').update(payload).eq('id', v.id).select().single();
+      if (errUpd) console.error(`[ERRO] variação ${v.id} (produto ${produtoId}) não atualizada:`, errUpd.message);
       if (linha) resultado.push(linha);
     } else {
-      const { data: linha } = await db.from('produto_variacoes').insert(payload).select().single();
+      const { data: linha, error: errIns } = await db.from('produto_variacoes').insert(payload).select().single();
+      if (errIns) console.error(`[ERRO] variação nova (produto ${produtoId}) não criada:`, errIns.message);
       if (linha) resultado.push(linha);
     }
   }
@@ -746,12 +808,29 @@ function calcularDigitoVerificadorEAN13(doze) {
 // estabelecimento + dígito verificador. O contador nunca reaproveita
 // número, mesmo que um produto seja excluído depois.
 async function gerarEAN13Interno(mercearia_id) {
-  const { data, error } = await db.rpc('incrementar_codigo_interno_seq', { p_mercearia_id: mercearia_id });
-  if (error) throw error;
-  const seq = data; // já vem incrementado
-  const corpo = `20${String(seq).padStart(10, '0')}`;
-  const digito = calcularDigitoVerificadorEAN13(corpo);
-  return `${corpo}${digito}`;
+  // O contador é atômico (UPDATE ... RETURNING no banco): dois cadastros ao
+  // mesmo tempo nunca recebem o mesmo número. Mesmo assim (23/09/2026),
+  // antes de devolver, confere se o código não está em uso nesta loja
+  // (alguém pode ter digitado esse número à mão) e se ele não se confunde
+  // com a etiqueta de balança de um produto pesável da loja (etiqueta de
+  // balança também começa com "2": 2 + código do produto + peso). Se
+  // bater, pula pro próximo número.
+  for (let tentativa = 0; tentativa < 25; tentativa++) {
+    const { data, error } = await db.rpc('incrementar_codigo_interno_seq', { p_mercearia_id: mercearia_id });
+    if (error) throw error;
+    const seq = data; // já vem incrementado
+    const corpo = `20${String(seq).padStart(10, '0')}`;
+    const codigo = `${corpo}${calcularDigitoVerificadorEAN13(corpo)}`;
+    const codigoBalanca = codigo.substring(1, 6);
+
+    const [{ data: p1 }, { data: p2 }, { data: p3 }] = await Promise.all([
+      db.from('produtos').select('id').eq('mercearia_id', mercearia_id).eq('codigo_barras', codigo).limit(1),
+      db.from('produto_variacoes').select('id').eq('mercearia_id', mercearia_id).eq('codigo_barras', codigo).limit(1),
+      db.from('produtos').select('id').eq('mercearia_id', mercearia_id).eq('codigo_barras', codigoBalanca).limit(1),
+    ]);
+    if (!(p1 && p1.length) && !(p2 && p2.length) && !(p3 && p3.length)) return codigo;
+  }
+  throw new Error('Não foi possível gerar um código livre.');
 }
 
 // Um código de barras interno (faixa GS1 20-29) é sequencial POR
@@ -910,6 +989,13 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
     const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []);
     if (erroVariacoes) return res.status(400).json({ error: erroVariacoes });
 
+    try {
+        const erroCodigos = await erroCodigosEVariacoes(estabelecimentoId, null, codigo_barras, tem_variacoes, variacoes);
+        if (erroCodigos) return res.status(409).json({ error: erroCodigos });
+    } catch (e) {
+        console.error('[ERRO] checagem de códigos (POST produto):', e.message);
+    }
+
     // Nome/marca com palavra ofensiva nunca salva — evita vandalismo tanto
     // no cadastro local quanto no catálogo global (que esse produto pode
     // alimentar logo abaixo, se tiver código de barras). Fica registrado
@@ -1031,6 +1117,13 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
 
     const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []);
     if (erroVariacoes) return res.status(400).json({ error: erroVariacoes });
+
+    try {
+        const erroCodigos = await erroCodigosEVariacoes(estabelecimentoId, produtoId, codigo_barras, tem_variacoes, variacoes);
+        if (erroCodigos) return res.status(409).json({ error: erroCodigos });
+    } catch (e) {
+        console.error('[ERRO] checagem de códigos (PUT produto):', e.message);
+    }
 
     if (contemPalavraProibida(nome) || contemPalavraProibida(marca)) {
         registrar({

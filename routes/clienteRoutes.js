@@ -10,10 +10,46 @@ const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { PERMISSOES } = require('../utils/permissoes');
 
 console.log('🔥 CLIENTES ROUTES ATUALIZADO 🔥');
 
 router.use(authUser);
+
+// 23/09/2026 — confere se o cliente é da loja de quem está logado antes de
+// ler/receber o fiado dele (antes dava pra informar o id de um cliente de
+// outra loja). Devolve { id, nome, saldo_devedor } ou null.
+async function clienteDaLoja(clienteId, merceariaId) {
+    if (!clienteId || !merceariaId) return null;
+    const { data } = await supabaseAdmin
+        .from('clientes')
+        .select('id, nome, saldo_devedor')
+        .eq('id', clienteId)
+        .eq('mercearia_id', merceariaId)
+        .maybeSingle();
+    return data || null;
+}
+
+// Formas aceitas num recebimento de fiado (mesmas do PDV, sem Fiado/Dividido).
+const MEIOS_RECEBIMENTO = ['Dinheiro', 'Pix', 'Debito', 'Credito'];
+
+const brl = (v) => parseFloat(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+// Texto extra da auditoria: troco (dinheiro) ou como o Pix foi recebido.
+function detalheRecebimento(meioPagamento, extras = {}) {
+    const partes = [];
+    const recebido = parseFloat(extras.valorRecebido);
+    const troco = parseFloat(extras.troco);
+    if (meioPagamento === 'Dinheiro' && recebido > 0) {
+        partes.push(`recebeu ${brl(recebido)}`);
+        if (troco > 0) partes.push(`troco ${brl(troco)}`);
+    }
+    if (meioPagamento === 'Pix' && (extras.pixModo === 'sistema' || extras.pixModo === 'maquininha')) {
+        partes.push(extras.pixModo === 'sistema' ? 'QR Code do sistema' : 'maquininha');
+    }
+    return partes.length ? ` — ${partes.join(', ')}` : '';
+}
 
 
 
@@ -371,6 +407,9 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 
     try {
 
+        if (!(await clienteDaLoja(clienteId, req.user.mercearia_id)))
+            return res.status(404).json({ error: 'Cliente não encontrado.' });
+
         const { data, error } = await supabaseAdmin.rpc('listar_itens_fiado', {
             p_cliente_id: clienteId
         });
@@ -418,14 +457,28 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 // 6b) PAGAR VENDA ESPECÍFICA DO FIADO
 // ============================================================
 
-router.post('/pagar-venda', async (req, res) => {
+router.post('/pagar-venda', verificarPermissao(PERMISSOES.CLIENTES_RECEBER), async (req, res) => {
 
-    const { vendaId, clienteId, meioPagamento } = req.body;
+    const { vendaId, clienteId, meioPagamento, valorRecebido, troco, pixModo } = req.body;
 
     if (!vendaId || !clienteId || !meioPagamento)
         return res.status(400).json({ error: 'Campos obrigatórios ausentes.' });
+    if (!MEIOS_RECEBIMENTO.includes(meioPagamento))
+        return res.status(400).json({ error: 'Forma de pagamento inválida.' });
 
     try {
+
+        const cliente = await clienteDaLoja(clienteId, req.user.mercearia_id);
+        if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado.' });
+
+        const { data: vendaInfo } = await supabaseAdmin
+            .from('vendas')
+            .select('id, valor_total, data_venda')
+            .eq('id', vendaId)
+            .eq('mercearia_id', req.user.mercearia_id)
+            .eq('cliente_id', clienteId)
+            .maybeSingle();
+        if (!vendaInfo) return res.status(404).json({ error: 'Compra não encontrada.' });
 
         const { data: novoSaldo, error } = await supabaseAdmin.rpc('pagar_venda_fiado', {
             p_venda_id:        vendaId,
@@ -436,12 +489,11 @@ router.post('/pagar-venda', async (req, res) => {
 
         if (error) return res.status(400).json({ error: error.message });
 
-        const { data: clienteInfo } = await supabaseAdmin
-            .from('clientes')
-            .select('nome')
-            .eq('id', clienteId)
-            .single();
-        const nomeCliente = clienteInfo?.nome || 'cliente';
+        const nomeCliente = cliente.nome || 'cliente';
+        // Cobra no máximo a dívida que ainda existia (SQL 08): se parte da
+        // compra já tinha sido abatida em pagamentos anteriores, o caixa
+        // recebe só o que faltava.
+        const valorVenda = Math.round(Math.min(parseFloat(vendaInfo.valor_total || 0), Math.max(parseFloat(cliente.saldo_devedor || 0), 0)) * 100) / 100;
 
         registrar({
           mercearia_id: req.user.mercearia_id,
@@ -450,8 +502,8 @@ router.post('/pagar-venda', async (req, res) => {
           usuario_email: req.user.email,
           modulo:       'clientes',
           acao:         'fiado_recebido',
-          descricao:    `Recebimento de venda fiado de "${nomeCliente}" — ${meioPagamento}`,
-          meta:         { venda_id: vendaId, cliente_id: clienteId, cliente_nome: nomeCliente, meio_pagamento: meioPagamento },
+          descricao:    `Recebimento de compra fiado de "${nomeCliente}" — ${brl(valorVenda)} (${meioPagamento})${detalheRecebimento(meioPagamento, { valorRecebido, troco, pixModo })}`,
+          meta:         { venda_id: vendaId, cliente_id: clienteId, cliente_nome: nomeCliente, valor: valorVenda, meio_pagamento: meioPagamento, valor_recebido: parseFloat(valorRecebido) || null, troco: parseFloat(troco) || null, pix_modo: pixModo || null, divida_anterior: parseFloat(cliente.saldo_devedor || 0), divida_restante: novoSaldo },
         });
 
         res.status(200).json({
@@ -473,29 +525,35 @@ router.post('/pagar-venda', async (req, res) => {
 // 6) LIQUIDAR FIADO
 // ============================================================
 
-router.post('/liquidar', async (req, res) => {
+router.post('/liquidar', verificarPermissao(PERMISSOES.CLIENTES_RECEBER), async (req, res) => {
 
-    const { clienteId, valorPago, meioPagamento } = req.body;
+    const { clienteId, valorPago, meioPagamento, valorRecebido, troco, pixModo } = req.body;
 
     if (!clienteId || !valorPago || !meioPagamento)
         return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
+    if (!MEIOS_RECEBIMENTO.includes(meioPagamento))
+        return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+    if (!(parseFloat(valorPago) > 0))
+        return res.status(400).json({ error: 'Valor inválido.' });
 
     try {
 
+        const cliente = await clienteDaLoja(clienteId, req.user.mercearia_id);
+        if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado.' });
+
+        // 23/09/2026 — versão da função que confere a loja, barra valor acima
+        // da dívida e marca as compras como pagas quando a dívida zera (a
+        // versão de 3 parâmetros usada antes não fazia nada disso).
         const { data: novoSaldo, error } = await supabaseAdmin.rpc('liquidar_fiado', {
-            p_cliente_id: clienteId,
-            p_valor_pago: parseFloat(valorPago),
+            p_cliente_id:     clienteId,
+            p_mercearia_id:   req.user.mercearia_id,
+            p_valor_pago:     parseFloat(valorPago),
             p_meio_pagamento: meioPagamento
         });
 
-        if (error) return res.status(400).json({ error: error.message });
+        if (error) return res.status(400).json({ error: error.message.replace(/^Erro ao liquidar dívida: /, '').replace('saldo devedor atual', 'dívida atual') });
 
-        const { data: clienteInfo } = await supabaseAdmin
-            .from('clientes')
-            .select('nome')
-            .eq('id', clienteId)
-            .single();
-        const nomeCliente = clienteInfo?.nome || 'cliente';
+        const nomeCliente = cliente.nome || 'cliente';
 
         registrar({
           mercearia_id: req.user.mercearia_id,
@@ -504,8 +562,8 @@ router.post('/liquidar', async (req, res) => {
           usuario_email: req.user.email,
           modulo:       'clientes',
           acao:         'fiado_recebido',
-          descricao:    `Recebimento de fiado de "${nomeCliente}" — ${parseFloat(valorPago).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})} (${meioPagamento})`,
-          meta:         { cliente_id: clienteId, cliente_nome: nomeCliente, valor: parseFloat(valorPago), meio_pagamento: meioPagamento },
+          descricao:    `Recebimento de fiado de "${nomeCliente}" — ${brl(valorPago)} (${meioPagamento})${detalheRecebimento(meioPagamento, { valorRecebido, troco, pixModo })}`,
+          meta:         { cliente_id: clienteId, cliente_nome: nomeCliente, valor: parseFloat(valorPago), meio_pagamento: meioPagamento, valor_recebido: parseFloat(valorRecebido) || null, troco: parseFloat(troco) || null, pix_modo: pixModo || null, divida_anterior: parseFloat(cliente.saldo_devedor || 0), divida_restante: novoSaldo },
         });
 
         res.status(200).json({

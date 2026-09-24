@@ -51,6 +51,8 @@ const CAMPOS = {
   sistema_exibicao:      { tipo: 'enum', valores: ['logo', 'nome', 'logo_e_nome'] },
   escala_cabecalho:      { tipo: 'numero', min: 70, max: 160 },
   escala_rodape:         { tipo: 'numero', min: 70, max: 160 },
+  alinhamento_cabecalho: { tipo: 'enum', valores: ['lados', 'centro'] },
+  alinhamento_rodape:    { tipo: 'enum', valores: ['lados', 'centro'] },
   cor_faixa:             { tipo: 'cor' },
   cor_texto_faixa:       { tipo: 'cor' },
   cor_destaque:          { tipo: 'cor' },
