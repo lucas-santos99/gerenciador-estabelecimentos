@@ -12,6 +12,7 @@ const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
+const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 
 console.log('🔥 CLIENTES ROUTES ATUALIZADO 🔥');
 
@@ -231,6 +232,13 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
         return res.status(400).json({ error: 'clienteId inválido.' });
     }
 
+    // 23/09/2026 — filtro de período feito no BANCO (antes era só na tela,
+    // em cima das 200 compras mais recentes: um período mais antigo aparecia
+    // vazio mesmo tendo compras). Datas 'YYYY-MM-DD' no fuso da loja.
+    const DATA_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+    const de  = DATA_REGEX.test(String(req.query.de  || '')) ? req.query.de  : null;
+    const ate = DATA_REGEX.test(String(req.query.ate || '')) ? req.query.ate : null;
+
     try {
 
         // Numa venda 'Dividido' (backlog item 19), vendas.cliente_id fica
@@ -257,6 +265,12 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
         query = vendaIdsViaFatia.length > 0
             ? query.or(`cliente_id.eq.${clienteId},id.in.(${vendaIdsViaFatia.join(',')})`)
             : query.eq('cliente_id', clienteId);
+
+        if (de || ate) {
+            const tz = await buscarTimezone(req.user.mercearia_id);
+            if (de)  query = query.gte('data_venda', inicioDiaTZ(de, tz).toISOString());
+            if (ate) query = query.lte('data_venda', new Date(fimDiaTZ(ate, tz).getTime() + 999).toISOString());
+        }
 
         const { data: vendas, error } = await query
             .order('data_venda', { ascending: false })
@@ -666,7 +680,7 @@ router.delete('/deletar/:clienteId', async (req, res) => {
             });
             return res.status(200).json({ message: 'Cliente excluído com sucesso.' });
         } else {
-            return res.status(400).json({ error: 'Não é possível excluir cliente com saldo pendente.' });
+            return res.status(400).json({ error: 'Não é possível excluir cliente com dívida pendente.' });
         }
 
     } catch (error) {
