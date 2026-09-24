@@ -24,6 +24,7 @@ const solicitacoesRoutes = require("./routes/solicitacoesRoutes");
 const comunicadosRoutes  = require("./routes/comunicadosRoutes");
 const cobrancaNotifRoutes = require("./routes/cobrancaNotifRoutes");
 const notificacoesRoutes = require("./routes/notificacoesRoutes");
+const whatsappAdminRoutes = require("./routes/whatsappAdminRoutes");
 
 // --- IMPORTAÇÃO DAS ROTAS DO ASAAS ---
 const asaasRoutes = require("./routes/asaasRoutes");
@@ -84,6 +85,7 @@ app.use("/api/solicitacoes", solicitacoesRoutes);
 app.use("/api/comunicados",  comunicadosRoutes);
 app.use("/api/cobranca-notif", cobrancaNotifRoutes);
 app.use("/api/notificacoes",  notificacoesRoutes);
+app.use("/api/whatsapp/admin", whatsappAdminRoutes);
 
 app.use("/superadmin", superAdminRoutes);
 
