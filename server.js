@@ -23,6 +23,7 @@ const comprasRoutes      = require("./routes/comprasRoutes");
 const solicitacoesRoutes = require("./routes/solicitacoesRoutes");
 const comunicadosRoutes  = require("./routes/comunicadosRoutes");
 const cobrancaNotifRoutes = require("./routes/cobrancaNotifRoutes");
+const notificacoesRoutes = require("./routes/notificacoesRoutes");
 
 // --- IMPORTAÇÃO DAS ROTAS DO ASAAS ---
 const asaasRoutes = require("./routes/asaasRoutes");
@@ -82,6 +83,7 @@ app.use("/api/compras",      comprasRoutes);
 app.use("/api/solicitacoes", solicitacoesRoutes);
 app.use("/api/comunicados",  comunicadosRoutes);
 app.use("/api/cobranca-notif", cobrancaNotifRoutes);
+app.use("/api/notificacoes",  notificacoesRoutes);
 
 app.use("/superadmin", superAdminRoutes);
 
