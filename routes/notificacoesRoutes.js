@@ -70,11 +70,11 @@ const CATEGORIAS_ESTAB = [
 const CATEGORIAS_ADMIN = [
   { id: 'licencas',     label: 'Licenças',            icone: '🔑', descricao: 'Estabelecimentos com a assinatura vencendo, vencida ou bloqueada.',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'diaria', intervalo_horas: 4, no_resumo: true } },
-  { id: 'pagamentos',   label: 'Pagamentos recebidos', icone: '💰', descricao: 'Renovações pagas via Pix (Efí) ou cartão (Asaas).',
+  { id: 'pagamentos',   label: 'Pagamentos recebidos', icone: '💰', descricao: 'Avisa cada renovação de assinatura paga pelos estabelecimentos, via Pix (Efí) ou cartão (Asaas).',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: true } },
   { id: 'solicitacoes', label: 'Solicitações',        icone: '✉️', descricao: 'Solicitações de alteração esperando resposta.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
-  { id: 'cadastros',    label: 'Novos cadastros',     icone: '🏪', descricao: 'Estabelecimentos cadastrados recentemente.',
+  { id: 'cadastros',    label: 'Novos cadastros',     icone: '🏪', descricao: 'Avisa quando um estabelecimento novo é cadastrado no sistema (pra conferir os dados, dar boas-vindas, acompanhar o 1º pagamento).',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: false } },
   { id: 'lembretes',    label: 'Lembretes',           icone: '⏰', descricao: 'Lembretes seus ou de toda a equipe do SuperAdmin.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
@@ -176,7 +176,7 @@ function sanitizarPreferencias(user, entrada) {
     const o = {};
     if (typeof v.ativo === 'boolean') o.ativo = v.ativo;
     if (typeof v.no_resumo === 'boolean') o.no_resumo = v.no_resumo;
-    if (Number.isInteger(v.antecedencia_dias) && v.antecedencia_dias >= 0 && v.antecedencia_dias <= 60) o.antecedencia_dias = v.antecedencia_dias;
+    if (Number.isInteger(v.antecedencia_dias) && v.antecedencia_dias >= 0 && v.antecedencia_dias <= 365) o.antecedencia_dias = v.antecedencia_dias;
     if (FREQUENCIAS.includes(v.frequencia)) o.frequencia = v.frequencia;
     if (Number.isInteger(v.intervalo_horas) && v.intervalo_horas >= 1 && v.intervalo_horas <= 24) o.intervalo_horas = v.intervalo_horas;
     if (c.id === 'estoque' && NIVEIS_ESTOQUE.includes(v.nivel_estoque)) o.nivel_estoque = v.nivel_estoque;
