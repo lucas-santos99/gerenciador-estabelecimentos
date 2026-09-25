@@ -19,6 +19,12 @@
 //   POST   /simular                   → simulador (Meta +X%, dólar, custo IA)
 //   GET    /uso?mes=YYYY-MM           → consumo e custo do mês (whatsapp_envios)
 //   GET    /lojas                     → lista enxuta de estabelecimentos
+//   POST   /dolar/atualizar           → busca a cotação do dólar agora
+//
+// Dólar automático (25/09): cotação PTAX de venda do Banco Central (fonte
+// oficial, grátis, sem chave); se falhar, AwesomeAPI. Guardada em
+// config_sistema.whatsapp_dolar e renovada no máximo a cada 6 horas, quando
+// alguém abre o painel. Se as duas fontes falharem, fica o último valor.
 // ============================================================
 const express = require('express');
 const router = express.Router();
@@ -33,14 +39,89 @@ const W = require('../utils/whatsappCustos');
 router.use(authUser, somenteSuperAdmin);
 
 const CHAVE_PARAMS = 'whatsapp_params';
+const CHAVE_DOLAR = 'whatsapp_dolar';
+const DOLAR_VALIDADE_MS = 6 * 60 * 60 * 1000;
 const RECURSOS = ['alertas', 'consultas', 'pdf', 'cadastro', 'ia_audio', 'foto'];
 
+/* ── Cotação do dólar ──────────────────────────────────────── */
+const valorValido = (v) => Number.isFinite(v) && v >= 0.5 && v <= 100;
+
+async function buscarJson(url) {
+  const resp = await fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': 'GerenciadorEstabelecimentos - LucasJSystems' },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// PTAX (Banco Central): última cotação dos últimos 10 dias (cobre fim de
+// semana e feriado). Datas no formato MM-DD-AAAA exigido pela API.
+async function cotacaoBancoCentral() {
+  const fmt = (d) => {
+    const [a, m, dd] = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE_PADRAO }).format(d).split('-');
+    return `${m}-${dd}-${a}`;
+  };
+  const fim = new Date();
+  const ini = new Date(fim.getTime() - 10 * 86400000);
+  const url = 'https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/'
+    + 'CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)'
+    + `?@dataInicial='${fmt(ini)}'&@dataFinalCotacao='${fmt(fim)}'&$format=json&$orderby=dataHoraCotacao%20desc&$top=1`;
+  const j = await buscarJson(url);
+  const item = Array.isArray(j?.value) ? j.value[0] : null;
+  const v = Number(item?.cotacaoVenda);
+  if (!item || !valorValido(v)) throw new Error('resposta sem cotação');
+  return { valor: v, fonte: 'Banco Central (PTAX venda)', data: item.dataHoraCotacao || null };
+}
+
+async function cotacaoAwesome() {
+  const j = await buscarJson('https://economia.awesomeapi.com.br/json/last/USD-BRL');
+  const q = j?.USDBRL;
+  const v = Number(q?.ask);
+  if (!q || !valorValido(v)) throw new Error('resposta sem cotação');
+  return { valor: v, fonte: 'AwesomeAPI (comercial)', data: q.create_date || null };
+}
+
+async function lerCotacaoSalva() {
+  const { data } = await db.from('config_sistema').select('valor').eq('chave', CHAVE_DOLAR).maybeSingle();
+  try { return data?.valor ? JSON.parse(data.valor) : null; } catch { return null; }
+}
+
+// Devolve a cotação (renova se passou da validade ou se forcar=true).
+// Nunca lança erro: na falha devolve a última salva com `erro`.
+async function obterCotacao({ forcar = false } = {}) {
+  const salva = await lerCotacaoSalva();
+  const idade = salva?.atualizado_em ? Date.now() - new Date(salva.atualizado_em).getTime() : Infinity;
+  if (!forcar && salva && idade < DOLAR_VALIDADE_MS) return salva;
+  const erros = [];
+  for (const fonte of [cotacaoBancoCentral, cotacaoAwesome]) {
+    try {
+      const c = await fonte();
+      const nova = { ...c, valor: W.arred(c.valor, 4), atualizado_em: new Date().toISOString() };
+      const { error } = await db.from('config_sistema')
+        .upsert({ chave: CHAVE_DOLAR, valor: JSON.stringify(nova) }, { onConflict: 'chave' });
+      if (error) console.error('[WHATSAPP] salvar cotação:', error.message);
+      return nova;
+    } catch (e) {
+      erros.push(`${fonte.name}: ${e.message}`);
+    }
+  }
+  console.error('[WHATSAPP] cotação do dólar indisponível:', erros.join(' | '));
+  return salva
+    ? { ...salva, erro: 'Não foi possível atualizar agora; usando a última cotação.' }
+    : { valor: null, erro: 'Não foi possível buscar a cotação; usando o valor manual.' };
+}
+
 /* ── Parâmetros ────────────────────────────────────────────── */
-async function carregarParametros() {
+// Parâmetros salvos + dólar do dia (quando o automático está ligado).
+async function carregarParametros({ comCotacao = false } = {}) {
   const { data } = await db.from('config_sistema').select('valor').eq('chave', CHAVE_PARAMS).maybeSingle();
   let salvo = null;
   try { salvo = data?.valor ? JSON.parse(data.valor) : null; } catch { salvo = null; }
-  return W.normalizarParametros(salvo);
+  const base = W.normalizarParametros(salvo);
+  const cotacao = base.ia.dolar_auto ? await obterCotacao() : await lerCotacaoSalva();
+  const p = W.aplicarDolarAuto(base, cotacao);
+  return comCotacao ? { p, cotacao } : p;
 }
 
 function resumoCustos(p) {
@@ -80,8 +161,8 @@ function auditar(req, acao, descricao, meta = {}) {
 
 router.get('/parametros', async (req, res) => {
   try {
-    const p = await carregarParametros();
-    res.json({ parametros: p, padrao: W.PARAMS_PADRAO, calculo: resumoCustos(p), pode_editar: !!req.user.is_master });
+    const { p, cotacao } = await carregarParametros({ comCotacao: true });
+    res.json({ parametros: p, padrao: W.PARAMS_PADRAO, calculo: resumoCustos(p), cotacao, pode_editar: !!req.user.is_master });
   } catch (err) {
     console.error('[WHATSAPP] GET parametros:', err.message);
     res.status(500).json({ error: 'Erro ao carregar os parâmetros do WhatsApp.' });
@@ -91,16 +172,30 @@ router.get('/parametros', async (req, res) => {
 router.put('/parametros', onlyMaster, async (req, res) => {
   try {
     const antes = await carregarParametros();
-    const novo = W.normalizarParametros(req.body?.parametros);
+    const cotacao = await lerCotacaoSalva();
+    const novo = W.aplicarDolarAuto(W.normalizarParametros(req.body?.parametros), cotacao);
     const { error } = await db.from('config_sistema')
       .upsert({ chave: CHAVE_PARAMS, valor: JSON.stringify(novo) }, { onConflict: 'chave' });
     if (error) throw error;
     await historico(req, { acao: 'parametros', antes, depois: novo });
     auditar(req, 'whatsapp_parametros', 'Alterou os parâmetros do WhatsApp (custos, pesos, travas, cobrança automática)', {});
-    res.json({ parametros: novo, calculo: resumoCustos(novo) });
+    res.json({ parametros: novo, calculo: resumoCustos(novo), cotacao });
   } catch (err) {
     console.error('[WHATSAPP] PUT parametros:', err.message);
     res.status(500).json({ error: 'Erro ao salvar os parâmetros.' });
+  }
+});
+
+// Busca a cotação agora (botão "Atualizar agora"). Qualquer SuperAdmin:
+// não muda nenhuma regra, só renova o valor de referência.
+router.post('/dolar/atualizar', async (req, res) => {
+  try {
+    const cotacao = await obterCotacao({ forcar: true });
+    const p = await carregarParametros();
+    res.json({ cotacao, parametros: p, calculo: resumoCustos(p) });
+  } catch (err) {
+    console.error('[WHATSAPP] atualizar dólar:', err.message);
+    res.status(500).json({ error: 'Erro ao atualizar a cotação.' });
   }
 });
 

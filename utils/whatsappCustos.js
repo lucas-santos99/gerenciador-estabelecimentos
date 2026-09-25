@@ -29,7 +29,10 @@ const PARAMS_PADRAO = Object.freeze({
     modelo: 'Gemini 2.5 Flash-Lite',
     usd_por_interpretacao: 0.001, // US$ por interpretação (~6.000 tokens de entrada + 400 de saída)
     usd_por_imagem: 0.004,        // US$ por leitura de foto
-    dolar: 5.5,                   // R$ por US$ — atualizar
+    modelos: [],                  // modelos extras cadastrados pelo admin: [{ nome, usd_por_interpretacao, usd_por_imagem }]
+    dolar: 5.5,                   // R$ por US$ (manual, ou último valor calculado pela cotação automática)
+    dolar_auto: true,             // usar a cotação do dia (Banco Central) + folga
+    dolar_folga_pct: 4,           // folga sobre a cotação (spread do cartão internacional)
     iof_pct: 3.5,                 // IOF sobre cartão internacional — conferir
   },
   pesos: { consulta: 1, pdf: 1, cadastro: 2, foto: 4, alerta: 0.5 },
@@ -83,6 +86,23 @@ function normalizarParametros(entrada) {
   p.ia.usd_por_interpretacao = num(ia.usd_por_interpretacao, 0, 5, p.ia.usd_por_interpretacao);
   p.ia.usd_por_imagem        = num(ia.usd_por_imagem, 0, 5, p.ia.usd_por_imagem);
   p.ia.dolar                 = num(ia.dolar, 0.5, 100, p.ia.dolar);
+  p.ia.dolar_auto            = ia.dolar_auto === undefined ? p.ia.dolar_auto : ia.dolar_auto === true;
+  p.ia.dolar_folga_pct       = num(ia.dolar_folga_pct, 0, 30, p.ia.dolar_folga_pct);
+  p.ia.modelos = [];
+  if (Array.isArray(ia.modelos)) {
+    const vistos = new Set();
+    ia.modelos.forEach(m => {
+      if (!m || typeof m !== 'object') return;
+      const nome = typeof m.nome === 'string' ? m.nome.trim().slice(0, 60) : '';
+      if (!nome || vistos.has(nome.toLowerCase()) || p.ia.modelos.length >= 20) return;
+      vistos.add(nome.toLowerCase());
+      p.ia.modelos.push({
+        nome,
+        usd_por_interpretacao: num(m.usd_por_interpretacao, 0, 5, 0),
+        usd_por_imagem: num(m.usd_por_imagem, 0, 5, 0),
+      });
+    });
+  }
   p.ia.iof_pct               = num(ia.iof_pct, 0, 50, p.ia.iof_pct);
 
   const pe = g('pesos');
@@ -126,6 +146,18 @@ function normalizarParametros(entrada) {
     : [];
 
   return p;
+}
+
+// Cotação automática: dólar usado na conta = cotação do dia × (1 + folga).
+// `cotacao` = { valor, fonte, data } (ou null se nunca buscou). Sem cotação,
+// fica o último valor salvo em p.ia.dolar. Devolve um NOVO objeto.
+function aplicarDolarAuto(p, cotacao) {
+  if (!p || !p.ia || !p.ia.dolar_auto) return p;
+  const v = Number(cotacao && cotacao.valor);
+  if (!Number.isFinite(v) || v < 0.5 || v > 100) return p;
+  const s = clone(p);
+  s.ia.dolar = arred(v * (1 + s.ia.dolar_folga_pct / 100), 4);
+  return s;
 }
 
 // Custo em R$ de algo cobrado em dólar pelo provedor de IA (com IOF)
@@ -204,5 +236,5 @@ function simular(p, { meta_pct = 0, dolar = null, usd_interp = null } = {}) {
 
 module.exports = {
   TIPOS_PEDIDO, ACOES_TETO, PARAMS_PADRAO,
-  normalizarParametros, iaEmReais, piorCasoPorPedido, custoMaxPorCredito, tiposDoPlano, calcularPlano, simular, arred,
+  normalizarParametros, aplicarDolarAuto, iaEmReais, piorCasoPorPedido, custoMaxPorCredito, tiposDoPlano, calcularPlano, simular, arred,
 };
