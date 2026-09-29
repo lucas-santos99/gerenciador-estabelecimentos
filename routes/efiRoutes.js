@@ -14,11 +14,14 @@ const https   = require("https");
 const axios   = require("axios");
 const crypto  = require("crypto");
 const db      = require("../db/supabaseAdmin");
-const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
 const { registrar } = require("./auditoriaRoutes");
 const authUser = require("../middlewares/authUser");
 const onlyMaster = require("../middlewares/onlyMaster");
 const { liberarComLicencaBloqueada, donoDaMerceariaOuSuperAdmin } = require("../middlewares/acessoCobranca");
+const {
+  buscarValorPlano, valorDoPlano, diasDoPlano, registrarCobranca, marcarCobrancaCancelada,
+  buscarCobranca, aplicarPagamento, estornarPagamento, podeVerCobranca, tokenConfere,
+} = require("../utils/licencaPagamentos");
 
 const EFI_CLIENT_ID       = process.env.EFI_CLIENT_ID;
 const EFI_CLIENT_SECRET   = process.env.EFI_CLIENT_SECRET;
@@ -124,17 +127,12 @@ router.post("/gerar-cobranca-pix/:mercearia_id", liberarComLicencaBloqueada, aut
 
     if (error || !mercearia) return res.status(404).json({ error: "Estabelecimento não encontrado." });
 
-    // Reaproveita a mesma lógica de valor que o asaasRoutes.js usa
-    const { data: cfgRow } = await db
-      .from("config_sistema")
-      .select("valor")
-      .eq("chave", "valor_mensalidade")
-      .single();
-    const valorMensal = parseFloat(cfgRow?.valor) || 49.90;
-    const valor = plano === "anual"
-      ? parseFloat((valorMensal * 12 * 0.8).toFixed(2))
-      : valorMensal;
-    const diasPlano = plano === "anual" ? 365 : 30;
+    // Mesmo valor do cartão (utils/licencaPagamentos.js). 29/09/2026:
+    // antes o Pix usava só o valor global e ignorava o valor individual
+    // do estabelecimento — cartão e Pix podiam sair com valores diferentes.
+    const valorMensal = await buscarValorPlano(mercearia_id);
+    const valor       = valorDoPlano(valorMensal, plano);
+    const diasPlano   = diasDoPlano(plano);
 
     // ── Tenta reaproveitar uma cobrança Pix ainda ativa, em vez de
     // gerar uma nova toda vez — evita acumular cobranças penduradas no
@@ -218,6 +216,7 @@ router.post("/gerar-cobranca-pix/:mercearia_id", liberarComLicencaBloqueada, aut
         if (cobExistente.data.status === "ATIVA" && (!aindaDentroDoPrazo || !valorAindaBate)) {
           try {
             await efiPixRequest("PATCH", `/v2/cob/${mercearia.efi_pix_txid}`, { status: "REMOVIDA_PELO_USUARIO_RECEBEDOR" });
+            await marcarCobrancaCancelada("efi", mercearia.efi_pix_txid);
             console.log(`[EFI] Cobrança anterior (${mercearia.efi_pix_txid}) inativada (${!aindaDentroDoPrazo ? "prazo vencido" : "valor desatualizado"}).`);
           } catch (e) {
             console.error("[EFI] Falha ao inativar cobrança anterior (não bloqueia a geração da nova):", e.response?.data || e.message);
@@ -263,7 +262,12 @@ router.post("/gerar-cobranca-pix/:mercearia_id", liberarComLicencaBloqueada, aut
       }
     }
 
-    // Salva a cobrança pendente pra o webhook conseguir achar depois
+    // Registra a cobrança (o webhook acha a loja por aqui, mesmo que
+    // outra cobrança seja gerada depois) e salva o txid na loja
+    await registrarCobranca({
+      provedor: "efi", cobranca_id: txid, mercearia_id,
+      forma: "pix", plano, dias: diasPlano, valor,
+    });
     await db.from("mercearias").update({
       efi_pix_txid:   txid,
       efi_pix_dias:   diasPlano,
@@ -293,7 +297,13 @@ router.post("/gerar-cobranca-pix/:mercearia_id", liberarComLicencaBloqueada, aut
 router.get("/status-pagamento/:txid", authUser, async (req, res) => {
   try {
     const { txid } = req.params;
-    const resp = await efiPixRequest("GET", `/v2/cob/${txid}`);
+
+    // 29/09/2026: antes qualquer usuário logado consultava qualquer cobrança.
+    if (!(await podeVerCobranca(req.user, "efi", txid))) {
+      return res.status(403).json({ error: "Acesso negado a esta cobrança." });
+    }
+
+    const resp = await efiPixRequest("GET", `/v2/cob/${encodeURIComponent(txid)}`);
 
     res.json({
       status: resp.data.status, // ATIVA | CONCLUIDA | REMOVIDA_PELO_USUARIO_RECEBEDOR | REMOVIDA_PELO_PSP
@@ -324,80 +334,154 @@ router.get("/status-pagamento/:txid", authUser, async (req, res) => {
 // mesmo adiciona depois pras notificações de verdade). Essa rota só
 // existe pra passar nesse teste de verificação inicial.
 router.all("/webhook/:token", (req, res) => {
-  if (req.params.token !== EFI_WEBHOOK_TOKEN) return res.status(401).json({ error: "Token inválido." });
+  if (!tokenConfere(req.params.token, EFI_WEBHOOK_TOKEN)) return res.status(401).json({ error: "Token inválido." });
   res.status(200).json({ ok: true });
 });
 
+// ⚠️ BUG corrigido (29/09/2026): o webhook achava a loja pelo txid e
+// somava dias toda vez que chegava notificação daquele txid — um reenvio
+// do Efí, ou o aviso de uma DEVOLUÇÃO do Pix (que vem no mesmo webhook,
+// com o mesmo txid), renovava de novo. Agora:
+//   • cada cobrança soma dias uma vez só (cobrancas_licenca + função
+//     licenca_aplicar_pagamento, com trava no banco);
+//   • status, valor e devoluções são conferidos na API do Efí;
+//   • devolução total tira os dias de volta; parcial gera alerta;
+//   • a cobrança é achada pelo registro próprio — antes, se uma cobrança
+//     nova fosse gerada enquanto a antiga era paga, o pagamento se perdia.
+const ORIGEM_EFI = "Sistema (Efí)";
+
+function registrarSistemaEfi(mercearia_id, acao, descricao, meta, escopo) {
+  return registrar({
+    mercearia_id,
+    usuario_nome:  ORIGEM_EFI,
+    usuario_email: ORIGEM_EFI, // evita o "Nome ()" que registrar() monta quando só tem nome — aqui não tem usuário autenticado, é webhook
+    modulo:        "assinatura",
+    acao,
+    descricao,
+    meta,
+    escopo,
+  });
+}
+
 router.post("/webhook/:token/pix", async (req, res) => {
   try {
-    if (req.params.token !== EFI_WEBHOOK_TOKEN) {
-      console.warn("⚠️ Webhook Efí com token inválido. originalUrl:", req.originalUrl);
+    if (!tokenConfere(req.params.token, EFI_WEBHOOK_TOKEN)) {
+      console.warn("⚠️ Webhook Efí com token inválido (ou EFI_WEBHOOK_TOKEN não configurado).");
       return res.status(401).json({ error: "Token inválido." });
     }
 
-    const pixList = req.body.pix || [];
+    const pixList = Array.isArray(req.body?.pix) ? req.body.pix : [];
     if (pixList.length === 0) return res.status(200).json({ ok: true, ignorado: true });
 
     for (const pagamento of pixList) {
-      const txid = pagamento.txid;
-      if (!txid) continue;
+      const txid = pagamento?.txid;
+      if (!txid) continue; // Pix direto na chave, sem cobrança — não é licença
 
-      const { data: merc } = await db
-        .from("mercearias")
-        .select("id, nome_fantasia, data_vencimento, efi_pix_dias, efi_pix_txid, timezone")
-        .eq("efi_pix_txid", txid)
-        .single();
-
-      if (!merc) {
-        console.warn(`⚠️ Webhook Efí: txid ${txid} não corresponde a nenhum estabelecimento (já processado ou expirado).`);
+      // Cobrança registrada (novo) ou, para cobranças antigas, a loja
+      // que ainda tem esse txid salvo.
+      const cob = await buscarCobranca("efi", txid);
+      let mercearia_id = cob?.mercearia_id || null;
+      let dias         = cob?.dias || null;
+      if (!cob) {
+        const { data: merc } = await db
+          .from("mercearias")
+          .select("id, efi_pix_dias")
+          .eq("efi_pix_txid", txid)
+          .maybeSingle();
+        if (merc) { mercearia_id = merc.id; dias = merc.efi_pix_dias || 30; }
+      }
+      if (!mercearia_id) {
+        console.warn(`⚠️ Webhook Efí: txid ${txid} não corresponde a nenhuma cobrança de licença.`);
         continue;
       }
 
-      const dias = merc.efi_pix_dias || 30;
-      const timezone = merc.timezone || TIMEZONE_PADRAO;
+      // Fonte da verdade: a API do Efí. Erro de rede/servidor → 500 e o
+      // Efí reenvia (seguro, nada soma duas vezes). Cobrança inexistente
+      // na API → ignora.
+      let cobApi;
+      try {
+        cobApi = (await efiPixRequest("GET", `/v2/cob/${encodeURIComponent(txid)}`)).data;
+      } catch (e) {
+        if (e.response?.status === 404) {
+          console.warn(`⚠️ Webhook Efí: txid ${txid} não existe na API do Efí — ignorado.`);
+          continue;
+        }
+        throw e;
+      }
 
-      // Compara como DATA ('YYYY-MM-DD'), no fuso do estabelecimento —
-      // antes usava `new Date(merc.data_vencimento) > new Date()`, que
-      // interpreta a data de vencimento como meia-noite EM UTC. Perto da
-      // virada do dia isso podia fazer o vencimento "ainda válido" ser
-      // tratado como já passado, e o cliente perder dias já pagos (a
-      // renovação recomeçava do zero em vez de acumular a partir do
-      // vencimento atual).
-      const hojeStr = hojeStrTZ(timezone);
-      const vencimentoAindaValido = merc.data_vencimento && merc.data_vencimento >= hojeStr;
+      if (cobApi?.status !== "CONCLUIDA") {
+        console.log(`[EFI] Notificação do txid ${txid}, mas a cobrança está ${cobApi?.status} — não libera.`);
+        continue;
+      }
 
-      const base = vencimentoAindaValido
-        ? new Date(merc.data_vencimento + "T12:00:00Z") // acumula a partir do vencimento atual — 'Z' explícito, não depende do fuso do servidor
-        : new Date();                                    // começa do zero
-      base.setUTCDate(base.getUTCDate() + dias);
-      const novaData = base.toISOString().split("T")[0];
+      const pixApi = (cobApi.pix || []).find(p => p.endToEndId === pagamento.endToEndId) || (cobApi.pix || [])[0];
+      const valorPago = parseFloat(pixApi?.valor ?? pagamento.valor);
+      const devolvido = (pixApi?.devolucoes || [])
+        .filter(d => d.status === "DEVOLVIDO")
+        .reduce((s, d) => s + (parseFloat(d.valor) || 0), 0);
 
-      await db.from("mercearias").update({
-        status_assinatura: "ativa",
-        data_vencimento:   novaData,
-        efi_pix_status:    "CONCLUIDA",
-      }).eq("id", merc.id);
+      // ── Devolução do Pix ──────────────────────────────────
+      if (devolvido > 0) {
+        if (Number.isFinite(valorPago) && devolvido + 0.01 >= valorPago) {
+          const r = await estornarPagamento({ provedor: "efi", cobranca_id: txid, evento: "PIX_DEVOLVIDO", origem: ORIGEM_EFI });
+          if (r.revertido) {
+            registrarSistemaEfi(r.mercearia_id, "licenca_pagamento_estornado",
+              `Pix ${txid} devolvido — ${r.dias} dia(s) removidos, vencimento ${r.venc_anterior} → ${r.venc_novo}${r.bloqueou ? " (acesso bloqueado)" : ""}`,
+              { txid, evento: "PIX_DEVOLVIDO", dias: r.dias, venc_anterior: r.venc_anterior, data_vencimento: r.venc_novo, bloqueou: !!r.bloqueou });
+            console.log(`↩️ [EFÍ] Devolução aplicada: ${r.nome} — -${r.dias} dias — vence ${r.venc_novo}`);
+          } else {
+            console.log(`[EFI] Devolução do txid ${txid} sem efeito (${r.motivo}).`);
+          }
+        } else {
+          registrarSistemaEfi(mercearia_id, "licenca_pagamento_alerta",
+            `Pix ${txid} teve devolução parcial (R$ ${devolvido.toFixed(2)} de R$ ${valorPago.toFixed(2)}) — a licença não foi alterada, revise se precisa ajustar`,
+            { txid, evento: "PIX_DEVOLUCAO_PARCIAL", devolvido, valor_pago: valorPago },
+            "admin_global");
+        }
+        continue;
+      }
 
-      // Fica no radar do SuperAdmin (aba Auditoria) mesmo sendo um evento
-      // automático — sem isso, uma renovação via Pix só aparecia no
-      // console.log do servidor, invisível no painel.
-      registrar({
-        mercearia_id: merc.id,
-        usuario_nome:  "Sistema (Efí)",
-        usuario_email: "Sistema (Efí)", // evita o "Nome ()" que registrar() monta quando só tem nome — aqui não tem usuário autenticado, é webhook
-        modulo:       "assinatura",
-        acao:         "licenca_renovada_pix",
-        descricao:    `Licença renovada via Pix (Efí) — ${dias} dia(s), vence ${novaData}`,
-        meta:         { dias, data_vencimento: novaData },
+      // ── Pagamento ─────────────────────────────────────────
+      const r = await aplicarPagamento({
+        provedor:      "efi",
+        cobranca_id:   txid,
+        mercearia_id,
+        dias,
+        forma:         "pix",
+        valor_pago:    valorPago,
+        evento:        "PIX_RECEBIDO",
+        pagamento_ref: pixApi?.endToEndId || pagamento.endToEndId,
+        origem:        ORIGEM_EFI,
       });
 
-      console.log(`✅ [EFÍ] Licença renovada via Pix: ${merc.nome_fantasia} — ${dias} dias — vence ${novaData}`);
+      if (r.aplicado) {
+        registrarSistemaEfi(mercearia_id, "licenca_renovada_pix",
+          `Licença renovada via Pix (Efí) — ${r.dias} dia(s), vence ${r.venc_novo}`,
+          { dias: r.dias, data_vencimento: r.venc_novo, venc_anterior: r.venc_anterior, txid, valor: valorPago });
+        console.log(`✅ [EFÍ] Licença renovada via Pix: ${r.nome} — ${r.dias} dias — vence ${r.venc_novo}`);
+      } else if (r.motivo === "ja_processado") {
+        console.log(`[EFI] txid ${txid} ignorado — pagamento já processado (${r.status}).`);
+      } else {
+        registrarSistemaEfi(r.mercearia_id || mercearia_id, "licenca_pagamento_alerta",
+          r.motivo === "valor_menor"
+            ? `Pix ${txid} de R$ ${valorPago.toFixed(2)} é menor que o cobrado (R$ ${Number(r.valor).toFixed(2)}) — licença NÃO renovada, confira no Efí`
+            : `Pix ${txid} não foi aplicado (${r.motivo}) — confira no Efí`,
+          { txid, motivo: r.motivo, valor_pago: valorPago },
+          "admin_global");
+        console.warn(`[EFI] Pix ${txid} não aplicado: ${r.motivo}`);
+      }
+
+      // Status informativo na loja — só se ainda for a cobrança salva lá.
+      await db.from("mercearias")
+        .update({ efi_pix_status: "CONCLUIDA" })
+        .eq("id", mercearia_id)
+        .eq("efi_pix_txid", txid);
     }
 
     res.status(200).json({ ok: true });
 
   } catch (err) {
-    console.error("WEBHOOK EFÍ error:", err.message);
+    console.error("WEBHOOK EFÍ error:", err.response?.data || err.message);
     res.status(500).json({ error: "Erro interno no webhook." });
   }
 });

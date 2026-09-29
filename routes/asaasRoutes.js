@@ -8,30 +8,17 @@ const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
 const { registrar } = require("./auditoriaRoutes");
 const authUser = require("../middlewares/authUser");
 const { liberarComLicencaBloqueada, donoDaMerceariaOuSuperAdmin } = require("../middlewares/acessoCobranca");
+const {
+  buscarValorPlano, valorDoPlano, diasDoPlano, registrarCobranca, marcarCobrancaCancelada,
+  aplicarPagamento, estornarPagamento, podeVerCobranca, tokenConfere,
+} = require("../utils/licencaPagamentos");
 
 const ASAAS_API_KEY  = process.env.ASAAS_API_KEY;
 const ASAAS_API_URL  = process.env.ASAAS_API_URL || "https://api.asaas.com/v3";
 const WEBHOOK_TOKEN  = process.env.ASAAS_WEBHOOK_TOKEN;
 
-// Valor da licença em config_sistema — busca do banco
-async function buscarValorPlano(mercearia_id = null) {
-  // Verificar se a mercearia tem valor individual
-  if (mercearia_id) {
-    const { data: merc } = await db
-      .from("mercearias")
-      .select("valor_mensalidade")
-      .eq("id", mercearia_id)
-      .single();
-    if (merc?.valor_mensalidade) return parseFloat(merc.valor_mensalidade);
-  }
-  // Fallback: valor padrão global
-  const { data } = await db
-    .from("config_sistema")
-    .select("valor")
-    .eq("chave", "valor_mensalidade")
-    .single();
-  return parseFloat(data?.valor) || 49.90;
-}
+// Valor da licença: utils/licencaPagamentos.js (buscarValorPlano) — o
+// mesmo cálculo para cartão, Pix e prévia de planos.
 
 async function buscarWhatsappSuporte() {
   const { data } = await db
@@ -120,11 +107,8 @@ router.post("/gerar-cobranca/:mercearia_id", liberarComLicencaBloqueada, authUse
 
     // 2. Buscar valor do plano
     const valorMensal = await buscarValorPlano(mercearia_id);
-    const valor = plano === "anual"
-      ? parseFloat((valorMensal * 12 * 0.8).toFixed(2)) // 20% desconto anual
-      : valorMensal;
-
-    const diasPlano = plano === "anual" ? 365 : 30;
+    const valor       = valorDoPlano(valorMensal, plano);
+    const diasPlano   = diasDoPlano(plano);
 
     // ── Tenta reaproveitar uma cobrança de cartão ainda pendente, em
     // vez de gerar uma nova toda vez — evita acumular cobranças
@@ -186,6 +170,7 @@ router.post("/gerar-cobranca/:mercearia_id", liberarComLicencaBloqueada, authUse
               method:  "DELETE",
               headers: asaasHeaders(),
             });
+            await marcarCobrancaCancelada("asaas", mercearia.asaas_payment_id);
             console.log(`[ASAAS] Cobrança anterior (${mercearia.asaas_payment_id}) cancelada (${dataCheck.dueDate < hojeStr ? "vencida" : "valor desatualizado"}).`);
           } catch (e) {
             console.error("[ASAAS] Falha ao cancelar cobrança anterior (não bloqueia a geração da nova):", e.message);
@@ -228,8 +213,13 @@ router.post("/gerar-cobranca/:mercearia_id", liberarComLicencaBloqueada, authUse
       return res.status(400).json({ error: cobrancaCartao.errors?.[0]?.description || "Erro ao gerar cobrança de cartão." });
     }
 
-    // 6. Salva o ID da cobrança de cartão (informativo — a confirmação
-    // continua chegando pelo webhook, via externalReference)
+    // 6. Registra a cobrança (trava contra renovação em dobro — ver
+    // utils/licencaPagamentos.js) e salva o ID na loja (informativo — a
+    // confirmação continua chegando pelo webhook, via externalReference)
+    await registrarCobranca({
+      provedor: "asaas", cobranca_id: cobrancaCartao.id, mercearia_id,
+      forma: "cartao", plano, dias: diasPlano, valor,
+    });
     await db.from("mercearias").update({
       asaas_payment_id:     cobrancaCartao.id,
       asaas_payment_status: "PENDING",
@@ -259,7 +249,12 @@ router.get("/status-pagamento/:payment_id", authUser, async (req, res) => {
   try {
     const { payment_id } = req.params;
 
-    const resp = await fetch(`${ASAAS_API_URL}/payments/${payment_id}`, {
+    // 29/09/2026: antes qualquer usuário logado consultava qualquer cobrança.
+    if (!(await podeVerCobranca(req.user, "asaas", payment_id))) {
+      return res.status(403).json({ error: "Acesso negado a esta cobrança." });
+    }
+
+    const resp = await fetch(`${ASAAS_API_URL}/payments/${encodeURIComponent(payment_id)}`, {
       headers: asaasHeaders(),
     });
 
@@ -284,8 +279,10 @@ router.get("/status-pagamento/:payment_id", authUser, async (req, res) => {
 // ═══════════════════════════════════════════════════════════
 router.get("/planos", authUser, async (req, res) => {
   try {
-    const valorMensal = await buscarValorPlano();
-    const valorAnual  = parseFloat((valorMensal * 12 * 0.8).toFixed(2));
+    // Loja com valor individual vê o próprio valor (o mesmo que será cobrado).
+    const merceariaId = req.user?.role === "super_admin" ? null : (req.user?.mercearia_id || null);
+    const valorMensal = await buscarValorPlano(merceariaId);
+    const valorAnual  = valorDoPlano(valorMensal, "anual");
 
     const whatsapp = await buscarWhatsappSuporte();
     res.json({
@@ -335,90 +332,176 @@ router.get("/config-tela-bloqueio", authUser, async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════
 // POST /api/asaas/webhook
-// Recebe notificações do Asaas — libera acesso automaticamente
+// Recebe notificações do Asaas — libera (ou estorna) a licença.
+//
+// ⚠️ BUG REAL corrigido (29/09/2026): cada pagamento de cartão renovava
+// DUAS vezes — no PAYMENT_CONFIRMED (cartão aprovado, na hora) e de novo
+// no PAYMENT_RECEIVED (dinheiro cai na conta ~30 dias depois). Agora:
+//   • cada cobrança soma dias uma vez só (cobrancas_licenca + função
+//     licenca_aplicar_pagamento, com trava no banco);
+//   • o status e o valor são conferidos na API do Asaas, não no corpo
+//     do webhook;
+//   • estorno e contestação (chargeback) tiram os dias de volta;
+//   • reembolso parcial / chargeback revertido geram alerta pro SuperAdmin.
 // ═══════════════════════════════════════════════════════════
+const EVENTOS_PAGO    = ["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED"];
+const EVENTOS_ESTORNO = [
+  "PAYMENT_REFUNDED",
+  "PAYMENT_CHARGEBACK_REQUESTED",
+  "PAYMENT_CHARGEBACK_DISPUTE",
+  "PAYMENT_REPROVED_BY_RISK_ANALYSIS",
+  "PAYMENT_CREDIT_CARD_CAPTURE_REFUSED",
+  "PAYMENT_RECEIVED_IN_CASH_UNDONE",
+];
+const EVENTOS_ALERTA  = ["PAYMENT_PARTIALLY_REFUNDED", "PAYMENT_AWAITING_CHARGEBACK_REVERSAL"];
+const STATUS_PAGO     = ["CONFIRMED", "RECEIVED", "RECEIVED_IN_CASH"];
+const REF_LICENCA     = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\|(\d{1,4})$/i;
+const ORIGEM          = "Sistema (Asaas)";
+
+function registrarSistema(mercearia_id, acao, descricao, meta, escopo) {
+  return registrar({
+    mercearia_id,
+    usuario_nome:  ORIGEM,
+    usuario_email: ORIGEM, // evita o "Nome ()" que registrar() monta quando só tem nome — aqui não tem usuário autenticado, é webhook
+    modulo:        "assinatura",
+    acao,
+    descricao,
+    meta,
+    escopo,
+  });
+}
+
 router.post("/webhook", async (req, res) => {
   try {
-    // Validar token do webhook
     const token = req.headers["asaas-access-token"] || req.query.token;
-    if (token !== WEBHOOK_TOKEN) {
-      console.warn("⚠️ Webhook Asaas com token inválido:", token);
+    if (!tokenConfere(token, WEBHOOK_TOKEN)) {
+      console.warn("⚠️ Webhook Asaas com token inválido (ou ASAAS_WEBHOOK_TOKEN não configurado).");
       return res.status(401).json({ error: "Token inválido." });
     }
 
-    const { event, payment } = req.body;
-
+    const { event, payment } = req.body || {};
     console.log(`📩 Webhook Asaas: ${event} — payment ${payment?.id}`);
 
-    // Só processa pagamentos confirmados
-    const eventosConfirmados = ["PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"];
-    if (!eventosConfirmados.includes(event)) {
+    const tipo = EVENTOS_PAGO.includes(event) ? "pago"
+      : EVENTOS_ESTORNO.includes(event) ? "estorno"
+      : EVENTOS_ALERTA.includes(event) ? "alerta"
+      : null;
+    if (!tipo || !payment?.id) return res.status(200).json({ ok: true, ignorado: true });
+
+    // Só cobranças de licença (externalReference "mercearia_id|dias").
+    // Outras cobranças da conta Asaas não são deste fluxo.
+    const refWebhook = REF_LICENCA.exec(payment.externalReference || "");
+    if (!refWebhook) return res.status(200).json({ ok: true, ignorado: true });
+
+    // Fonte da verdade: a própria API do Asaas. Se não der pra consultar,
+    // devolve 500 e o Asaas reenvia depois (é seguro: nada soma duas vezes).
+    const respApi = await fetch(`${ASAAS_API_URL}/payments/${encodeURIComponent(payment.id)}`, { headers: asaasHeaders() });
+    const pag = await respApi.json().catch(() => ({}));
+    if (respApi.status === 404) {
+      // Não existe na conta — não é um pagamento real. 200 pra não travar
+      // a fila de webhooks do Asaas (ela pausa depois de muitas falhas).
+      console.warn(`[ASAAS] Pagamento ${payment.id} não existe na API — ignorado.`);
       return res.status(200).json({ ok: true, ignorado: true });
     }
-
-    if (!payment?.externalReference) {
-      return res.status(200).json({ ok: true, ignorado: true });
+    if (!respApi.ok || !pag?.id) {
+      console.error(`[ASAAS] Não consegui confirmar o pagamento ${payment.id} na API (HTTP ${respApi.status}).`);
+      return res.status(500).json({ error: "Falha ao confirmar pagamento no Asaas." });
     }
 
-    // externalReference = "mercearia_id|dias"
-    const [mercearia_id, diasStr] = payment.externalReference.split("|");
-    const dias = parseInt(diasStr) || 30;
+    const ref = REF_LICENCA.exec(pag.externalReference || "");
+    if (!ref || ref[0] !== refWebhook[0]) {
+      console.warn(`[ASAAS] externalReference do webhook não confere com a API (${payment.id}) — ignorado.`);
+      return res.status(200).json({ ok: true, ignorado: true });
+    }
+    const mercearia_id = ref[1];
+    const diasRef      = parseInt(ref[2], 10);
+    const valorPago    = Number(pag.value);
 
-    // Calcular nova data de vencimento
-    // Se já tem data futura, adiciona a partir dela (acumula)
-    const { data: merc } = await db
-      .from("mercearias")
-      .select("data_vencimento, nome_fantasia, timezone")
-      .eq("id", mercearia_id)
-      .single();
+    // ── Pagamento confirmado ───────────────────────────────
+    if (tipo === "pago") {
+      if (!STATUS_PAGO.includes(pag.status)) {
+        console.log(`[ASAAS] ${event} de ${pag.id}, mas o status atual no Asaas é ${pag.status} — não libera.`);
+        return res.status(200).json({ ok: true, ignorado: true });
+      }
 
-    // Compara como DATA ('YYYY-MM-DD'), no fuso do estabelecimento —
-    // antes usava `new Date(merc.data_vencimento) > new Date()`, que
-    // interpreta a data de vencimento como meia-noite EM UTC. Perto da
-    // virada do dia isso podia fazer o vencimento "ainda válido" ser
-    // tratado como já passado, e o cliente perder dias já pagos (a
-    // renovação recomeçava do zero em vez de acumular a partir do
-    // vencimento atual). Mesmo bug já corrigido no webhook do Efí.
-    const timezoneMerc = merc?.timezone || TIMEZONE_PADRAO;
-    const hojeStr = hojeStrTZ(timezoneMerc);
-    const vencimentoAindaValido = merc?.data_vencimento && merc.data_vencimento >= hojeStr;
+      const r = await aplicarPagamento({
+        provedor:     "asaas",
+        cobranca_id:  pag.id,
+        mercearia_id,
+        dias:         diasRef,
+        forma:        "cartao",
+        valor_pago:   valorPago,
+        evento:       event,
+        origem:       ORIGEM,
+      });
 
-    const base = vencimentoAindaValido
-      ? new Date(merc.data_vencimento + "T12:00:00Z") // acumula a partir do vencimento atual — 'Z' explícito, não depende do fuso do servidor
-      : new Date();                                    // começa do zero
+      if (r.aplicado) {
+        registrarSistema(mercearia_id, "licenca_renovada_cartao",
+          `Licença renovada via cartão (Asaas) — ${r.dias} dia(s), vence ${r.venc_novo}`,
+          { dias: r.dias, data_vencimento: r.venc_novo, venc_anterior: r.venc_anterior, asaas_payment_id: pag.id, evento: event, valor: valorPago });
+        console.log(`✅ Licença renovada: ${r.nome} — ${r.dias} dias — vence ${r.venc_novo} (${event})`);
+      } else if (r.motivo === "ja_processado") {
+        // Caso normal: PAYMENT_RECEIVED chegando depois do PAYMENT_CONFIRMED.
+        console.log(`[ASAAS] ${event} de ${pag.id} ignorado — pagamento já processado (${r.status}).`);
+      } else {
+        registrarSistema(r.mercearia_id || mercearia_id, "licenca_pagamento_alerta",
+          r.motivo === "valor_menor"
+            ? `Pagamento ${pag.id} de R$ ${valorPago.toFixed(2)} é menor que o cobrado (R$ ${Number(r.valor).toFixed(2)}) — licença NÃO renovada, confira no Asaas`
+            : `Pagamento ${pag.id} não foi aplicado (${r.motivo}) — confira no Asaas`,
+          { asaas_payment_id: pag.id, motivo: r.motivo, evento: event, valor_pago: valorPago },
+          "admin_global");
+        console.warn(`[ASAAS] Pagamento ${pag.id} não aplicado: ${r.motivo}`);
+      }
 
-    base.setUTCDate(base.getUTCDate() + dias);
-    const novaData = base.toISOString().split("T")[0];
+      await atualizarStatusNaLoja(mercearia_id, pag.id, "RECEIVED");
+      return res.status(200).json({ ok: true });
+    }
 
-    // Atualizar licença
-    await db.from("mercearias").update({
-      status_assinatura:    "ativa",
-      data_vencimento:      novaData,
-      asaas_payment_id:     payment.id,
-      asaas_payment_status: "RECEIVED",
-    }).eq("id", mercearia_id);
+    // ── Estorno / contestação ──────────────────────────────
+    if (tipo === "estorno") {
+      if (STATUS_PAGO.includes(pag.status)) {
+        console.log(`[ASAAS] ${event} de ${pag.id}, mas no Asaas ele segue ${pag.status} — nada a desfazer.`);
+        return res.status(200).json({ ok: true, ignorado: true });
+      }
+      const r = await estornarPagamento({ provedor: "asaas", cobranca_id: pag.id, evento: event, origem: ORIGEM });
+      if (r.revertido) {
+        registrarSistema(r.mercearia_id, "licenca_pagamento_estornado",
+          `Pagamento ${pag.id} estornado/contestado no Asaas (${event}) — ${r.dias} dia(s) removidos, vencimento ${r.venc_anterior} → ${r.venc_novo}${r.bloqueou ? " (acesso bloqueado)" : ""}`,
+          { asaas_payment_id: pag.id, evento: event, dias: r.dias, venc_anterior: r.venc_anterior, data_vencimento: r.venc_novo, bloqueou: !!r.bloqueou });
+        console.log(`↩️ [ASAAS] Estorno aplicado: ${r.nome} — -${r.dias} dias — vence ${r.venc_novo}`);
+      } else {
+        console.log(`[ASAAS] ${event} de ${pag.id} sem efeito (${r.motivo}).`);
+      }
+      await atualizarStatusNaLoja(mercearia_id, pag.id, pag.status || "REFUNDED");
+      return res.status(200).json({ ok: true });
+    }
 
-    // Fica no radar do SuperAdmin (aba Auditoria) mesmo sendo um evento
-    // automático — sem isso, uma renovação via cartão só aparecia no
-    // console.log do servidor, invisível no painel.
-    registrar({
-      mercearia_id,
-      usuario_nome:  "Sistema (Asaas)",
-      usuario_email: "Sistema (Asaas)", // evita o "Nome ()" que registrar() monta quando só tem nome — aqui não tem usuário autenticado, é webhook
-      modulo:       "assinatura",
-      acao:         "licenca_renovada_cartao",
-      descricao:    `Licença renovada via cartão (Asaas) — ${dias} dia(s), vence ${novaData}`,
-      meta:         { dias, data_vencimento: novaData, asaas_payment_id: payment.id },
-    });
-
-    console.log(`✅ Licença renovada: ${merc?.nome_fantasia} — ${dias} dias — vence ${novaData}`);
-
-    res.status(200).json({ ok: true });
+    // ── Só alerta (reembolso parcial, chargeback revertido) ─
+    registrarSistema(mercearia_id, "licenca_pagamento_alerta",
+      event === "PAYMENT_PARTIALLY_REFUNDED"
+        ? `Pagamento ${pag.id} teve reembolso parcial no Asaas — a licença não foi alterada, revise se precisa ajustar`
+        : `Contestação do pagamento ${pag.id} foi revertida a nosso favor no Asaas — se os dias tinham sido removidos, libere de novo manualmente`,
+      { asaas_payment_id: pag.id, evento: event, status: pag.status },
+      "admin_global");
+    return res.status(200).json({ ok: true });
 
   } catch (err) {
     console.error("WEBHOOK ASAAS error:", err);
     res.status(500).json({ error: "Erro interno no webhook." });
   }
 });
+
+// Atualiza o status informativo em mercearias só se for a cobrança que
+// está salva lá — não apaga a referência de uma cobrança mais nova.
+async function atualizarStatusNaLoja(mercearia_id, payment_id, status) {
+  try {
+    await db.from("mercearias")
+      .update({ asaas_payment_status: status })
+      .eq("id", mercearia_id)
+      .eq("asaas_payment_id", payment_id);
+  } catch (e) {
+    console.error("[ASAAS] Falha ao atualizar asaas_payment_status:", e.message);
+  }
+}
 
 module.exports = router;

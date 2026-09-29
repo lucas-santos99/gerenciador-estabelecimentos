@@ -546,13 +546,14 @@ async function avisosAdmin(user, prefs, ctx) {
     })());
   }
 
-  // 2) Pagamentos recebidos (renovações automáticas)
+  // 2) Pagamentos recebidos (renovações automáticas) + estornos e
+  //    alertas de pagamento (29/09/2026 — ver utils/licencaPagamentos.js)
   if (ativa('pagamentos')) {
     tarefas.push((async () => {
       const desde = new Date(agora - ant('pagamentos') * 86400000).toISOString();
       const { data } = await db.from('auditoria')
         .select('id, mercearia_id, acao, descricao, criado_em')
-        .in('acao', ['licenca_renovada_cartao', 'licenca_renovada_pix'])
+        .in('acao', ['licenca_renovada_cartao', 'licenca_renovada_pix', 'licenca_pagamento_estornado', 'licenca_pagamento_alerta'])
         .gte('criado_em', desde).order('criado_em', { ascending: false }).limit(100);
       if (!data?.length) return;
       const ids = [...new Set(data.map(a => a.mercearia_id).filter(Boolean))];
@@ -562,12 +563,16 @@ async function avisosAdmin(user, prefs, ctx) {
         (ms || []).forEach(m => { nomes[m.id] = m.nome_fantasia; });
       }
       data.forEach(a => {
+        const nome = nomes[a.mercearia_id] || 'Estabelecimento';
+        const problema = a.acao === 'licenca_pagamento_estornado' || a.acao === 'licenca_pagamento_alerta';
         itens.push({
           chave: `adm_pagamento:${a.id}`,
           categoria: 'pagamentos', tipo: a.acao,
-          titulo: `${nomes[a.mercearia_id] || 'Estabelecimento'} renovou a assinatura (${a.acao.endsWith('pix') ? 'Pix' : 'cartão'})`,
+          titulo: a.acao === 'licenca_pagamento_estornado' ? `${nome}: pagamento estornado — dias removidos da licença`
+            : a.acao === 'licenca_pagamento_alerta' ? `${nome}: pagamento precisa de revisão`
+            : `${nome} renovou a assinatura (${a.acao.endsWith('pix') ? 'Pix' : 'cartão'})`,
           descricao: a.descricao || '',
-          grupo: 'info', prioridade: 'baixa', data_ref: a.criado_em,
+          grupo: problema ? 'atrasado' : 'info', prioridade: problema ? 'alta' : 'baixa', data_ref: a.criado_em,
           meta: { mercearia_id: a.mercearia_id },
           acao: a.mercearia_id ? { tipo: 'rota', rota: `/admin/estabelecimentos/${a.mercearia_id}?view=details` } : null,
         });
