@@ -102,7 +102,7 @@ router.get("/excluidas", async (req, res) => {
     res.json(data || []);
   } catch (err) {
     console.error("Erro listar excluídas:", err);
-    res.status(500).json({ error: "Erro ao listar mercearias excluídas" });
+    res.status(500).json({ error: "Erro ao listar estabelecimentos excluídos" });
   }
 });
 
@@ -135,7 +135,7 @@ router.put("/:id/restaurar", authUser, async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     console.error("Erro restaurar:", e);
-    res.status(500).json({ error: "Erro ao restaurar mercearia" });
+    res.status(500).json({ error: "Erro ao restaurar estabelecimento" });
   }
 });
 
@@ -467,12 +467,12 @@ router.get("/:id", async (req, res) => {
       .eq("id", id)
       .single();
 
-    if (error) return res.status(404).json({ error: "Mercearia não encontrada" });
+    if (error) return res.status(404).json({ error: "Estabelecimento não encontrado" });
 
     res.json(data);
   } catch (e) {
     console.error("GET /:id error:", e);
-    res.status(500).json({ error: "Erro ao buscar mercearia" });
+    res.status(500).json({ error: "Erro ao buscar estabelecimento" });
   }
 });
 
@@ -571,7 +571,7 @@ router.put("/:id", authUser, async (req, res) => {
 
   } catch (e) {
     console.error("PUT /:id error:", e);
-    res.status(500).json({ error: "Erro interno ao atualizar mercearia" });
+    res.status(500).json({ error: "Erro interno ao atualizar estabelecimento" });
   }
 });
 
@@ -712,7 +712,7 @@ router.post("/criar", authUser, async (req, res) => {
 
   } catch (err) {
     console.error("POST criar error:", err);
-    res.status(500).json({ error: "Erro interno ao criar mercearia" });
+    res.status(500).json({ error: "Erro interno ao criar estabelecimento" });
   }
 });
 
@@ -832,7 +832,7 @@ router.delete("/:id", authUser, async (req, res) => {
 
   } catch (err) {
     console.error("DELETE error:", err);
-    res.status(500).json({ error: "Erro ao excluir mercearia" });
+    res.status(500).json({ error: "Erro ao excluir estabelecimento" });
   }
 });
 
@@ -850,7 +850,7 @@ router.delete("/:id/apagar-definitivo", authUser, async (req, res) => {
       .single();
 
     if (errBusca || !merc)
-      return res.status(400).json({ error: "Mercearia não encontrada" });
+      return res.status(400).json({ error: "Estabelecimento não encontrado" });
 
     const { error: backupErr } = await db
       .from("mercearias_backup")

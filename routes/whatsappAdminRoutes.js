@@ -444,6 +444,15 @@ router.get('/uso', async (req, res) => {
       if (!data || data.length < 1000) break;
     }
 
+    // 29/09/2026: o mesmo número atende duas coisas, contadas SEPARADAS:
+    //   • "seu"   → uso do dono do sistema: cobrança da mensalidade, testes
+    //               e qualquer envio sem loja. Sai da mensalidade, não dos planos.
+    //   • "lojas" → uso dos estabelecimentos (alertas, respostas da IA,
+    //               mensagens recebidas): é o serviço vendido nos planos.
+    const ehSeu = (l) => !l.mercearia_id || l.tipo === 'cobranca_mensalidade' || l.tipo === 'teste';
+    const novoGrupo = () => ({ mensagens: 0, meta: 0, ia: 0, porTipo: {} });
+    const G = { seu: novoGrupo(), lojas: novoGrupo() };
+
     const porTipo = {};
     const porLoja = {};
     let meta = 0, ia = 0, respostas = 0, cobranca = 0;
@@ -455,7 +464,11 @@ router.get('/uso', async (req, res) => {
       if (l.tipo === 'cobranca_mensalidade') cobranca += cm;
       const t = porTipo[l.tipo] || (porTipo[l.tipo] = { quantidade: 0, custo: 0 });
       t.quantidade++; t.custo += cm + ci;
-      if (l.mercearia_id && l.tipo !== 'cobranca_mensalidade') {
+      const g = G[ehSeu(l) ? 'seu' : 'lojas'];
+      g.mensagens++; g.meta += cm; g.ia += ci;
+      const gt = g.porTipo[l.tipo] || (g.porTipo[l.tipo] = { quantidade: 0, custo: 0 });
+      gt.quantidade++; gt.custo += cm + ci;
+      if (!ehSeu(l)) {
         const lj = porLoja[l.mercearia_id] || (porLoja[l.mercearia_id] = { mercearia_id: l.mercearia_id, mensagens: 0, creditos: 0, custo_meta: 0, custo_ia: 0 });
         lj.mensagens++; lj.creditos += Number(l.creditos) || 0; lj.custo_meta += cm; lj.custo_ia += ci;
       }
@@ -469,6 +482,12 @@ router.get('/uso', async (req, res) => {
     }
     const gratis = Math.min(respostas, p.meta.respostas_gratis_mes) * p.meta.preco_resposta;
     const total = Math.max(0, meta + ia - gratis) + p.custos_fixos.chip_mensal;
+    const receita = await receitaDoMes(mesStr);
+    const tipos = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { quantidade: v.quantidade, custo: W.arred(v.custo) }]));
+    // A franquia grátis é de respostas — respostas são sempre das lojas.
+    const custoLojas = Math.max(0, G.lojas.meta + G.lojas.ia - gratis);
+    const custoSeu = G.seu.meta + G.seu.ia;
+    const chip = p.custos_fixos.chip_mensal;
 
     res.json({
       mes: mesStr,
@@ -485,7 +504,25 @@ router.get('/uso', async (req, res) => {
       por_loja: Object.values(porLoja)
         .map(l => ({ ...l, nome: nomes[l.mercearia_id] || 'Estabelecimento', creditos: W.arred(l.creditos), custo_meta: W.arred(l.custo_meta), custo_ia: W.arred(l.custo_ia), custo_total: W.arred(l.custo_meta + l.custo_ia) }))
         .sort((x, y) => y.custo_total - x.custo_total),
-      receita_planos: await receitaDoMes(mesStr),
+      receita_planos: receita,
+      lojas: {
+        mensagens: G.lojas.mensagens,
+        custo_meta: W.arred(G.lojas.meta),
+        custo_ia: W.arred(G.lojas.ia),
+        desconto_respostas_gratis: W.arred(gratis),
+        custo_total: W.arred(custoLojas),
+        por_tipo: tipos(G.lojas.porTipo),
+        // Resultado do serviço: receita dos planos − custo das lojas − chip
+        // (o chip existe por causa do serviço). Antes de impostos e taxas.
+        sobra: receita ? W.arred(receita.total - custoLojas - chip) : null,
+      },
+      seu: {
+        mensagens: G.seu.mensagens,
+        custo_meta: W.arred(G.seu.meta),
+        custo_ia: W.arred(G.seu.ia),
+        custo_total: W.arred(custoSeu),
+        por_tipo: tipos(G.seu.porTipo),
+      },
     });
   } catch (err) {
     console.error('[WHATSAPP] GET uso:', err.message);

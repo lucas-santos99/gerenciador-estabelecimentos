@@ -8,6 +8,7 @@ const authUser = require('../middlewares/authUser');
 const onlyMaster = require('../middlewares/onlyMaster');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { rotuloPapel } = require('../utils/papeis');
 
 const {
   criarSuperAdmin,
@@ -559,7 +560,7 @@ async function personificar(req, res, alvo) {
       usuario_email: req.user.email,
       modulo:        'superadmins',
       acao:          'personificar_usuario',
-      descricao:     `Entrou como "${alvo.nome || alvo.email}" (${alvo.role}) usando a própria senha`,
+      descricao:     `Entrou como "${alvo.nome || alvo.email}" (${rotuloPapel(alvo.role)}) usando a própria senha`,
       meta:          { alvo_id: alvo.id, alvo_email: alvo.email, alvo_role: alvo.role },
       escopo:        'admin_global',
     });

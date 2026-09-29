@@ -27,7 +27,7 @@ function fmtQtd(valor, unidade) {
 ════════════════════════════════════════════════════════════ */
 router.get('/', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) => {
   const mid = mercearia(req);
-  if (!mid) return res.status(403).json({ error: 'Sem mercearia vinculada' });
+  if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
   const { status, limit = 20, offset = 0 } = req.query;
 
@@ -58,7 +58,7 @@ router.get('/', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) => {
 ════════════════════════════════════════════════════════════ */
 router.post('/', verificarPermissao(PERMISSOES.INVENTARIO_CONTAR), async (req, res) => {
   const mid = mercearia(req);
-  if (!mid) return res.status(403).json({ error: 'Sem mercearia vinculada' });
+  if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
   const { nome, tipo = 'completo', categoria_id, observacoes } = req.body;
   if (!nome?.trim()) return res.status(400).json({ error: 'Nome do inventário é obrigatório.' });
@@ -448,7 +448,7 @@ router.patch('/:id/cancelar', verificarPermissao(PERMISSOES.INVENTARIO_CONTAR), 
 ════════════════════════════════════════════════════════════ */
 router.get('/movimentacoes/listar', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) => {
   const mid = mercearia(req);
-  if (!mid) return res.status(403).json({ error: 'Sem mercearia vinculada' });
+  if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
   const { tipo, produto, data_inicio, data_fim, limit = 50, offset = 0 } = req.query;
 
@@ -486,7 +486,7 @@ router.get('/movimentacoes/listar', verificarPermissao(PERMISSOES.INVENTARIO), a
 ════════════════════════════════════════════════════════════ */
 router.post('/ajuste-rapido', verificarPermissao(PERMISSOES.INVENTARIO_AJUSTE), async (req, res) => {
   const mid = mercearia(req);
-  if (!mid) return res.status(403).json({ error: 'Sem mercearia vinculada' });
+  if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
   const { produto_id, tipo, quantidade, motivo } = req.body;
 

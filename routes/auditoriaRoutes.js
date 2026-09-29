@@ -6,6 +6,7 @@ const authUser = require('../middlewares/authUser');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
+const { rotuloPapel, traduzirRegistrosAuditoria } = require('../utils/papeis');
 
 console.log('🔥 AUDITORIA ROUTES ATUALIZADO (fuso por estabelecimento) 🔥');
 
@@ -14,7 +15,7 @@ router.use(authUser);
 /* ── helpers ─────────────────────────────────────────────── */
 function garantirMerchant(req, res) {
   if (!req.user.mercearia_id) {
-    res.status(403).json({ error: 'Sem mercearia associada' });
+    res.status(403).json({ error: 'Sem estabelecimento vinculado' });
     return false;
   }
   return true;
@@ -65,7 +66,7 @@ router.post('/login', async (req, res) => {
       usuario_email: req.user.email,
       modulo:        'auth',
       acao:          'login',
-      descricao:     `${req.user.nome || req.user.email} fez login (${req.user.role})`,
+      descricao:     `${req.user.nome || req.user.email} fez login (${rotuloPapel(req.user.role)})`,
       meta:          { role: req.user.role },
       escopo:        'login',
     });
@@ -127,7 +128,7 @@ router.get('/', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res) => {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ registros: data || [], total: count || 0 });
+    res.json({ registros: traduzirRegistrosAuditoria(data), total: count || 0 });
   } catch (err) {
     console.error('[AUDITORIA] Erro listar:', err.message);
     res.status(500).json({ error: 'Erro ao buscar auditoria' });
@@ -258,7 +259,7 @@ router.get('/admin/geral', async (req, res) => {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ registros: data || [], total: count || 0 });
+    res.json({ registros: traduzirRegistrosAuditoria(data), total: count || 0 });
   } catch (err) {
     console.error('[AUDITORIA] Erro listar geral:', err.message);
     res.status(500).json({ error: 'Erro ao buscar auditoria geral' });
@@ -366,7 +367,7 @@ router.get('/admin/:mercearia_id', async (req, res) => {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    res.json({ registros: data || [], total: count || 0 });
+    res.json({ registros: traduzirRegistrosAuditoria(data), total: count || 0 });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar auditoria' });
   }

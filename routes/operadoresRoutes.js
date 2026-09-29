@@ -38,7 +38,7 @@ async function garantirDono(alvoId, merceariaId) {
 router.get("/", async (req, res) => {
   try {
     const { mercearia_id } = req.user;
-    if (!mercearia_id) return res.status(403).json({ error: "Sem mercearia associada" });
+    if (!mercearia_id) return res.status(403).json({ error: "Sem estabelecimento vinculado" });
 
     const { data, error } = await db
       .from("operadores")
@@ -62,7 +62,7 @@ router.get("/", async (req, res) => {
 router.post("/criar", async (req, res) => {
   try {
     const { mercearia_id } = req.user;
-    if (!mercearia_id) return res.status(403).json({ error: "Sem mercearia associada" });
+    if (!mercearia_id) return res.status(403).json({ error: "Sem estabelecimento vinculado" });
 
     const { nome, email, telefone, senha, permissoes } = req.body;
 
@@ -379,7 +379,7 @@ router.get('/minhas-permissoes', async (req, res) => {
 router.get("/limite", async (req, res) => {
   try {
     const { mercearia_id } = req.user;
-    if (!mercearia_id) return res.status(403).json({ error: "Sem mercearia associada" });
+    if (!mercearia_id) return res.status(403).json({ error: "Sem estabelecimento vinculado" });
 
     const { data: merc } = await db
       .from("mercearias")
