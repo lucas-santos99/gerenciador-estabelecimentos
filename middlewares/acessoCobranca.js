@@ -21,5 +21,5 @@ function donoDaMerceariaOuSuperAdmin(req, res, next) {
   if (req.user?.mercearia_id && String(req.user.mercearia_id) === String(req.params.mercearia_id)) return next();
   return res.status(403).json({ error: 'Acesso negado a este estabelecimento.' });
 }
-
+ 
 module.exports = { liberarComLicencaBloqueada, donoDaMerceariaOuSuperAdmin };
