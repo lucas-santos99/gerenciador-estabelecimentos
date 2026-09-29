@@ -74,6 +74,8 @@ const CATEGORIAS_ADMIN = [
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: true } },
   { id: 'solicitacoes', label: 'Solicitações',        icone: '✉️', descricao: 'Solicitações de alteração esperando resposta.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
+  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar.',
+    padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
   { id: 'cadastros',    label: 'Novos cadastros',     icone: '🏪', descricao: 'Avisa quando um estabelecimento novo é cadastrado no sistema (pra conferir os dados, dar boas-vindas, acompanhar o 1º pagamento).',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: false } },
   { id: 'lembretes',    label: 'Lembretes',           icone: '⏰', descricao: 'Lembretes seus ou de toda a equipe do SuperAdmin.',
@@ -589,6 +591,54 @@ async function avisosAdmin(user, prefs, ctx) {
           descricao: `${s.solicitado_por_nome ? `Por ${s.solicitado_por_nome} · ` : ''}esperando há ${diasEsperando <= 0 ? 'menos de 1 dia' : `${diasEsperando} dia${diasEsperando === 1 ? '' : 's'}`}`,
           grupo: diasEsperando >= 2 ? 'atrasado' : 'hoje', prioridade: diasEsperando >= 2 ? 'alta' : 'media',
           data_ref: s.criado_em, meta: { solicitacao_id: s.id }, acao: { tipo: 'rota', rota: '/admin/solicitacoes' },
+        });
+      });
+    })());
+  }
+
+  // 3b) WhatsApp: planos e pacotes pedidos pelas lojas (29/09/2026)
+  if (ativa('whatsapp')) {
+    tarefas.push((async () => {
+      const [{ data: ass }, { data: pacs }] = await Promise.all([
+        db.from('whatsapp_assinaturas').select('id, mercearia_id, plano_nome, preco, substitui_id, solicitado_por_nome, criado_em')
+          .eq('status', 'aguardando').order('criado_em', { ascending: true }).limit(100),
+        db.from('whatsapp_pacotes_compras').select('id, mercearia_id, nome, preco, solicitado_por_nome, criado_em')
+          .eq('status', 'aguardando').order('criado_em', { ascending: true }).limit(100),
+      ]);
+      const todos = [...(ass || []), ...(pacs || [])];
+      if (!todos.length) return;
+      const ids = [...new Set(todos.map(x => x.mercearia_id).filter(Boolean))];
+      const nomes = {};
+      if (ids.length) {
+        const { data: ms } = await db.from('mercearias').select('id, nome_fantasia').in('id', ids);
+        (ms || []).forEach(m => { nomes[m.id] = m.nome_fantasia; });
+      }
+      const esperando = (iso) => {
+        const d = diasEntre(dataStrTZ(iso, ctx.tz), hojeStr);
+        return { d, txt: d <= 0 ? 'menos de 1 dia' : `${d} dia${d === 1 ? '' : 's'}` };
+      };
+      (ass || []).forEach(a => {
+        const e = esperando(a.criado_em);
+        itens.push({
+          chave: `adm_whatsapp_plano:${a.id}`,
+          categoria: 'whatsapp', tipo: 'whatsapp_plano_pendente',
+          titulo: `${nomes[a.mercearia_id] || 'Estabelecimento'} ${a.substitui_id ? 'pediu troca para' : 'pediu'} o plano de WhatsApp "${a.plano_nome}" (${brl(a.preco)}/mês)`,
+          descricao: `${a.solicitado_por_nome ? `Por ${a.solicitado_por_nome} · ` : ''}esperando ativação há ${e.txt}`,
+          grupo: e.d >= 2 ? 'atrasado' : 'hoje', prioridade: e.d >= 2 ? 'alta' : 'media',
+          data_ref: a.criado_em, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
+          acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
+        });
+      });
+      (pacs || []).forEach(p => {
+        const e = esperando(p.criado_em);
+        itens.push({
+          chave: `adm_whatsapp_pacote:${p.id}`,
+          categoria: 'whatsapp', tipo: 'whatsapp_pacote_pendente',
+          titulo: `${nomes[p.mercearia_id] || 'Estabelecimento'} pediu o pacote extra "${p.nome}" (${brl(p.preco)})`,
+          descricao: `${p.solicitado_por_nome ? `Por ${p.solicitado_por_nome} · ` : ''}esperando aprovação há ${e.txt}`,
+          grupo: e.d >= 2 ? 'atrasado' : 'hoje', prioridade: e.d >= 2 ? 'alta' : 'media',
+          data_ref: p.criado_em, meta: { pacote_id: p.id, mercearia_id: p.mercearia_id },
+          acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
         });
       });
     })());

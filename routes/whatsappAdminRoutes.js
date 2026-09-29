@@ -20,6 +20,14 @@
 //   GET    /uso?mes=YYYY-MM           → consumo e custo do mês (whatsapp_envios)
 //   GET    /lojas                     → lista enxuta de estabelecimentos
 //   POST   /dolar/atualizar           → busca a cotação do dólar agora
+//   GET    /assinaturas               → planos contratados pelas lojas (29/09)
+//   POST   /assinaturas/:id/ativar    → (master) ativa a solicitação
+//   POST   /assinaturas/:id/recusar   → (master) recusa a solicitação
+//   POST   /assinaturas/:id/encerrar  → (master) encerra (agora ou no fim do ciclo)
+//   POST   /assinaturas/:id/ajuste    → (master) soma/tira créditos do ciclo
+//   GET    /assinaturas/:id/extrato   → movimentos do ciclo atual
+//   POST   /pacotes/:id/aprovar       → (master) aprova pacote extra
+//   POST   /pacotes/:id/recusar       → (master) recusa pacote extra
 //
 // Dólar automático (25/09): cotação PTAX de venda do Banco Central (fonte
 // oficial, grátis, sem chave); se falhar, AwesomeAPI. Guardada em
@@ -33,8 +41,9 @@ const authUser = require('../middlewares/authUser');
 const somenteSuperAdmin = require('../middlewares/somenteSuperAdmin');
 const onlyMaster = require('../middlewares/onlyMaster');
 const { registrar } = require('./auditoriaRoutes');
-const { TIMEZONE_PADRAO, inicioDiaTZ } = require('../utils/fusoHorario');
+const { TIMEZONE_PADRAO, inicioDiaTZ, hojeStrTZ } = require('../utils/fusoHorario');
 const W = require('../utils/whatsappCustos');
+const A = require('../utils/whatsappAssinaturas');
 
 router.use(authUser, somenteSuperAdmin);
 
@@ -386,6 +395,33 @@ router.post('/simular', async (req, res) => {
   }
 });
 
+/* ── Receita dos planos no mês (ciclos iniciados + pacotes aprovados) ── */
+async function receitaDoMes(mesStr) {
+  try {
+    const [a, m] = mesStr.split('-').map(Number);
+    const ultimo = new Date(Date.UTC(a, m, 0)).getUTCDate();
+    const ini = `${mesStr}-01`, fim = `${mesStr}-${String(ultimo).padStart(2, '0')}`;
+    const { data: ciclos } = await db.from('whatsapp_creditos_mov').select('assinatura_id')
+      .eq('tipo', 'credito_ciclo').gte('ciclo_inicio', ini).lte('ciclo_inicio', fim).limit(5000);
+    let planos = 0;
+    const ids = (ciclos || []).map(c => c.assinatura_id);
+    if (ids.length) {
+      const { data: ass } = await db.from('whatsapp_assinaturas').select('id, preco').in('id', [...new Set(ids)]);
+      const preco = Object.fromEntries((ass || []).map(x => [x.id, Number(x.preco) || 0]));
+      ids.forEach(id => { planos += preco[id] || 0; });
+    }
+    const { data: pacs } = await db.from('whatsapp_pacotes_compras').select('preco')
+      .eq('status', 'aprovado')
+      .gte('resolvido_em', inicioDiaTZ(ini, TIMEZONE_PADRAO).toISOString())
+      .lt('resolvido_em', inicioDiaTZ(A.somarDias(fim, 1), TIMEZONE_PADRAO).toISOString());
+    const pacotes = (pacs || []).reduce((s, x) => s + (Number(x.preco) || 0), 0);
+    return { planos: W.arred(planos), pacotes: W.arred(pacotes), total: W.arred(planos + pacotes), ciclos: ids.length };
+  } catch (e) {
+    console.error('[WHATSAPP] receita do mês:', e.message);
+    return null;
+  }
+}
+
 /* ── Uso do mês (a partir do registro de envios) ───────────── */
 router.get('/uso', async (req, res) => {
   try {
@@ -449,7 +485,7 @@ router.get('/uso', async (req, res) => {
       por_loja: Object.values(porLoja)
         .map(l => ({ ...l, nome: nomes[l.mercearia_id] || 'Estabelecimento', creditos: W.arred(l.creditos), custo_meta: W.arred(l.custo_meta), custo_ia: W.arred(l.custo_ia), custo_total: W.arred(l.custo_meta + l.custo_ia) }))
         .sort((x, y) => y.custo_total - x.custo_total),
-      receita_planos: null, // entra quando existir contratação por loja
+      receita_planos: await receitaDoMes(mesStr),
     });
   } catch (err) {
     console.error('[WHATSAPP] GET uso:', err.message);
@@ -469,6 +505,204 @@ router.get('/lojas', async (req, res) => {
   } catch (err) {
     console.error('[WHATSAPP] GET lojas:', err.message);
     res.status(500).json({ error: 'Erro ao listar os estabelecimentos.' });
+  }
+});
+
+/* ── Planos contratados pelas lojas (29/09) ────────────────── */
+const UUID = /^[0-9a-f-]{36}$/i;
+
+function auditarLoja(req, merceariaId, acao, descricao, meta = {}) {
+  registrar({
+    mercearia_id: merceariaId, operador_id: null,
+    usuario_nome: req.user.nome, usuario_email: req.user.email,
+    modulo: 'whatsapp', acao, descricao, meta, escopo: 'admin_global',
+  });
+}
+
+async function buscarAssinatura(id) {
+  if (!UUID.test(String(id))) return null;
+  const { data } = await db.from('whatsapp_assinaturas').select('*').eq('id', id).maybeSingle();
+  return data || null;
+}
+
+router.get('/assinaturas', async (req, res) => {
+  try {
+    const desde = new Date(Date.now() - 60 * 86400000).toISOString();
+    const [{ data: abertas, error: e1 }, { data: fechadas }, { data: pacotes }] = await Promise.all([
+      db.from('whatsapp_assinaturas').select('*').in('status', ['aguardando', 'ativa']).order('criado_em', { ascending: true }),
+      db.from('whatsapp_assinaturas').select('*').in('status', ['recusada', 'cancelada', 'substituida', 'desistiu'])
+        .gte('encerrado_em', desde).order('encerrado_em', { ascending: false }).limit(100),
+      db.from('whatsapp_pacotes_compras').select('*').eq('status', 'aguardando').order('criado_em', { ascending: true }),
+    ]);
+    if (e1) throw e1;
+
+    const ids = [...new Set([...(abertas || []), ...(fechadas || []), ...(pacotes || [])].map(x => x.mercearia_id))];
+    const lojas = {};
+    if (ids.length) {
+      const { data: ms } = await db.from('mercearias').select('id, nome_fantasia, timezone').in('id', ids);
+      (ms || []).forEach(x => { lojas[x.id] = x; });
+    }
+    const nome = (id) => lojas[id]?.nome_fantasia || 'Estabelecimento';
+
+    const ativas = [];
+    for (const a0 of (abertas || []).filter(x => x.status === 'ativa')) {
+      const a = await A.garantirCiclo(db, a0, hojeStrTZ(lojas[a0.mercearia_id]?.timezone || TIMEZONE_PADRAO));
+      if (!a || a.status !== 'ativa') continue;
+      const r = await A.resumoCiclo(db, a.id, a.ciclo_inicio);
+      ativas.push({ ...a, ...r, loja_nome: nome(a.mercearia_id) });
+    }
+    const pendentes = (abertas || []).filter(x => x.status === 'aguardando').map(x => {
+      const anterior = (abertas || []).find(y => y.id === x.substitui_id);
+      return { ...x, loja_nome: nome(x.mercearia_id), troca_de: anterior ? anterior.plano_nome : null };
+    });
+
+    res.json({
+      pendentes,
+      ativas: ativas.sort((x, y) => x.loja_nome.localeCompare(y.loja_nome, 'pt-BR')),
+      pacotes: (pacotes || []).map(x => ({ ...x, loja_nome: nome(x.mercearia_id) })),
+      encerradas: (fechadas || []).map(x => ({ ...x, loja_nome: nome(x.mercearia_id) })),
+      pode_editar: !!req.user.is_master,
+    });
+  } catch (err) {
+    console.error('[WHATSAPP] GET assinaturas:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar os planos das lojas.' });
+  }
+});
+
+router.post('/assinaturas/:id/ativar', onlyMaster, async (req, res) => {
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a) return res.status(404).json({ error: 'Solicitação não encontrada.' });
+    if (a.status !== 'aguardando') return res.status(409).json({ error: 'Essa solicitação já foi resolvida.' });
+    const ativa = await A.ativar(db, a, req.user.nome || req.user.email);
+    if (!ativa) return res.status(409).json({ error: 'Essa solicitação já foi resolvida.' });
+    auditarLoja(req, a.mercearia_id, 'whatsapp_plano_ativado_loja',
+      `Ativou o plano de WhatsApp "${a.plano_nome}" (R$ ${a.preco}/mês, ${a.creditos} créditos) — ciclo ${ativa.ciclo_inicio} a ${ativa.ciclo_fim}`,
+      { assinatura_id: a.id });
+    res.json(ativa);
+  } catch (err) {
+    console.error('[WHATSAPP] ativar:', err.message);
+    res.status(500).json({ error: 'Erro ao ativar o plano.' });
+  }
+});
+
+router.post('/assinaturas/:id/recusar', onlyMaster, async (req, res) => {
+  const motivo = String(req.body?.motivo || '').trim().slice(0, 300);
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a) return res.status(404).json({ error: 'Solicitação não encontrada.' });
+    const agora = new Date().toISOString();
+    const { data } = await db.from('whatsapp_assinaturas')
+      .update({ status: 'recusada', motivo: motivo || null, encerrado_em: agora, encerrado_por_nome: req.user.nome, atualizado_em: agora })
+      .eq('id', a.id).eq('status', 'aguardando').select();
+    if (!data || !data.length) return res.status(409).json({ error: 'Essa solicitação já foi resolvida.' });
+    auditarLoja(req, a.mercearia_id, 'whatsapp_plano_recusado_loja', `Recusou a solicitação do plano de WhatsApp "${a.plano_nome}"${motivo ? ` — ${motivo}` : ''}`, { assinatura_id: a.id });
+    res.json(data[0]);
+  } catch (err) {
+    console.error('[WHATSAPP] recusar:', err.message);
+    res.status(500).json({ error: 'Erro ao recusar.' });
+  }
+});
+
+router.post('/assinaturas/:id/encerrar', onlyMaster, async (req, res) => {
+  const imediato = req.body?.imediato === true;
+  const motivo = String(req.body?.motivo || '').trim().slice(0, 300);
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a || a.status !== 'ativa') return res.status(404).json({ error: 'Plano ativo não encontrado.' });
+    let r;
+    if (imediato) {
+      r = await A.encerrarAgora(db, a, req.user.nome, motivo);
+      if (!r) return res.status(409).json({ error: 'O plano já foi encerrado.' });
+    } else {
+      const { data, error } = await db.from('whatsapp_assinaturas')
+        .update({ cancelar_no_fim: true, motivo: motivo || a.motivo, atualizado_em: new Date().toISOString() })
+        .eq('id', a.id).eq('status', 'ativa').select().single();
+      if (error) throw error;
+      r = data;
+    }
+    auditarLoja(req, a.mercearia_id, 'whatsapp_plano_encerrado_loja',
+      `${imediato ? 'Encerrou agora o' : 'Agendou o encerramento (no fim do ciclo) do'} plano de WhatsApp "${a.plano_nome}"${motivo ? ` — ${motivo}` : ''}`, { assinatura_id: a.id });
+    res.json(r);
+  } catch (err) {
+    console.error('[WHATSAPP] encerrar:', err.message);
+    res.status(500).json({ error: 'Erro ao encerrar o plano.' });
+  }
+});
+
+router.post('/assinaturas/:id/ajuste', onlyMaster, async (req, res) => {
+  const q = Number(String(req.body?.quantidade ?? '').replace(',', '.'));
+  const motivo = String(req.body?.motivo || '').trim().slice(0, 300);
+  if (!Number.isFinite(q) || q === 0 || Math.abs(q) > 100000) return res.status(400).json({ error: 'Quantidade inválida.' });
+  if (!motivo) return res.status(400).json({ error: 'Informe o motivo do ajuste.' });
+  try {
+    const a0 = await buscarAssinatura(req.params.id);
+    if (!a0 || a0.status !== 'ativa') return res.status(404).json({ error: 'Plano ativo não encontrado.' });
+    const tz = await A.timezoneDaLoja(db, a0.mercearia_id);
+    const a = await A.garantirCiclo(db, a0, hojeStrTZ(tz));
+    if (!a || a.status !== 'ativa') return res.status(409).json({ error: 'O plano não está mais ativo.' });
+    const quantidade = Math.round(q * 100) / 100;
+    await A.lancar(db, { mercearia_id: a.mercearia_id, assinatura_id: a.id, ciclo_inicio: a.ciclo_inicio, tipo: 'ajuste', quantidade, descricao: motivo, criado_por_nome: req.user.nome });
+    auditarLoja(req, a.mercearia_id, 'whatsapp_creditos_ajuste', `Ajustou ${quantidade > 0 ? '+' : ''}${quantidade} créditos de WhatsApp — ${motivo}`, { assinatura_id: a.id });
+    res.json({ ...a, ...(await A.resumoCiclo(db, a.id, a.ciclo_inicio)) });
+  } catch (err) {
+    console.error('[WHATSAPP] ajuste:', err.message);
+    res.status(500).json({ error: 'Erro ao ajustar os créditos.' });
+  }
+});
+
+router.get('/assinaturas/:id/extrato', async (req, res) => {
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a || !a.ciclo_inicio) return res.json({ movimentos: [] });
+    const { data, error } = await db.from('whatsapp_creditos_mov')
+      .select('id, tipo, quantidade, pedido_tipo, descricao, criado_por_nome, criado_em')
+      .eq('assinatura_id', a.id).eq('ciclo_inicio', a.ciclo_inicio)
+      .order('criado_em', { ascending: false }).limit(500);
+    if (error) throw error;
+    res.json({ ciclo_inicio: a.ciclo_inicio, ciclo_fim: a.ciclo_fim, movimentos: data || [] });
+  } catch (err) {
+    console.error('[WHATSAPP] extrato:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar o extrato.' });
+  }
+});
+
+router.post('/pacotes/:id/aprovar', onlyMaster, async (req, res) => {
+  if (!UUID.test(req.params.id)) return res.status(400).json({ error: 'Pedido inválido.' });
+  try {
+    const { data: pac } = await db.from('whatsapp_pacotes_compras').select('*').eq('id', req.params.id).maybeSingle();
+    if (!pac || pac.status !== 'aguardando') return res.status(404).json({ error: 'Pedido não encontrado ou já resolvido.' });
+    const a0 = await buscarAssinatura(pac.assinatura_id);
+    if (!a0 || a0.status !== 'ativa') return res.status(409).json({ error: 'A loja não tem plano ativo.' });
+    const tz = await A.timezoneDaLoja(db, a0.mercearia_id);
+    const a = await A.garantirCiclo(db, a0, hojeStrTZ(tz));
+    if (!a || a.status !== 'ativa') return res.status(409).json({ error: 'A loja não tem plano ativo.' });
+    const { data } = await db.from('whatsapp_pacotes_compras')
+      .update({ status: 'aprovado', resolvido_em: new Date().toISOString(), resolvido_por_nome: req.user.nome })
+      .eq('id', pac.id).eq('status', 'aguardando').select();
+    if (!data || !data.length) return res.status(409).json({ error: 'Esse pedido já foi resolvido.' });
+    await A.lancar(db, { mercearia_id: a.mercearia_id, assinatura_id: a.id, ciclo_inicio: a.ciclo_inicio, tipo: 'pacote', quantidade: pac.creditos, descricao: `Pacote extra: ${pac.nome}`, criado_por_nome: req.user.nome });
+    auditarLoja(req, a.mercearia_id, 'whatsapp_pacote_aprovado', `Aprovou o pacote extra de WhatsApp "${pac.nome}" (+${pac.creditos} créditos, R$ ${pac.preco})`, { pacote_id: pac.id });
+    res.json(data[0]);
+  } catch (err) {
+    console.error('[WHATSAPP] aprovar pacote:', err.message);
+    res.status(500).json({ error: 'Erro ao aprovar o pacote.' });
+  }
+});
+
+router.post('/pacotes/:id/recusar', onlyMaster, async (req, res) => {
+  if (!UUID.test(req.params.id)) return res.status(400).json({ error: 'Pedido inválido.' });
+  const motivo = String(req.body?.motivo || '').trim().slice(0, 300);
+  try {
+    const { data } = await db.from('whatsapp_pacotes_compras')
+      .update({ status: 'recusado', motivo: motivo || null, resolvido_em: new Date().toISOString(), resolvido_por_nome: req.user.nome })
+      .eq('id', req.params.id).eq('status', 'aguardando').select();
+    if (!data || !data.length) return res.status(404).json({ error: 'Pedido não encontrado ou já resolvido.' });
+    auditarLoja(req, data[0].mercearia_id, 'whatsapp_pacote_recusado', `Recusou o pacote extra de WhatsApp "${data[0].nome}"${motivo ? ` — ${motivo}` : ''}`, { pacote_id: data[0].id });
+    res.json(data[0]);
+  } catch (err) {
+    console.error('[WHATSAPP] recusar pacote:', err.message);
+    res.status(500).json({ error: 'Erro ao recusar o pacote.' });
   }
 });
 
