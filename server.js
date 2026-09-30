@@ -26,6 +26,7 @@ const cobrancaNotifRoutes = require("./routes/cobrancaNotifRoutes");
 const notificacoesRoutes = require("./routes/notificacoesRoutes");
 const whatsappAdminRoutes = require("./routes/whatsappAdminRoutes");
 const whatsappLojaRoutes = require("./routes/whatsappLojaRoutes");
+const whatsappWebhookRoutes = require("./routes/whatsappWebhookRoutes");
 
 // --- IMPORTAÇÃO DAS ROTAS DO ASAAS ---
 const asaasRoutes = require("./routes/asaasRoutes");
@@ -43,7 +44,14 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // --- MIDDLEWARES ---
-app.use(express.json({ limit: "20mb" }));
+// verify: guarda o corpo cru só do webhook do WhatsApp — a Meta assina o
+// corpo exato (X-Hub-Signature-256) e a conferência precisa dele intacto.
+app.use(express.json({
+  limit: "20mb",
+  verify: (req, res, buf) => {
+    if (req.originalUrl && req.originalUrl.startsWith("/api/whatsapp/webhook")) req.rawBody = buf;
+  },
+}));
 
 // --- CORS CONFIGURAÇÃO ---
 app.use(
@@ -88,6 +96,7 @@ app.use("/api/cobranca-notif", cobrancaNotifRoutes);
 app.use("/api/notificacoes",  notificacoesRoutes);
 app.use("/api/whatsapp/admin", whatsappAdminRoutes);
 app.use("/api/whatsapp/loja", whatsappLojaRoutes);
+app.use("/api/whatsapp/webhook", whatsappWebhookRoutes); // chamado pela Meta, sem login (assinatura conferida)
 
 app.use("/superadmin", superAdminRoutes);
 

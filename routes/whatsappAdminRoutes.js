@@ -183,6 +183,9 @@ router.put('/parametros', onlyMaster, async (req, res) => {
     const antes = await carregarParametros();
     const cotacao = await lerCotacaoSalva();
     const novo = W.aplicarDolarAuto(W.normalizarParametros(req.body?.parametros), cotacao);
+    // "Liberado para as lojas" só muda pela aba Conexão (/conexao/liberar) —
+    // aqui mantém o que está salvo, pra um rascunho antigo não desfazer.
+    novo.integracao = { ...novo.integracao, ativo: antes.integracao?.ativo === true };
     const { error } = await db.from('config_sistema')
       .upsert({ chave: CHAVE_PARAMS, valor: JSON.stringify(novo) }, { onConflict: 'chave' });
     if (error) throw error;
@@ -740,6 +743,102 @@ router.post('/pacotes/:id/recusar', onlyMaster, async (req, res) => {
   } catch (err) {
     console.error('[WHATSAPP] recusar pacote:', err.message);
     res.status(500).json({ error: 'Erro ao recusar o pacote.' });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════
+   CONEXÃO COM A META (30/09/2026) — número real, webhook e teste
+   ══════════════════════════════════════════════════════════ */
+const M = require('../utils/whatsappMeta');
+
+// Estado da ligação: o que está configurado no servidor (sem mostrar os
+// segredos), dados do número na Meta e se o app recebe os avisos da conta.
+router.get('/conexao', async (req, res) => {
+  const config = M.configuracao();
+  const proto = String(req.get('x-forwarded-proto') || req.protocol || 'https').split(',')[0].trim();
+  const r = {
+    config, numero: null, webhook_assinado: null, erro: null, pode_editar: !!req.user.is_master,
+    webhook_url: `${proto}://${req.get('host')}/api/whatsapp/webhook`,
+  };
+  if (!config.token) return res.json(r);
+  try {
+    r.numero = await M.statusNumero();
+  } catch (e) {
+    r.erro = M.explicarErro(e.codigo) || e.message;
+  }
+  try {
+    const apps = await M.appsAssinados();
+    r.webhook_assinado = apps.length > 0;
+  } catch (e) {
+    if (!r.erro) r.erro = M.explicarErro(e.codigo) || e.message;
+  }
+  res.json(r);
+});
+
+// Faz a conta do WhatsApp mandar os avisos (mensagens/status) para o app
+router.post('/conexao/assinar-webhook', onlyMaster, async (req, res) => {
+  try {
+    await M.assinarWebhook();
+    auditar(req, 'whatsapp_webhook_assinado', 'Ligou o recebimento de avisos (webhook) da conta do WhatsApp');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: M.explicarErro(e.codigo) || e.message });
+  }
+});
+
+// Liberar (ou pausar) o WhatsApp para as lojas: a tela da loja deixa de
+// mostrar "Em breve" e o serviço passa a contar como no ar.
+router.post('/conexao/liberar', onlyMaster, async (req, res) => {
+  try {
+    const ativo = req.body?.ativo === true;
+    const antes = await carregarParametros();
+    const novo = { ...antes, integracao: { ...antes.integracao, ativo } };
+    const { error } = await db.from('config_sistema')
+      .upsert({ chave: CHAVE_PARAMS, valor: JSON.stringify(W.normalizarParametros(novo)) }, { onConflict: 'chave' });
+    if (error) throw error;
+    await historico(req, { acao: 'parametros', antes, depois: novo });
+    auditar(req, 'whatsapp_liberado', ativo ? 'Liberou o WhatsApp para as lojas' : 'Pausou o WhatsApp para as lojas', { ativo });
+    res.json({ ok: true, ativo });
+  } catch (err) {
+    console.error('[WHATSAPP] liberar:', err.message);
+    res.status(500).json({ error: 'Erro ao salvar.' });
+  }
+});
+
+// Mensagem de teste (texto livre). Só funciona dentro da janela de 24h:
+// a pessoa precisa ter mandado mensagem para o número do sistema antes.
+router.post('/teste', onlyMaster, async (req, res) => {
+  const tel = A.normalizarTelefone(req.body?.telefone);
+  const texto = String(req.body?.texto || '').trim();
+  if (!tel) return res.status(400).json({ error: 'Telefone inválido. Use DDD + número.' });
+  if (!texto || texto.length > 1000) return res.status(400).json({ error: 'Escreva a mensagem (até 1000 caracteres).' });
+  const r = await M.enviarTexto({ para: tel, texto, tipo: 'teste' });
+  auditar(req, 'whatsapp_teste', `Mensagem de teste para ${A.formatarTelefone(tel)} — ${r.ok ? 'enviada' : 'falhou'}`, { ok: r.ok, codigo: r.codigo || null });
+  if (!r.ok) return res.status(400).json({ error: M.explicarErro(r.codigo) || r.erro, codigo: r.codigo || null });
+  res.json({ ok: true, id: r.id });
+});
+
+// Últimas mensagens (enviadas e recebidas) — acompanhamento da ligação
+router.get('/mensagens', async (req, res) => {
+  try {
+    const lim = Math.min(100, Math.max(1, parseInt(req.query.limite, 10) || 30));
+    const { data, error } = await db.from('whatsapp_envios')
+      .select('id, mercearia_id, direcao, tipo, destino, status, erro_codigo, erro_mensagem, custo_meta_estimado, criado_em')
+      .order('criado_em', { ascending: false }).limit(lim);
+    if (error) throw error;
+    const ids = [...new Set((data || []).map(x => x.mercearia_id).filter(Boolean))];
+    const nomes = {};
+    if (ids.length) {
+      const { data: ms } = await db.from('mercearias').select('id, nome_fantasia').in('id', ids);
+      (ms || []).forEach(m => { nomes[m.id] = m.nome_fantasia; });
+    }
+    res.json((data || []).map(x => ({
+      ...x, loja_nome: x.mercearia_id ? (nomes[x.mercearia_id] || 'Estabelecimento') : null,
+      destino_formatado: A.formatarTelefone(x.destino), erro_explicado: M.explicarErro(x.erro_codigo),
+    })));
+  } catch (err) {
+    console.error('[WHATSAPP] GET mensagens:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar as mensagens.' });
   }
 });
 
