@@ -74,7 +74,7 @@ const CATEGORIAS_ADMIN = [
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: true } },
   { id: 'solicitacoes', label: 'Solicitações',        icone: '✉️', descricao: 'Solicitações de alteração esperando resposta.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
-  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar.',
+  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar, e lojas que passaram do teto de custo.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
   { id: 'cadastros',    label: 'Novos cadastros',     icone: '🏪', descricao: 'Avisa quando um estabelecimento novo é cadastrado no sistema (pra conferir os dados, dar boas-vindas, acompanhar o 1º pagamento).',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: false } },
@@ -604,13 +604,17 @@ async function avisosAdmin(user, prefs, ctx) {
   // 3b) WhatsApp: planos e pacotes pedidos pelas lojas (29/09/2026)
   if (ativa('whatsapp')) {
     tarefas.push((async () => {
-      const [{ data: ass }, { data: pacs }] = await Promise.all([
+      const [{ data: ass }, { data: pacs }, { data: tetos }] = await Promise.all([
         db.from('whatsapp_assinaturas').select('id, mercearia_id, plano_nome, preco, substitui_id, solicitado_por_nome, criado_em')
           .eq('status', 'aguardando').order('criado_em', { ascending: true }).limit(100),
         db.from('whatsapp_pacotes_compras').select('id, mercearia_id, nome, preco, solicitado_por_nome, criado_em')
           .eq('status', 'aguardando').order('criado_em', { ascending: true }).limit(100),
+        // (30/09) Teto de custo por loja: aviso ou assistente pausado neste ciclo
+        db.from('whatsapp_assinaturas').select('id, mercearia_id, plano_nome, ciclo_inicio, teto_ciclo, teto_aviso_em, teto_pausado_em, teto_liberado_em')
+          .eq('status', 'ativa').not('teto_aviso_em', 'is', null).limit(200),
       ]);
-      const todos = [...(ass || []), ...(pacs || [])];
+      const tetoAtual = (tetos || []).filter(a => a.teto_ciclo === a.ciclo_inicio && !a.teto_liberado_em);
+      const todos = [...(ass || []), ...(pacs || []), ...tetoAtual];
       if (!todos.length) return;
       const ids = [...new Set(todos.map(x => x.mercearia_id).filter(Boolean))];
       const nomes = {};
@@ -631,6 +635,22 @@ async function avisosAdmin(user, prefs, ctx) {
           descricao: `${a.solicitado_por_nome ? `Por ${a.solicitado_por_nome} · ` : ''}esperando ativação há ${e.txt}`,
           grupo: e.d >= 2 ? 'atrasado' : 'hoje', prioridade: e.d >= 2 ? 'alta' : 'media',
           data_ref: a.criado_em, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
+          acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
+        });
+      });
+      tetoAtual.forEach(a => {
+        const pausado = !!a.teto_pausado_em;
+        itens.push({
+          chave: `adm_whatsapp_teto:${a.id}:${a.ciclo_inicio}:${pausado ? 'pausado' : 'aviso'}`,
+          categoria: 'whatsapp', tipo: pausado ? 'whatsapp_teto_pausado' : 'whatsapp_teto_aviso',
+          titulo: pausado
+            ? `Assistente do WhatsApp de ${nomes[a.mercearia_id] || 'Estabelecimento'} foi pausado pelo teto de custo`
+            : `WhatsApp de ${nomes[a.mercearia_id] || 'Estabelecimento'} passou do aviso do teto de custo`,
+          descricao: pausado
+            ? 'Uso fora do normal neste ciclo. Confira na aba Lojas e retome se estiver tudo certo.'
+            : `Plano "${a.plano_nome}". O custo real do ciclo passou do percentual de aviso — acompanhe na aba Lojas.`,
+          grupo: 'hoje', prioridade: pausado ? 'alta' : 'media',
+          data_ref: a.teto_pausado_em || a.teto_aviso_em, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
           acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
         });
       });

@@ -25,6 +25,7 @@
 //   POST   /assinaturas/:id/recusar   → (master) recusa a solicitação
 //   POST   /assinaturas/:id/encerrar  → (master) encerra (agora ou no fim do ciclo)
 //   POST   /assinaturas/:id/ajuste    → (master) soma/tira créditos do ciclo
+//   POST   /assinaturas/:id/retomar   → (master) retoma assistente pausado pelo teto (30/09)
 //   GET    /assinaturas/:id/extrato   → movimentos do ciclo atual
 //   POST   /pacotes/:id/aprovar       → (master) aprova pacote extra
 //   POST   /pacotes/:id/recusar       → (master) recusa pacote extra
@@ -44,6 +45,7 @@ const { registrar } = require('./auditoriaRoutes');
 const { TIMEZONE_PADRAO, inicioDiaTZ, hojeStrTZ } = require('../utils/fusoHorario');
 const W = require('../utils/whatsappCustos');
 const A = require('../utils/whatsappAssinaturas');
+const Assistente = require('../utils/whatsappAssistente');
 
 router.use(authUser, somenteSuperAdmin);
 
@@ -589,7 +591,7 @@ router.get('/assinaturas', async (req, res) => {
       const a = await A.garantirCiclo(db, a0, hojeStrTZ(lojas[a0.mercearia_id]?.timezone || TIMEZONE_PADRAO));
       if (!a || a.status !== 'ativa') continue;
       const r = await A.resumoCiclo(db, a.id, a.ciclo_inicio);
-      ativas.push({ ...a, ...r, loja_nome: nome(a.mercearia_id) });
+      ativas.push({ ...a, ...r, loja_nome: nome(a.mercearia_id), teto: await situacaoTeto(a, lojas[a.mercearia_id]?.timezone || TIMEZONE_PADRAO) });
     }
     const pendentes = (abertas || []).filter(x => x.status === 'aguardando').map(x => {
       const anterior = (abertas || []).find(y => y.id === x.substitui_id);
@@ -688,6 +690,42 @@ router.post('/assinaturas/:id/ajuste', onlyMaster, async (req, res) => {
   } catch (err) {
     console.error('[WHATSAPP] ajuste:', err.message);
     res.status(500).json({ error: 'Erro ao ajustar os créditos.' });
+  }
+});
+
+// Teto de custo (disjuntor) de um plano ativo neste ciclo — 30/09/2026
+async function situacaoTeto(a, tz) {
+  const mesmoCiclo = a.teto_ciclo === a.ciclo_inicio;
+  let custo = 0;
+  try { custo = await Assistente.custoDoCiclo(a.mercearia_id, a, tz); } catch { custo = 0; }
+  const preco = Number(a.preco) || 0;
+  return {
+    custo: W.arred(custo, 2),
+    pct: preco > 0 ? Math.round((custo / preco) * 100) : null,
+    aviso: mesmoCiclo && !!a.teto_aviso_em,
+    pausado: mesmoCiclo && !!a.teto_pausado_em && !a.teto_liberado_em,
+    liberado: mesmoCiclo && !!a.teto_liberado_em,
+    liberado_por: mesmoCiclo ? a.teto_liberado_por_nome || null : null,
+  };
+}
+
+// Retoma o assistente pausado pelo teto de custo (vale até o fim do ciclo)
+router.post('/assinaturas/:id/retomar', onlyMaster, async (req, res) => {
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a || a.status !== 'ativa') return res.status(404).json({ error: 'Plano ativo não encontrado.' });
+    if (!(a.teto_ciclo === a.ciclo_inicio && a.teto_pausado_em && !a.teto_liberado_em)) {
+      return res.status(409).json({ error: 'O assistente desta loja não está pausado.' });
+    }
+    const { error } = await db.from('whatsapp_assinaturas')
+      .update({ teto_liberado_em: new Date().toISOString(), teto_liberado_por_nome: req.user.nome })
+      .eq('id', a.id).eq('status', 'ativa');
+    if (error) throw error;
+    auditarLoja(req, a.mercearia_id, 'whatsapp_teto_retomado', 'Retomou o assistente do WhatsApp pausado pelo teto de custo (até o fim do ciclo)', { assinatura_id: a.id });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[WHATSAPP] retomar:', err.message);
+    res.status(500).json({ error: 'Erro ao retomar o assistente.' });
   }
 });
 

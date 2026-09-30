@@ -87,15 +87,17 @@ async function parametros() {
   }
 }
 
-/* ── Envio de texto (dentro da janela de 24h) ───────────────── */
+/* ── Envio (dentro da janela de 24h) ────────────────────────── */
 // Registra toda tentativa em whatsapp_envios (inclusive as que falham).
 // tipo: 'resposta' | 'teste' | 'alerta' | 'cobranca_mensalidade'
-async function enviarTexto({ para, texto, tipo = 'resposta', mercearia_id = null, categoria = null, pedido_tipo = null, creditos = 0 }) {
+// pedido_id/pedido_tipo ligam as mensagens de um mesmo pedido (consulta…);
+// `creditos` é o que aquele envio debitou (só o envio final do pedido).
+async function enviar(conteudo, { para, tipo = 'resposta', mercearia_id = null, categoria = null, pedido_id = null, pedido_tipo = null, creditos = 0 }) {
   const destino = String(para || '').replace(/\D/g, '');
   const p = await parametros();
   const custo = tipo === 'alerta' || tipo === 'cobranca_mensalidade' ? p.meta.preco_utilidade : p.meta.preco_resposta;
   const base = {
-    mercearia_id, direcao: 'saida', tipo, categoria, pedido_tipo, destino,
+    mercearia_id, direcao: 'saida', tipo, categoria, pedido_id, pedido_tipo, destino,
     custo_meta_estimado: custo, creditos,
   };
   try {
@@ -103,20 +105,57 @@ async function enviarTexto({ para, texto, tipo = 'resposta', mercearia_id = null
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: destino,
-      type: 'text',
-      text: { body: String(texto).slice(0, 4096), preview_url: false },
+      ...conteudo,
     });
     const id = r.messages?.[0]?.id || null;
-    await db.from('whatsapp_envios').insert({ ...base, meta_message_id: id, status: 'enviado' });
-    return { ok: true, id };
+    const { data: reg } = await db.from('whatsapp_envios').insert({ ...base, meta_message_id: id, status: 'enviado' }).select('id').maybeSingle();
+    return { ok: true, id, envio_id: reg?.id || null };
   } catch (e) {
     await db.from('whatsapp_envios').insert({
-      ...base, custo_meta_estimado: 0, status: 'falhou',
+      ...base, custo_meta_estimado: 0, creditos: 0, status: 'falhou',
       erro_codigo: Number.isInteger(e.codigo) ? e.codigo : null,
       erro_mensagem: String(e.message || 'erro').slice(0, 300),
     }).then(() => {}, () => {});
     return { ok: false, erro: e.message, codigo: e.codigo, subcodigo: e.subcodigo, detalhe: e.detalhe };
   }
+}
+
+async function enviarTexto({ texto, ...opcoes }) {
+  return enviar({ type: 'text', text: { body: String(texto).slice(0, 4096), preview_url: false } }, opcoes);
+}
+
+// Mensagem interativa (lista ou botões). `interativo` segue o formato da
+// Cloud API ({ type: 'list' | 'button', body, action, ... }). Os limites
+// de tamanho da Meta são aplicados aqui pra nunca dar erro 100.
+const corta = (t, n) => { const s = String(t || ''); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
+function limparInterativo(i) {
+  const o = { type: i.type, body: { text: corta(i.body?.text, 1024) } };
+  if (i.header?.text) o.header = { type: 'text', text: corta(i.header.text, 60) };
+  if (i.footer?.text) o.footer = { text: corta(i.footer.text, 60) };
+  if (i.type === 'list') {
+    let total = 0;
+    o.action = {
+      button: corta(i.action.button, 20),
+      sections: (i.action.sections || []).slice(0, 10).map(sec => {
+        const rows = (sec.rows || []).slice(0, Math.max(0, 10 - total)).map(r => ({
+          id: String(r.id).slice(0, 200), title: corta(r.title, 24),
+          ...(r.description ? { description: corta(r.description, 72) } : {}),
+        }));
+        total += rows.length;
+        return { ...(sec.title ? { title: corta(sec.title, 24) } : {}), rows };
+      }).filter(sec => sec.rows.length),
+    };
+  } else {
+    o.action = {
+      buttons: (i.action.buttons || []).slice(0, 3).map(b => ({
+        type: 'reply', reply: { id: String(b.id).slice(0, 256), title: corta(b.title, 20) },
+      })),
+    };
+  }
+  return o;
+}
+async function enviarInterativo({ interativo, ...opcoes }) {
+  return enviar({ type: 'interactive', interactive: limparInterativo(interativo) }, opcoes);
 }
 
 /* ── Status do número e do webhook ──────────────────────────── */
@@ -165,7 +204,7 @@ function explicarErro(codigo) {
 }
 
 module.exports = {
-  PHONE_NUMBER_ID, WABA_ID, configuracao, graph, ErroMeta,
-  variantesTelefone, enviarTexto, statusNumero, appsAssinados, assinarWebhook,
+  PHONE_NUMBER_ID, WABA_ID, configuracao, graph, ErroMeta, parametros,
+  variantesTelefone, enviarTexto, enviarInterativo, limparInterativo, statusNumero, appsAssinados, assinarWebhook,
   assinaturaValida, verifyTokenConfere, explicarErro,
 };

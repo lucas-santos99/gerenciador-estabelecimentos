@@ -12,13 +12,16 @@
 // (HMAC-SHA256 do corpo com a chave secreta do app). Sem WHATSAPP_APP_SECRET
 // configurado, nada é aceito.
 //
-// Nesta fase o robô só faz três coisas:
+// O que o robô faz:
 //   1. confirma o número da loja quando chega o código de 6 dígitos
 //      (whatsapp_vinculos — o código foi gerado na tela WhatsApp da loja);
-//   2. responde um aviso curto para números já confirmados (o assistente
-//      com IA ainda não está ligado) — no máximo 1 vez a cada 12h por número;
+//   2. número já confirmado → assistente de consultas por menu
+//      (utils/whatsappAssistente.js, 30/09/2026). Enquanto o WhatsApp não
+//      está liberado para as lojas (integracao.ativo), responde só um aviso
+//      curto — no máximo 1 vez a cada 12h por número;
 //   3. responde quem não é cadastrado explicando como usar — no máximo
 //      1 vez a cada 7 dias por número.
+// Resposta de consulta que a Meta avisa como "falhou" devolve o crédito.
 // Tudo fica registrado em whatsapp_envios (custo estimado incluído).
 // Reenvio do mesmo aviso pela Meta é ignorado (meta_message_id é único).
 // ============================================================
@@ -29,6 +32,7 @@ const db = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 const A = require('../utils/whatsappAssinaturas');
 const M = require('../utils/whatsappMeta');
+const Assistente = require('../utils/whatsappAssistente');
 
 const MAX_TENTATIVAS = 5;
 const RANK = { enviado: 1, entregue: 2, lido: 3, falhou: 4 };
@@ -80,7 +84,7 @@ router.post('/', async (req, res) => {
 async function tratarStatus(st) {
   const novo = STATUS_META[st.status];
   if (!novo || !st.id) return;
-  const { data: atual } = await db.from('whatsapp_envios').select('id, status').eq('meta_message_id', st.id).maybeSingle();
+  const { data: atual } = await db.from('whatsapp_envios').select('id, status, pedido_id, creditos').eq('meta_message_id', st.id).maybeSingle();
   if (!atual) return;
   // Avisos podem chegar fora de ordem (ex.: "entregue" depois de "lido")
   if ((RANK[novo] || 0) <= (RANK[atual.status] || 0) && novo !== 'falhou') return;
@@ -91,6 +95,10 @@ async function tratarStatus(st) {
     erro_mensagem: erro ? String(erro.title || erro.message || '').slice(0, 300) : null,
     atualizado_em: new Date().toISOString(),
   }).eq('id', atual.id);
+  // Resposta paga que não chegou → devolve o crédito do pedido
+  if (novo === 'falhou' && atual.pedido_id && Number(atual.creditos) > 0) {
+    await Assistente.estornarPedido(atual.pedido_id, 'Resposta não entregue pelo WhatsApp — crédito devolvido');
+  }
 }
 
 /* ── Mensagens recebidas ───────────────────────────────────── */
@@ -127,8 +135,23 @@ async function tratarMensagem(msg, contato) {
     return;
   }
 
-  // 2) Número já confirmado → aviso curto (assistente ainda não ligado)
+  // 2) Número já confirmado → assistente de consultas (se liberado)
   if (ativos.length) {
+    const params = await M.parametros();
+    if (params.integracao.ativo) {
+      try {
+        await Assistente.atender({ msg, de, variantes, ativos, contato });
+      } catch (e) {
+        // A mensagem já foi registrada: um reenvio da Meta seria ignorado,
+        // então avisa aqui mesmo (sem gastar crédito).
+        console.error('[WHATSAPP] assistente:', e.message);
+        if (!(await respondeuRecente(variantes, 0.02, 'erro'))) {
+          await M.enviarTexto({ para: de, tipo: 'resposta', mercearia_id: lojaUnica, categoria: 'erro',
+            texto: 'Tive um problema para responder agora. Tente de novo em instantes. Nenhum crédito foi usado.' });
+        }
+      }
+      return;
+    }
     if (await respondeuRecente(variantes, 12, 'aviso_assistente')) return;
     const nomes = await nomesLojas(ativos.map(a => a.mercearia_id));
     const oi = ativos[0].apelido || contato?.profile?.name || '';

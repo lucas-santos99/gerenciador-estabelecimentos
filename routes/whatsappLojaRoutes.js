@@ -18,6 +18,7 @@
 //   POST   /pacotes                 → pede um pacote extra
 //   POST   /pacotes/:id/desistir    → desiste do pacote pendente
 //   POST   /vinculos                → cadastra número (gera código)
+//   PATCH  /vinculos/:id            → troca a pessoa ligada ao número
 //   POST   /vinculos/:id/codigo     → gera um código novo
 //   DELETE /vinculos/:id            → remove o número
 // ============================================================
@@ -73,9 +74,28 @@ async function ativaEmDia(mid) {
   return { ativa: a && a.status === 'ativa' ? a : null, pendente, tz };
 }
 
-function vinculoPublico(v) {
+// Pessoas da loja que podem ter um número (30/09/2026): o dono e os
+// operadores ativos. Cada número responde com as permissões da pessoa.
+async function pessoasDaLoja(mid) {
+  const [{ data: perfis }, { data: ops }] = await Promise.all([
+    db.from('profiles').select('id, nome, role, is_active').eq('mercearia_id', mid).in('role', ['merchant', 'operator']),
+    db.from('operadores').select('id, status').eq('mercearia_id', mid),
+  ]);
+  const statusOp = Object.fromEntries((ops || []).map(o => [o.id, o.status]));
+  return (perfis || [])
+    .filter(p => p.is_active !== false && (p.role === 'merchant' || statusOp[p.id] === 'ativo'))
+    .map(p => ({ id: p.id, nome: p.nome || (p.role === 'merchant' ? 'Dono' : 'Operador'), papel: p.role === 'merchant' ? 'Administrador' : 'Operador', dono: p.role === 'merchant' }))
+    .sort((a, b) => (b.dono - a.dono) || a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
+function vinculoPublico(v, pessoas = []) {
+  // Vínculo antigo sem pessoa = dono
+  const pessoa = v.usuario_id ? pessoas.find(p => p.id === v.usuario_id) : pessoas.find(p => p.dono);
   return {
     id: v.id, apelido: v.apelido, telefone: v.telefone, telefone_formatado: A.formatarTelefone(v.telefone),
+    usuario_id: pessoa ? pessoa.id : (v.usuario_id || null),
+    pessoa_nome: pessoa ? pessoa.nome : null, pessoa_papel: pessoa ? pessoa.papel : null,
+    pessoa_invalida: !pessoa,
     status: v.status, codigo_expira_em: v.codigo_expira_em, verificado_em: v.verificado_em, criado_em: v.criado_em,
     codigo_expirado: v.status === 'pendente' && (!v.codigo_expira_em || new Date(v.codigo_expira_em) < new Date()),
   };
@@ -89,7 +109,7 @@ router.get('/', async (req, res) => {
     // Primeiro põe o ciclo em dia (pode encerrar um plano cancelado),
     // depois lê o resto já com o estado atualizado.
     const abertas = await ativaEmDia(mid);
-    const [{ data: planos }, { data: vinc }, { data: pacs }, { data: recusa }] = await Promise.all([
+    const [{ data: planos }, { data: vinc }, { data: pacs }, { data: recusa }, pessoas] = await Promise.all([
       db.from('whatsapp_planos').select(CAMPOS_PLANO_PUBLICO).eq('ativo', true)
         .order('ordem', { ascending: true }).order('preco', { ascending: true }),
       db.from('whatsapp_vinculos').select('*').eq('mercearia_id', mid).neq('status', 'removido').order('criado_em', { ascending: true }),
@@ -97,6 +117,7 @@ router.get('/', async (req, res) => {
         .eq('mercearia_id', mid).order('criado_em', { ascending: false }).limit(20),
       db.from('whatsapp_assinaturas').select('id, plano_nome, status, motivo, encerrado_em')
         .eq('mercearia_id', mid).in('status', ['recusada', 'cancelada']).order('encerrado_em', { ascending: false }).limit(1),
+      pessoasDaLoja(mid),
     ]);
 
     let resumo = null;
@@ -113,10 +134,15 @@ router.get('/', async (req, res) => {
       planos: (planos || []).filter(x => x.tipo !== 'pacote'),
       pacotes: (planos || []).filter(x => x.tipo === 'pacote'),
       termos: A.TERMOS,
-      assinatura: abertas.ativa ? { ...abertas.ativa, ...resumo, hoje: hojeStrTZ(abertas.tz) } : null,
+      assinatura: abertas.ativa ? {
+        ...abertas.ativa, ...resumo, hoje: hojeStrTZ(abertas.tz),
+        // Assistente pausado pelo teto de custo neste ciclo (disjuntor)
+        pausado_teto: abertas.ativa.teto_ciclo === abertas.ativa.ciclo_inicio && !!abertas.ativa.teto_pausado_em && !abertas.ativa.teto_liberado_em,
+      } : null,
       pendente: abertas.pendente,
       pacotes_pedidos: pacs || [],
-      vinculos: (vinc || []).map(vinculoPublico),
+      vinculos: (vinc || []).map(v => vinculoPublico(v, pessoas)),
+      pessoas,
       limite_numeros: limite,
       ultima_encerrada: recente ? ultima : null,
     });
@@ -267,12 +293,15 @@ async function novoCodigo(vinculo) {
 
 router.post('/vinculos', async (req, res) => {
   const mid = req.user.mercearia_id;
-  const apelido = String(req.body?.apelido || '').trim();
   const telefone = A.normalizarTelefone(req.body?.telefone);
-  if (!apelido) return res.status(400).json({ error: 'Informe de quem é o número (ex.: Dono, Gerente).' });
-  if (apelido.length > 60) return res.status(400).json({ error: 'Nome muito longo (máx. 60).' });
+  const usuarioId = String(req.body?.usuario_id || '');
+  if (!UUID.test(usuarioId)) return res.status(400).json({ error: 'Escolha a pessoa que vai usar este número.' });
   if (!telefone) return res.status(400).json({ error: 'Telefone inválido. Use DDD + número, ex.: (53) 99123-4567.' });
   try {
+    const pessoas = await pessoasDaLoja(mid);
+    const pessoa = pessoas.find(p => p.id === usuarioId);
+    if (!pessoa) return res.status(400).json({ error: 'Pessoa não encontrada ou inativa nesta loja.' });
+    const apelido = (String(req.body?.apelido || '').trim() || pessoa.nome).slice(0, 60);
     const { ativa, pendente } = await ativaEmDia(mid);
     const plano = ativa || pendente;
     if (!plano) return res.status(400).json({ error: 'Contrate um plano antes de cadastrar números.' });
@@ -282,18 +311,41 @@ router.post('/vinculos', async (req, res) => {
       return res.status(409).json({ error: `Seu plano permite ${plano.numeros || 1} número${(plano.numeros || 1) === 1 ? '' : 's'}. Remova um ou troque de plano.` });
     }
     const { data: v, error } = await db.from('whatsapp_vinculos').insert({
-      mercearia_id: mid, telefone, apelido, status: 'pendente', criado_por_nome: req.user.nome,
+      mercearia_id: mid, telefone, apelido, usuario_id: pessoa.id, status: 'pendente', criado_por_nome: req.user.nome,
     }).select().single();
     if (error) {
       if (error.code === '23505') return res.status(409).json({ error: 'Esse número já está cadastrado.' });
       throw error;
     }
     const r = await novoCodigo(v);
-    auditar(req, 'whatsapp_numero_cadastrado', `Cadastrou o número ${A.formatarTelefone(telefone)} (${apelido}) no WhatsApp do sistema`, { vinculo_id: v.id });
-    res.status(201).json({ vinculo: vinculoPublico(r.vinculo), codigo: r.codigo });
+    auditar(req, 'whatsapp_numero_cadastrado', `Cadastrou o número ${A.formatarTelefone(telefone)} (${pessoa.nome} — ${pessoa.papel}) no WhatsApp do sistema`, { vinculo_id: v.id, usuario_id: pessoa.id });
+    res.status(201).json({ vinculo: vinculoPublico(r.vinculo, pessoas), codigo: r.codigo });
   } catch (err) {
     console.error('[WHATSAPP LOJA] vinculo:', err.message);
     res.status(500).json({ error: 'Erro ao cadastrar o número.' });
+  }
+});
+
+// Troca a pessoa ligada a um número (as permissões passam a ser as dela)
+router.patch('/vinculos/:id', async (req, res) => {
+  const mid = req.user.mercearia_id;
+  if (!UUID.test(req.params.id)) return res.status(400).json({ error: 'Número inválido.' });
+  const usuarioId = String(req.body?.usuario_id || '');
+  if (!UUID.test(usuarioId)) return res.status(400).json({ error: 'Escolha a pessoa.' });
+  try {
+    const pessoas = await pessoasDaLoja(mid);
+    const pessoa = pessoas.find(p => p.id === usuarioId);
+    if (!pessoa) return res.status(400).json({ error: 'Pessoa não encontrada ou inativa nesta loja.' });
+    const { data, error } = await db.from('whatsapp_vinculos')
+      .update({ usuario_id: pessoa.id, apelido: pessoa.nome.slice(0, 60) })
+      .eq('id', req.params.id).eq('mercearia_id', mid).neq('status', 'removido').select();
+    if (error) throw error;
+    if (!data || !data.length) return res.status(404).json({ error: 'Número não encontrado.' });
+    auditar(req, 'whatsapp_numero_pessoa', `Ligou o número ${A.formatarTelefone(data[0].telefone)} do WhatsApp a ${pessoa.nome} (${pessoa.papel})`, { vinculo_id: data[0].id, usuario_id: pessoa.id });
+    res.json({ vinculo: vinculoPublico(data[0], pessoas) });
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] pessoa do vinculo:', err.message);
+    res.status(500).json({ error: 'Erro ao salvar.' });
   }
 });
 
@@ -304,7 +356,7 @@ router.post('/vinculos/:id/codigo', async (req, res) => {
       .eq('id', req.params.id).eq('mercearia_id', req.user.mercearia_id).maybeSingle();
     if (!v || v.status !== 'pendente') return res.status(404).json({ error: 'Número não encontrado ou já confirmado.' });
     const r = await novoCodigo(v);
-    res.json({ vinculo: vinculoPublico(r.vinculo), codigo: r.codigo });
+    res.json({ vinculo: vinculoPublico(r.vinculo, await pessoasDaLoja(req.user.mercearia_id)), codigo: r.codigo });
   } catch (err) {
     console.error('[WHATSAPP LOJA] codigo:', err.message);
     res.status(500).json({ error: 'Erro ao gerar o código.' });
