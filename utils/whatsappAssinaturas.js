@@ -97,18 +97,29 @@ async function timezoneDaLoja(db, merceariaId) {
 // { saldo, entradas, usados } do ciclo `cicloInicio` da assinatura
 async function resumoCiclo(db, assinaturaId, cicloInicio) {
   const { data } = await db.from('whatsapp_creditos_mov')
-    .select('tipo, quantidade')
+    .select('tipo, quantidade, pedido_tipo')
     .eq('assinatura_id', assinaturaId).eq('ciclo_inicio', cicloInicio);
   let saldo = 0, entradas = 0, usados = 0;
+  // 30/09/2026: uso do ciclo por tipo de pedido (pergunta, PDF, alerta...),
+  // pra loja ver onde gastou. Estorno abate do tipo de pedido dele.
+  const porPedido = {};
   (data || []).forEach(m => {
     const q = Number(m.quantidade) || 0;
     saldo += q;
     if (q > 0 && m.tipo !== 'estorno') entradas += q;
     if (m.tipo === 'consumo') usados += -q;
     if (m.tipo === 'estorno') usados -= q;
+    if ((m.tipo === 'consumo' || m.tipo === 'estorno') && m.pedido_tipo) {
+      const p = porPedido[m.pedido_tipo] || (porPedido[m.pedido_tipo] = { pedidos: 0, creditos: 0 });
+      if (m.tipo === 'consumo') p.pedidos++; else p.pedidos = Math.max(0, p.pedidos - 1);
+      p.creditos += -q;
+    }
   });
   const r = (x) => Math.round(x * 100) / 100;
-  return { saldo: r(saldo), entradas: r(entradas), usados: r(Math.max(0, usados)) };
+  const por_pedido = Object.fromEntries(Object.entries(porPedido)
+    .map(([k, v]) => [k, { pedidos: v.pedidos, creditos: r(Math.max(0, v.creditos)) }])
+    .filter(([, v]) => v.pedidos > 0 || v.creditos > 0));
+  return { saldo: r(saldo), entradas: r(entradas), usados: r(Math.max(0, usados)), por_pedido };
 }
 
 async function lancar(db, mov) {
