@@ -247,6 +247,39 @@ async function franquiaDoMes(mesStr = null) {
   };
 }
 
+/* ── Custo total do mês × teto global (01/10/2026) ──────────── */
+// Mesma conta do "Total do número" da aba Uso do mês: Meta + IA de todas as
+// mensagens do mês − franquia grátis de respostas + chip. Usado pela
+// notificação do SuperAdmin (80% e acima do teto global).
+async function custoDoMes(mesStr = null) {
+  const p = await parametros();
+  const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE_PADRAO }).format(new Date());
+  const mes = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(mesStr || '')) ? mesStr : hoje.slice(0, 7);
+  const [a, m] = mes.split('-').map(Number);
+  const proximo = m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, '0')}`;
+  const ini = inicioDiaTZ(`${mes}-01`, TIMEZONE_PADRAO).toISOString();
+  const fim = inicioDiaTZ(`${proximo}-01`, TIMEZONE_PADRAO).toISOString();
+  let custo = 0, respostas = 0;
+  for (let de = 0; de < 100000; de += 1000) {
+    const { data, error } = await db.from('whatsapp_envios')
+      .select('direcao, tipo, status, custo_meta_estimado, custo_ia_estimado')
+      .gte('criado_em', ini).lt('criado_em', fim).order('id', { ascending: true }).range(de, de + 999);
+    if (error) throw new Error(error.message);
+    (data || []).forEach(l => {
+      custo += (Number(l.custo_meta_estimado) || 0) + (Number(l.custo_ia_estimado) || 0);
+      if (l.direcao === 'saida' && l.tipo === 'resposta' && l.status !== 'falhou') respostas++;
+    });
+    if (!data || data.length < 1000) break;
+  }
+  const gratis = Math.min(respostas, p.meta.respostas_gratis_mes) * p.meta.preco_resposta;
+  const total = Math.max(0, custo - gratis) + p.custos_fixos.chip_mensal;
+  const teto = p.teto_global.mensal_reais;
+  return {
+    mes, total: Math.round(total * 100) / 100, teto,
+    pct: teto > 0 ? Math.round((total / teto) * 100) : null,
+  };
+}
+
 /* ── Status do número e do webhook ──────────────────────────── */
 async function statusNumero() {
   return graph('GET', `${PHONE_NUMBER_ID}?fields=verified_name,display_phone_number,quality_rating,name_status,code_verification_status,platform_type,throughput,status,messaging_limit_tier`);
@@ -295,5 +328,5 @@ function explicarErro(codigo) {
 module.exports = {
   PHONE_NUMBER_ID, WABA_ID, configuracao, graph, ErroMeta, parametros,
   variantesTelefone, enviarTexto, enviarInterativo, enviarDocumento, subirMidia, limparInterativo, statusNumero, appsAssinados, assinarWebhook,
-  assinaturaValida, verifyTokenConfere, explicarErro, franquiaDoMes,
+  assinaturaValida, verifyTokenConfere, explicarErro, franquiaDoMes, custoDoMes,
 };

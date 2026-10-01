@@ -220,7 +220,8 @@ async function custoDoCiclo(mid, a, tz) {
 // Devolve { pausado } e, se cruzou um limite agora, registra.
 async function verificarTeto(ctx) {
   const a = ctx.assinatura;
-  const preco = Number(a.preco) || 0;
+  // (01/10) Compara com a mensalidade inteira (plano + números extras)
+  const preco = A.valorMensal(a);
   if (preco <= 0) return { pausado: false };
   const mesmoCiclo = a.teto_ciclo === a.ciclo_inicio;
   const liberado = mesmoCiclo && !!a.teto_liberado_em;
@@ -231,7 +232,7 @@ async function verificarTeto(ctx) {
   const { aviso_pct, acao_pct, acao } = ctx.params.teto_loja;
   const agora = new Date().toISOString();
   const reinicio = mesmoCiclo ? {} : { teto_ciclo: a.ciclo_inicio, teto_aviso_em: null, teto_pausado_em: null, teto_liberado_em: null, teto_liberado_por_nome: null };
-  const desc = `custo do ciclo R$ ${custo.toFixed(2)} = ${pct.toFixed(0)}% do plano (R$ ${preco.toFixed(2)})`;
+  const desc = `custo do ciclo R$ ${custo.toFixed(2)} = ${pct.toFixed(0)}% da mensalidade (R$ ${preco.toFixed(2)})`;
 
   if (pct >= acao_pct && !liberado && acao === 'pausar') {
     await db.from('whatsapp_assinaturas').update({ ...reinicio, teto_pausado_em: agora, teto_aviso_em: (mesmoCiclo && a.teto_aviso_em) || agora })

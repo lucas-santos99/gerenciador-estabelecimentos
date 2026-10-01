@@ -18,6 +18,7 @@
 //   GET    /historico                 → alterações de planos e parâmetros
 //   POST   /simular                   → simulador (Meta +X%, dólar, custo IA)
 //   GET    /uso?mes=YYYY-MM           → consumo e custo do mês (whatsapp_envios)
+//   GET    /uso/lojas?mes=YYYY-MM     → por loja: créditos do ciclo + receita/custo/lucro do mês (01/10)
 //   GET    /lojas                     → lista enxuta de estabelecimentos
 //   POST   /dolar/atualizar           → busca a cotação do dólar agora
 //   GET    /assinaturas               → planos contratados pelas lojas (29/09)
@@ -540,6 +541,155 @@ router.get('/uso', async (req, res) => {
   }
 });
 
+/* ── Uso do mês → por loja: créditos do ciclo + resultado no mês (01/10) ──
+   Uma linha por loja com plano ativo (ou que teve uso/receita no mês):
+     • créditos do CICLO ATUAL (entraram, usados, saldo, quando vencem,
+       ritmo e previsão de acabar antes da renovação);
+     • resultado do MÊS escolhido: receita (ciclos iniciados no mês ×
+       mensalidade com extras + pacotes aprovados no mês), custo real das
+       mensagens dela (Meta + IA, sem a franquia grátis — conservador),
+       impostos + taxa do pagamento (% dos parâmetros) e o lucro estimado.
+   O chip e a franquia grátis são do número inteiro: aparecem só no total. */
+const diasEntreDatas = (de, ate) => Math.round((Date.parse(`${ate}T12:00:00Z`) - Date.parse(`${de}T12:00:00Z`)) / 86400000);
+
+router.get('/uso/lojas', async (req, res) => {
+  try {
+    const hojeBR = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE_PADRAO }).format(new Date());
+    const mesStr = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(req.query.mes || '')) ? req.query.mes : hojeBR.slice(0, 7);
+    const [ano, m] = mesStr.split('-').map(Number);
+    const proximo = m === 12 ? `${ano + 1}-01` : `${ano}-${String(m + 1).padStart(2, '0')}`;
+    const ultimoDia = `${mesStr}-${String(new Date(Date.UTC(ano, m, 0)).getUTCDate()).padStart(2, '0')}`;
+    const ini = inicioDiaTZ(`${mesStr}-01`, TIMEZONE_PADRAO).toISOString();
+    const fim = inicioDiaTZ(`${proximo}-01`, TIMEZONE_PADRAO).toISOString();
+    const p = await carregarParametros();
+    const pctDescontos = (p.precificacao.impostos_pct + p.precificacao.taxa_gateway_pct) / 100;
+
+    // 1) Custo e mensagens do mês por loja (sem o "seu uso": cobrança e testes)
+    const custo = {};
+    for (let de = 0; de < 100000; de += 1000) {
+      const { data, error } = await db.from('whatsapp_envios')
+        .select('mercearia_id, direcao, tipo, custo_meta_estimado, custo_ia_estimado, creditos')
+        .gte('criado_em', ini).lt('criado_em', fim).not('mercearia_id', 'is', null)
+        .order('id', { ascending: true }).range(de, de + 999);
+      if (error) throw error;
+      (data || []).forEach(l => {
+        if (l.tipo === 'cobranca_mensalidade' || l.tipo === 'teste') return;
+        const c = custo[l.mercearia_id] || (custo[l.mercearia_id] = { mensagens: 0, enviadas: 0, meta: 0, ia: 0, creditos: 0 });
+        c.mensagens++;
+        if (l.direcao === 'saida') c.enviadas++;
+        c.meta += Number(l.custo_meta_estimado) || 0;
+        c.ia += Number(l.custo_ia_estimado) || 0;
+        c.creditos += Number(l.creditos) || 0;
+      });
+      if (!data || data.length < 1000) break;
+    }
+
+    // 2) Receita do mês por loja (mesma regra do card "Receita dos planos")
+    const [{ data: ciclos }, { data: pacs }] = await Promise.all([
+      db.from('whatsapp_creditos_mov').select('assinatura_id, mercearia_id')
+        .eq('tipo', 'credito_ciclo').gte('ciclo_inicio', `${mesStr}-01`).lte('ciclo_inicio', ultimoDia).limit(5000),
+      db.from('whatsapp_pacotes_compras').select('mercearia_id, preco').eq('status', 'aprovado')
+        .gte('resolvido_em', ini).lt('resolvido_em', fim).limit(5000),
+    ]);
+
+    // 3) Assinaturas: as ativas + as que geraram receita no mês
+    const idsCiclo = [...new Set((ciclos || []).map(c => c.assinatura_id))];
+    const [{ data: ativas, error: eA }, { data: doMes }] = await Promise.all([
+      db.from('whatsapp_assinaturas').select('*').eq('status', 'ativa'),
+      idsCiclo.length ? db.from('whatsapp_assinaturas').select('*').in('id', idsCiclo) : Promise.resolve({ data: [] }),
+    ]);
+    if (eA) throw eA;
+    const assPorId = {};
+    [...(doMes || []), ...(ativas || [])].forEach(a => { assPorId[a.id] = a; });
+
+    const receita = {};
+    const somaRec = (mid, campo, v) => {
+      const r = receita[mid] || (receita[mid] = { planos: 0, pacotes: 0, ciclos: 0 });
+      r[campo] += v; if (campo === 'planos') r.ciclos++;
+    };
+    (ciclos || []).forEach(c => { const a = assPorId[c.assinatura_id]; if (a) somaRec(a.mercearia_id, 'planos', A.valorMensal(a)); });
+    (pacs || []).forEach(x => somaRec(x.mercearia_id, 'pacotes', Number(x.preco) || 0));
+
+    const ids = [...new Set([...(ativas || []).map(a => a.mercearia_id), ...Object.keys(custo), ...Object.keys(receita)])];
+    const lojas = {};
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data: ms } = await db.from('mercearias').select('id, nome_fantasia, tipo_estabelecimento, timezone, status_assinatura').in('id', ids.slice(i, i + 200));
+      (ms || []).forEach(x => { lojas[x.id] = x; });
+    }
+
+    const ativaDa = {};
+    (ativas || []).forEach(a => { ativaDa[a.mercearia_id] = a; });
+    const r2 = (v) => W.arred(v, 2);
+    const linhas = [];
+    for (const mid of ids) {
+      const loja = lojas[mid] || {};
+      const tz = loja.timezone || TIMEZONE_PADRAO;
+      let a = ativaDa[mid] || null;
+      let cred = null;
+      if (a) {
+        a = await A.garantirCiclo(db, a, hojeStrTZ(tz));
+        if (a && a.status === 'ativa') {
+          const rc = await A.resumoCiclo(db, a.id, a.ciclo_inicio);
+          const hoje = hojeStrTZ(tz);
+          const diasCorridos = Math.max(1, diasEntreDatas(a.ciclo_inicio, hoje) + 1);
+          const diasCiclo = Math.max(1, diasEntreDatas(a.ciclo_inicio, a.ciclo_fim) + 1);
+          const vencemEm = diasEntreDatas(hoje, a.ciclo_fim);
+          const ritmo = rc.usados / diasCorridos;
+          const diasAteAcabar = ritmo > 0 ? rc.saldo / ritmo : null;
+          cred = {
+            plano: a.plano_nome, valor_mensal: A.valorMensal(a), numeros_extras: Number(a.numeros_extras) || 0,
+            ciclo_inicio: a.ciclo_inicio, ciclo_fim: a.ciclo_fim, vencem_em_dias: vencemEm, dias_ciclo: diasCiclo,
+            entradas: rc.entradas, usados: rc.usados, saldo: rc.saldo,
+            pct_usado: rc.entradas > 0 ? Math.round((rc.usados / rc.entradas) * 100) : 0,
+            ritmo_dia: r2(ritmo),
+            acaba_antes: diasAteAcabar !== null && vencemEm !== null && diasAteAcabar < vencemEm + 1,
+            acaba_em_dias: diasAteAcabar !== null ? Math.floor(diasAteAcabar) : null,
+            pausado: a.teto_ciclo === a.ciclo_inicio && !!a.teto_pausado_em && !a.teto_liberado_em,
+            cancelar_no_fim: !!a.cancelar_no_fim,
+          };
+        } else a = null;
+      }
+      const c = custo[mid] || { mensagens: 0, enviadas: 0, meta: 0, ia: 0, creditos: 0 };
+      const rc = receita[mid] || { planos: 0, pacotes: 0, ciclos: 0 };
+      const rec = rc.planos + rc.pacotes;
+      const custoTotal = c.meta + c.ia;
+      const descontos = rec * pctDescontos;
+      linhas.push({
+        mercearia_id: mid,
+        nome: loja.nome_fantasia || 'Estabelecimento',
+        tipo_estabelecimento: loja.tipo_estabelecimento || null,
+        licenca: loja.status_assinatura || null,
+        situacao: cred ? (cred.pausado ? 'pausado' : 'ativo') : 'sem_plano',
+        creditos: cred,
+        mes: {
+          mensagens: c.mensagens, enviadas: c.enviadas, creditos_usados: r2(c.creditos),
+          receita: r2(rec), receita_planos: r2(rc.planos), receita_pacotes: r2(rc.pacotes), ciclos: rc.ciclos,
+          custo: r2(custoTotal), custo_meta: r2(c.meta), custo_ia: r2(c.ia),
+          impostos_taxas: r2(descontos), lucro: r2(rec - descontos - custoTotal),
+          margem_pct: rec > 0 ? Math.round(((rec - descontos - custoTotal) / rec) * 100) : null,
+        },
+      });
+    }
+    linhas.sort((x, y) => x.nome.localeCompare(y.nome, 'pt-BR'));
+
+    const tot = linhas.reduce((t, l) => ({
+      receita: t.receita + l.mes.receita, custo: t.custo + l.mes.custo,
+      impostos_taxas: t.impostos_taxas + l.mes.impostos_taxas, lucro: t.lucro + l.mes.lucro,
+    }), { receita: 0, custo: 0, impostos_taxas: 0, lucro: 0 });
+    const tipos = [...new Set(linhas.map(l => l.tipo_estabelecimento).filter(Boolean))].sort((a1, b1) => a1.localeCompare(b1, 'pt-BR'));
+
+    res.json({
+      mes: mesStr, mes_atual: mesStr === hojeBR.slice(0, 7),
+      impostos_taxas_pct: W.arred(pctDescontos * 100, 2),
+      lojas: linhas, tipos, planos: [...new Set(linhas.map(l => l.creditos?.plano).filter(Boolean))],
+      totais: { receita: r2(tot.receita), custo: r2(tot.custo), impostos_taxas: r2(tot.impostos_taxas), lucro: r2(tot.lucro) },
+    });
+  } catch (err) {
+    console.error('[WHATSAPP] GET uso/lojas:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar o uso por loja.' });
+  }
+});
+
 /* ── Lista enxuta de lojas (pra desligar a cobrança automática por loja) ── */
 router.get('/lojas', async (req, res) => {
   try {
@@ -707,7 +857,7 @@ async function situacaoTeto(a, tz) {
   const mesmoCiclo = a.teto_ciclo === a.ciclo_inicio;
   let custo = 0;
   try { custo = await Assistente.custoDoCiclo(a.mercearia_id, a, tz); } catch { custo = 0; }
-  const preco = Number(a.preco) || 0;
+  const preco = A.valorMensal(a); // (01/10) plano + números extras
   return {
     custo: W.arred(custo, 2),
     pct: preco > 0 ? Math.round((custo / preco) * 100) : null,

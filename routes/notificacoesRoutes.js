@@ -74,7 +74,7 @@ const CATEGORIAS_ADMIN = [
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: true } },
   { id: 'solicitacoes', label: 'Solicitações',        icone: '✉️', descricao: 'Solicitações de alteração esperando resposta.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
-  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar, lojas que passaram do teto de custo e a franquia grátis da Meta (80% e esgotada).',
+  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar, lojas que passaram do teto de custo, a franquia grátis da Meta (80% e esgotada) e o teto global do mês (80% e acima).',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
   { id: 'cadastros',    label: 'Novos cadastros',     icone: '🏪', descricao: 'Avisa quando um estabelecimento novo é cadastrado no sistema (pra conferir os dados, dar boas-vindas, acompanhar o 1º pagamento).',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: false } },
@@ -638,6 +638,27 @@ async function avisosAdmin(user, prefs, ctx) {
           });
         }
       } catch (e) { console.error('[notificacoes] franquia whatsapp:', e.message); }
+
+      // (01/10) Teto global do mês (custo total do número: lojas + seu uso + chip)
+      try {
+        const g = await require('../utils/whatsappMeta').custoDoMes();
+        if (g.teto > 0 && g.pct >= 80) {
+          const passou = g.total > g.teto;
+          itens.push({
+            chave: `adm_whatsapp_teto_global:${g.mes}:${passou ? 'passou' : '80'}`,
+            categoria: 'whatsapp', tipo: passou ? 'whatsapp_teto_global_passou' : 'whatsapp_teto_global_perto',
+            titulo: passou
+              ? `WhatsApp passou do teto global do mês: ${brl(g.total)} de ${brl(g.teto)}`
+              : `WhatsApp chegou a ${g.pct}% do teto global do mês`,
+            descricao: passou
+              ? 'O custo estimado do número (lojas + seu uso + chip) passou do teto que você definiu. Nada foi pausado: confira a aba Uso do mês e, se precisar, ajuste o teto ou os planos.'
+              : `Custo estimado do número no mês: ${brl(g.total)} de ${brl(g.teto)}. Acompanhe na aba Uso do mês.`,
+            grupo: 'hoje', prioridade: passou ? 'alta' : 'media',
+            data_ref: null, meta: { mes: g.mes, total: g.total, teto: g.teto },
+            acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=uso' },
+          });
+        }
+      } catch (e) { console.error('[notificacoes] teto global whatsapp:', e.message); }
 
       const todos = [...(ass || []), ...(pacs || []), ...tetoAtual, ...(extras || [])];
       if (!todos.length) return;
