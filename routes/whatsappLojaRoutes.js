@@ -11,6 +11,7 @@
 //
 //   GET    /                        → tudo que a tela precisa
 //   POST   /assinar                 → solicita um plano (ou troca)
+//   POST   /aceitar-termos          → aceita a versão nova dos termos (plano ativo)
 //   POST   /desistir                → desiste da solicitação pendente
 //   POST   /cancelar                → cancela ao fim do ciclo
 //   POST   /manter                  → desfaz o cancelamento
@@ -131,6 +132,7 @@ router.get('/', async (req, res) => {
     res.json({
       servico: { ativo: p.integracao.ativo },
       pesos: p.pesos,
+      conversa_gratis_dia: p.travas.conversa_gratis_dia,
       planos: (planos || []).filter(x => x.tipo !== 'pacote'),
       pacotes: (planos || []).filter(x => x.tipo === 'pacote'),
       termos: A.TERMOS,
@@ -138,6 +140,8 @@ router.get('/', async (req, res) => {
         ...abertas.ativa, ...resumo, hoje: hojeStrTZ(abertas.tz),
         // Assistente pausado pelo teto de custo neste ciclo (disjuntor)
         pausado_teto: abertas.ativa.teto_ciclo === abertas.ativa.ciclo_inicio && !!abertas.ativa.teto_pausado_em && !abertas.ativa.teto_liberado_em,
+        // Plano ativo com aceite de uma versão antiga dos termos (01/10/2026)
+        termos_pendentes: abertas.ativa.termos_versao !== A.TERMOS.versao,
       } : null,
       pendente: abertas.pendente,
       pacotes_pedidos: pacs || [],
@@ -149,6 +153,28 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[WHATSAPP LOJA] GET:', err.message);
     res.status(500).json({ error: 'Erro ao carregar o WhatsApp.' });
+  }
+});
+
+/* ── Aceitar a versão nova dos termos (plano já ativo) — 01/10/2026 ── */
+router.post('/aceitar-termos', async (req, res) => {
+  const b = req.body || {};
+  if (b.aceite !== true) return res.status(400).json({ error: 'É preciso ler e aceitar os termos.' });
+  if (b.termos_versao !== A.TERMOS.versao) {
+    return res.status(409).json({ error: 'Os termos foram atualizados de novo. Recarregue a tela e leia a versão nova.', codigo: 'TERMOS_DESATUALIZADOS' });
+  }
+  try {
+    const { ativa } = await assinaturasAbertas(req.user.mercearia_id);
+    if (!ativa) return res.status(404).json({ error: 'Nenhum plano ativo.' });
+    const { error } = await db.from('whatsapp_assinaturas')
+      .update({ termos_versao: A.TERMOS.versao, termos_aceitos_em: new Date().toISOString(), atualizado_em: new Date().toISOString() })
+      .eq('id', ativa.id).eq('status', 'ativa');
+    if (error) throw error;
+    auditar(req, 'whatsapp_termos_aceitos', `Aceitou a versão ${A.TERMOS.versao} dos termos do WhatsApp (plano "${ativa.plano_nome}")`, { assinatura_id: ativa.id });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] aceitar termos:', err.message);
+    res.status(500).json({ error: 'Erro ao registrar o aceite.' });
   }
 });
 

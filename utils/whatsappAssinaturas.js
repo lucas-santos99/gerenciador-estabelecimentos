@@ -20,8 +20,12 @@ const crypto = require('crypto');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('./fusoHorario');
 
 /* ── Termos (mudou o texto → mudar a versão; o aceite registra a versão) ── */
+// 01/10/2026: entrou a regra das "mensagens sem consulta" (respostas a oi,
+// ok, obrigado, menu…), que só vale pra loja que aceitou esta versão.
+const TERMOS_VERSAO_CONVERSA = '2026-10-01';
 const TERMOS = Object.freeze({
-  versao: '2026-09-29',
+  versao: '2026-10-01',
+  novidades: 'Respostas do assistente a mensagens que não pedem dados (como “oi”, “ok”, “obrigado” ou pedir o menu de novo) passam a gastar crédito depois de algumas grátis por dia. As respostas mostram sempre o saldo que sobrou.',
   titulo: 'Termos do serviço de WhatsApp',
   secoes: [
     { t: 'O que é', p: [
@@ -30,7 +34,9 @@ const TERMOS = Object.freeze({
     ] },
     { t: 'Créditos', p: [
       'Cada plano dá um saldo de créditos por ciclo mensal. Cada pedido completo gasta créditos conforme o tipo (tabela mostrada antes da contratação). Confirmações, PIN e até 3 correções dentro do mesmo pedido não gastam de novo.',
-      'Mensagens que você envia não gastam crédito. Pedido que dá erro ou mensagem que não é entregue também não.',
+      'Mensagens que você envia não gastam crédito; o que gasta é a resposta do assistente. Pedido que dá erro ou mensagem que não é entregue também não gasta.',
+      'Respostas a mensagens que não pedem dados (como “oi”, “ok”, “obrigado”, pedir o menu de novo ou algo que o assistente não entendeu) são grátis até um limite por dia, por número; depois disso, cada uma gasta a quantidade de créditos mostrada na tabela de créditos. Ver o saldo, “produto não encontrado” e “sem permissão” não gastam.',
+      'Cada resposta mostra quantos créditos usou e o saldo que sobrou.',
       'Créditos que sobram no fim do ciclo não passam para o ciclo seguinte.',
     ] },
     { t: 'Quando o saldo acaba', p: [
@@ -208,7 +214,7 @@ async function encerrarAgora(db, assinatura, autorNome, motivo) {
 }
 
 module.exports = {
-  TERMOS, CODIGO_VALIDADE_HORAS,
+  TERMOS, TERMOS_VERSAO_CONVERSA, CODIGO_VALIDADE_HORAS,
   somarDias, fimDoCiclo, normalizarTelefone, formatarTelefone, gerarCodigo, hashCodigo,
   timezoneDaLoja, resumoCiclo, lancar, garantirCiclo, ativar, encerrarAgora,
 };

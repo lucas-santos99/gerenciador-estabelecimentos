@@ -209,7 +209,9 @@ async function confirmarCodigo(codigo, pendentes, de) {
     });
     await M.enviarTexto({
       para: de, tipo: 'resposta', mercearia_id: valido.mercearia_id, categoria: 'vinculo',
-      texto: `✅ Pronto, ${valido.apelido}! Este número foi confirmado para usar o WhatsApp de ${loja}.`,
+      texto: `✅ Pronto, ${valido.apelido}! Este número foi confirmado para usar o WhatsApp de ${loja}.\n\n` +
+        'Para consultar, pergunte direto o que você quer, por exemplo: *vendas hoje*, *estoque coca* ou *fiado* — a resposta já vem na hora. ' +
+        'Para ver todas as opções, escreva *menu*.',
     });
     return;
   }

@@ -35,13 +35,14 @@ const PARAMS_PADRAO = Object.freeze({
     dolar_folga_pct: 4,           // folga sobre a cotação (spread do cartão internacional)
     iof_pct: 3.5,                 // IOF sobre cartão internacional — conferir
   },
-  pesos: { consulta: 1, pdf: 1, cadastro: 2, foto: 4, alerta: 0.5 },
+  pesos: { consulta: 1, pdf: 1, cadastro: 2, foto: 4, alerta: 0.5, conversa: 0.5 },
   travas: {
     envios:         { consulta: 2, pdf: 2, cadastro: 5, foto: 8, alerta: 1 },
     interpretacoes: { consulta: 2, pdf: 1, cadastro: 4, foto: 4, alerta: 0 },
     correcoes_max: 3,
     pedidos_por_minuto: 5,
     pedidos_por_dia: 200,
+    conversa_gratis_dia: 2,   // respostas a "oi/ok/obrigado/menu" grátis por número por dia; depois gastam pesos.conversa (01/10/2026)
   },
   precificacao: { impostos_pct: 6, taxa_gateway_pct: 5, margem_seguranca: 1.3, margem_minima_pct: 20 },
   teto_loja: { aviso_pct: 50, acao_pct: 70, acao: 'pausar' },
@@ -107,6 +108,9 @@ function normalizarParametros(entrada) {
 
   const pe = g('pesos');
   TIPOS_PEDIDO.forEach(t => { p.pesos[t] = num(pe[t], 0.1, 100, p.pesos[t]); });
+  // Conversa sem consulta (01/10/2026): não é um "pedido" com dados, fica fora
+  // do pior caso — 1 envio por resposta, sempre abaixo do custo da consulta.
+  p.pesos.conversa = num(pe.conversa, 0.1, 100, p.pesos.conversa);
 
   const tr = g('travas');
   const env = tr.envios && typeof tr.envios === 'object' ? tr.envios : {};
@@ -118,6 +122,7 @@ function normalizarParametros(entrada) {
   p.travas.correcoes_max      = inteiro(tr.correcoes_max, 0, 10, p.travas.correcoes_max);
   p.travas.pedidos_por_minuto = inteiro(tr.pedidos_por_minuto, 1, 60, p.travas.pedidos_por_minuto);
   p.travas.pedidos_por_dia    = inteiro(tr.pedidos_por_dia, 1, 5000, p.travas.pedidos_por_dia);
+  p.travas.conversa_gratis_dia = inteiro(tr.conversa_gratis_dia, 0, 50, p.travas.conversa_gratis_dia);
 
   const pr = g('precificacao');
   p.precificacao.impostos_pct      = num(pr.impostos_pct, 0, 60, p.precificacao.impostos_pct);

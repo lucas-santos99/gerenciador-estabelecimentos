@@ -18,6 +18,11 @@
 //     RESPOSTA com dados gasta crédito (peso "consulta", editável no
 //     SuperAdmin). Menu, instruções, "não achei", "sem permissão", saldo e
 //     erros não gastam.
+//   • (01/10) Respostas a "oi", "ok", "obrigado", menu de novo ou texto não
+//     entendido: grátis até `travas.conversa_gratis_dia` por dia/número; depois
+//     gastam `pesos.conversa` (pedido_tipo 'conversa', SQL 16) — só pra loja
+//     que aceitou os termos versão TERMOS_VERSAO_CONVERSA. Toda resposta mostra
+//     o saldo que sobrou (sem horário — o WhatsApp já mostra a hora).
 //   • Débito atômico e único por pedido (função whatsapp_consumir_creditos,
 //     SQL 15). Mensagem que a Meta avisa como "falhou" devolve o crédito.
 //   • Travas: pedidos por minuto (por número) e por dia (por loja).
@@ -40,17 +45,35 @@ const MIN = 1 / 60; // 1 minuto, em horas (para respondeuRecente)
 /* ── Catálogo de consultas ──────────────────────────────────── */
 const tem = (pessoa, ...ps) => pessoa.dono || ps.some(p => pessoa.permissoes.includes(p));
 const podeVendas = (x) => tem(x, 'financeiro', 'relatorios');
+// `atalho`: o que escrever pra pedir direto, sem passar pelo menu (01/10)
+// `botao`: rótulo curto (até 20) dos botões de resposta rápida
 const CONSULTAS = {
-  vendas_hoje:     { titulo: 'Vendas de hoje',      desc: 'Total, quantidade e formas de pagamento', pode: podeVendas },
-  vendas_ontem:    { titulo: 'Vendas de ontem',     desc: 'Total do dia anterior',                  pode: podeVendas },
-  vendas_7d:       { titulo: 'Vendas 7 dias',       desc: 'Últimos 7 dias, com o melhor dia',        pode: podeVendas },
-  vendas_mes:      { titulo: 'Vendas do mês',       desc: 'Do dia 1º até hoje',                      pode: podeVendas },
-  estoque_produto: { titulo: 'Estoque de produto',  desc: 'Você escreve o nome ou o código',         pode: (x) => tem(x, 'estoque', 'pdv') },
-  estoque_baixo:   { titulo: 'Estoque baixo',       desc: 'Sem estoque e abaixo do mínimo',          pode: (x) => tem(x, 'estoque') },
-  fiado:           { titulo: 'Quem deve (fiado)',   desc: 'Total em aberto e maiores dívidas',       pode: (x) => tem(x, 'clientes') },
-  contas:          { titulo: 'Contas a pagar',      desc: 'Atrasadas e próximos 7 dias',             pode: (x) => tem(x, 'financeiro', 'financeiro_contas_pagar', 'fornecedores') },
-  saldo:           { titulo: 'Meus créditos',       desc: 'Saldo do WhatsApp (não gasta crédito)',   pode: () => true, gratis: true },
+  vendas_hoje:     { titulo: 'Vendas de hoje',      atalho: 'vendas hoje',   botao: 'Vendas de hoje',  pode: podeVendas },
+  vendas_ontem:    { titulo: 'Vendas de ontem',     atalho: 'vendas ontem',  botao: 'Vendas de ontem', pode: podeVendas },
+  vendas_7d:       { titulo: 'Vendas 7 dias',       atalho: 'vendas semana', botao: 'Vendas 7 dias',   pode: podeVendas },
+  vendas_mes:      { titulo: 'Vendas do mês',       atalho: 'vendas mês',    botao: 'Vendas do mês',   pode: podeVendas },
+  estoque_produto: { titulo: 'Estoque de produto',  atalho: 'estoque coca',  botao: 'Estoque produto', pode: (x) => tem(x, 'estoque', 'pdv'), dicaAtalho: 'estoque + nome do produto' },
+  estoque_baixo:   { titulo: 'Estoque baixo',       atalho: 'estoque baixo', botao: 'Estoque baixo',   pode: (x) => tem(x, 'estoque') },
+  fiado:           { titulo: 'Quem deve (fiado)',   atalho: 'fiado',         botao: 'Quem deve',       pode: (x) => tem(x, 'clientes') },
+  contas:          { titulo: 'Contas a pagar',      atalho: 'contas',        botao: 'Contas a pagar',  pode: (x) => tem(x, 'financeiro', 'financeiro_contas_pagar', 'fornecedores') },
+  saldo:           { titulo: 'Meus créditos',       atalho: 'saldo',         botao: 'Meus créditos',   pode: () => true, gratis: true },
 };
+// Ordem de preferência dos botões rápidos que vão junto com cada resposta
+const ORDEM_BOTOES = ['vendas_hoje', 'estoque_baixo', 'fiado', 'contas', 'vendas_ontem', 'vendas_mes', 'saldo'];
+
+// "Dica: peça direto — "vendas ontem", "fiado", "estoque coca"" (só o que a pessoa pode)
+function dicaAtalhos(pessoa, exceto = null, max = 3) {
+  const lista = ['vendas_ontem', 'fiado', 'estoque_produto', 'vendas_hoje', 'contas', 'estoque_baixo']
+    .filter(k => k !== exceto && CONSULTAS[k].pode(pessoa)).slice(0, max)
+    .map(k => `"${CONSULTAS[k].atalho}"`);
+  return lista.length ? `Dica: peça direto, sem o menu — ${lista.join(', ')}` : '';
+}
+function botoesRapidos(pessoa, atual) {
+  const bs = ORDEM_BOTOES.filter(k => k !== atual && CONSULTAS[k].pode(pessoa)).slice(0, 2)
+    .map(k => ({ id: `c:${k}`, title: CONSULTAS[k].botao }));
+  bs.push({ id: 'c:menu', title: 'Menu' });
+  return bs;
+}
 
 /* ── Leitura da mensagem ────────────────────────────────────── */
 function lerEntrada(msg) {
@@ -66,8 +89,10 @@ function lerEntrada(msg) {
 // Texto livre → comando. null = não reconheceu.
 function interpretar(texto) {
   const t = C.normalizar(texto);
-  if (!t) return { acao: 'menu' };
-  if (/^(menu|inicio|opcoes|opcao|ajuda|help|oi+|ola|opa|e ai|eai|bom dia|boa tarde|boa noite|voltar|0)$/.test(t)) return { acao: 'menu' };
+  if (!t) return { acao: 'agradecimento' }; // só emoji (👍, 🙏…)
+  if (/^(menu|inicio|opcoes|opcao|ajuda|help|voltar|0)$/.test(t)) return { acao: 'menu' };
+  if (/^(oi+e?|ola|opa|e ai|eai|eae|bom dia|boa tarde|boa noite|tudo bem|td bem|hello|hi)( (tudo bem|td bem|tudo bom|como vai|blz|beleza))?$/.test(t)) return { acao: 'menu', saudacao: true };
+  if (/^(muito )?(obrigad[oa]s?|obg|brigad[oa]|valeu|vlw|ok|okay|okk+|blz|beleza|show|top|certo|perfeito|otimo|massa|joia|tmj|entendi|ta bom|ta|fechou|boa|legal|certinho|beleza entao)( (obrigad[oa]|valeu|mesmo|demais|entao))?$/.test(t)) return { acao: 'agradecimento' };
   if (/^(trocar|mudar)( de)? loja$|^lojas?$/.test(t)) return { acao: 'trocar_loja' };
   if (/\b(suporte|atendente|humano|atendimento|falar com (alguem|uma pessoa|voces))\b/.test(t)) return { acao: 'suporte' };
   if (/^(meu |meus |ver )?(saldo|creditos?)( do whatsapp)?$/.test(t)) return { acao: 'consulta', chave: 'saldo' };
@@ -127,7 +152,7 @@ async function linkSuporte() {
 }
 
 const primeiroNome = (n) => String(n || '').trim().split(/\s+/)[0] || '';
-const fmtCred = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; return `${v.toLocaleString('pt-BR')} crédito${v === 1 ? '' : 's'}`; };
+const fmtCred = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; return `${v.toLocaleString('pt-BR')} crédito${v > 0 && v < 2 ? '' : 's'}`; }; // 0,5 e 1 → singular
 
 // Pessoa ligada ao número: usuário do vínculo, ou o dono (vínculos antigos,
 // sem usuário, eram sempre do dono). null = não pode usar.
@@ -214,35 +239,83 @@ async function avisoUnico(ctx, categoria, horas, texto) {
   await M.enviarTexto({ para: ctx.de, texto, tipo: 'resposta', mercearia_id: ctx.mid, categoria });
 }
 
+function avisoSemSaldo(ctx) {
+  return avisoUnico(ctx, 'sem_saldo', 1, `Seu saldo de créditos do WhatsApp acabou (${fmtCred(ctx.saldo)}). 😕\n\nAs consultas voltam quando o ciclo renovar${ctx.assinatura.ciclo_fim ? ` (${C.fmtData(A.somarDias(ctx.assinatura.ciclo_fim, 1))})` : ''} ou se o dono pedir um pacote extra na tela *WhatsApp* do sistema.`);
+}
+
+// Débito atômico (SQL 15) depois que a mensagem saiu. Marca os créditos no envio.
+async function debitar(ctx, { peso, pedido_id, pedido_tipo, descricao, envio_id }) {
+  const { data: deb, error } = await db.rpc('whatsapp_consumir_creditos', {
+    p_assinatura_id: ctx.assinatura.id, p_quantidade: peso, p_pedido_id: pedido_id, p_pedido_tipo: pedido_tipo,
+    p_descricao: descricao, p_criado_por_nome: `${ctx.pessoa.nome} (WhatsApp)`,
+  });
+  if (error || !deb?.ok) {
+    console.error('[WHATSAPP] débito de crédito:', error?.message || deb?.motivo);
+    return false;
+  }
+  if (envio_id && !deb.ja_debitado) await db.from('whatsapp_envios').update({ creditos: peso }).eq('id', envio_id);
+  return true;
+}
+
+/* ── Conversa sem consulta (01/10/2026) ─────────────────────────
+   Respostas a "oi", "ok", "obrigado", pedir o menu de novo ou texto não
+   entendido: as `travas.conversa_gratis_dia` primeiras do dia (por número)
+   são grátis; depois, cada uma gasta `pesos.conversa`. Só vale pra loja que
+   aceitou os termos a partir da versão que trouxe essa regra. */
+const CATEGORIAS_CONVERSA = ['menu', 'agradecimento'];
+async function precoConversa(ctx) {
+  if (!(String(ctx.assinatura.termos_versao || '') >= A.TERMOS_VERSAO_CONVERSA)) return { peso: 0, aceitouRegra: false };
+  const gratis = ctx.params.travas.conversa_gratis_dia;
+  const peso = ctx.params.pesos.conversa;
+  const { count } = await db.from('whatsapp_envios').select('id', { count: 'exact', head: true })
+    .in('destino', ctx.variantes).eq('direcao', 'saida').in('categoria', CATEGORIAS_CONVERSA).neq('status', 'falhou')
+    .gte('criado_em', inicioDiaTZ(hojeStrTZ(ctx.tz), ctx.tz).toISOString());
+  const usadas = count || 0;
+  if (usadas < gratis) return { peso: 0, aceitouRegra: true, gratis, restantesGratis: gratis - usadas - 1 };
+  if (ctx.saldo < peso) return { semSaldo: true };
+  return { peso, aceitouRegra: true, gratis, pedido_id: crypto.randomUUID() };
+}
+// Linha de rodapé das respostas sem dados
+function linhaConversa(ctx, cob) {
+  if (cob.peso > 0) return `Esta resposta usou ${fmtCred(cob.peso)} (mensagem sem consulta; as ${cob.gratis} primeiras do dia são grátis). Saldo: ${fmtCred(ctx.saldo - cob.peso)}.`;
+  if (cob.aceitouRegra && cob.restantesGratis === 0) return `Saldo: ${fmtCred(ctx.saldo)}. A partir da próxima mensagem sem consulta de hoje (oi, ok, menu…), cada resposta gasta ${fmtCred(ctx.params.pesos.conversa)}.`;
+  return `Saldo: ${fmtCred(ctx.saldo)}.`;
+}
+
 /* ── Menu ───────────────────────────────────────────────────── */
 function opcoesDoMenu(ctx) {
   const rows = Object.entries(CONSULTAS).filter(([, c]) => c.pode(ctx.pessoa))
-    .map(([k, c]) => ({ id: `c:${k}`, title: c.titulo, description: c.desc }));
+    .map(([k, c]) => ({ id: `c:${k}`, title: c.titulo, description: `Ou escreva: ${c.dicaAtalho || c.atalho}${c.gratis ? ' (não gasta crédito)' : ''}` }));
   if (ctx.multiLoja && rows.length < 10) rows.push({ id: 'c:trocar_loja', title: 'Trocar de loja', description: 'Este número está em mais de uma loja' });
   return rows;
 }
 
-async function enviarMenu(ctx, prefixo = '') {
+async function enviarMenu(ctx, prefixo = '', { conversa = true } = {}) {
   // Evita menu repetido em rajada (duas mensagens seguidas)
   if (await respondeuRecente(ctx.variantes, 20 / 3600, 'menu')) return;
+  const cob = conversa ? await precoConversa(ctx) : { peso: 0 };
+  if (cob.semSaldo) return avisoSemSaldo(ctx);
   const rows = opcoesDoMenu(ctx);
   const peso = ctx.params.pesos.consulta;
   const podeProduto = CONSULTAS.estoque_produto.pode(ctx.pessoa);
+  const exemplo = podeProduto ? '*estoque coca*' : CONSULTAS.vendas_hoje.pode(ctx.pessoa) ? '*vendas hoje*' : '*saldo*';
   const corpo = [
     prefixo || `Olá, ${primeiroNome(ctx.pessoa.nome) || 'tudo bem'}! 👋 O que você quer consultar?`,
     '',
-    'Toque em *Ver opções*.' + (podeProduto ? ' Para um produto, também dá pra escrever direto, por exemplo: *estoque coca*.' : ''),
+    prefixo ? 'Ou toque em *Ver opções* — cada opção mostra o que escrever da próxima vez.'
+      : `Toque em *Ver opções*. Da próxima vez, dá pra pedir direto, sem o menu — ex.: ${exemplo}. Cada opção da lista mostra o que escrever.`,
     '',
-    `Cada consulta usa ${fmtCred(peso)}. Saldo: *${fmtCred(ctx.saldo)}*.`,
+    `Cada consulta com resposta usa ${fmtCred(peso)}. ${linhaConversa(ctx, cob)}`,
   ].join('\n');
-  await enviarLista(ctx, {
+  const env = await enviarLista(ctx, {
     type: 'list',
     header: { text: ctx.loja.nome_fantasia || 'Consultas' },
     body: { text: corpo },
     footer: { text: 'Falar com uma pessoa: escreva "suporte"' },
     action: { button: 'Ver opções', sections: [{ title: 'Consultas', rows }] },
-  }, { categoria: 'menu' });
+  }, { categoria: 'menu', ...(cob.peso > 0 ? { pedido_id: cob.pedido_id, pedido_tipo: 'conversa' } : {}) });
   await salvarConversa(ctx.de, { mercearia_id: ctx.mid, estado: null, dados: {}, expira_em: null });
+  if (env.ok && cob.peso > 0) await debitar(ctx, { peso: cob.peso, pedido_id: cob.pedido_id, pedido_tipo: 'conversa', descricao: 'Mensagem sem consulta (menu)', envio_id: env.envio_id });
 }
 
 /* ── Escolha de loja (número em mais de uma loja) ───────────── */
@@ -268,10 +341,7 @@ async function pedirLoja(de, variantes, ativos) {
 async function executarConsulta(ctx, chave, gerar, { pedidoId = null, dadosDepois = {} } = {}) {
   const def = CONSULTAS[chave];
   const peso = def.gratis ? 0 : ctx.params.pesos.consulta;
-  if (peso > 0 && ctx.saldo < peso) {
-    await avisoUnico(ctx, 'sem_saldo', 1, `Seu saldo de créditos do WhatsApp acabou (${fmtCred(ctx.saldo)}). 😕\n\nAs consultas voltam quando o ciclo renovar${ctx.assinatura.ciclo_fim ? ` (${C.fmtData(A.somarDias(ctx.assinatura.ciclo_fim, 1))})` : ''} ou se o dono pedir um pacote extra na tela *WhatsApp* do sistema.`);
-    return;
-  }
+  if (peso > 0 && ctx.saldo < peso) return avisoSemSaldo(ctx);
   const pedido_id = pedidoId || crypto.randomUUID();
   let r;
   try {
@@ -290,28 +360,27 @@ async function executarConsulta(ctx, chave, gerar, { pedidoId = null, dadosDepoi
     return;
   }
   if (r && typeof r === 'object' && r.cobrar === false) {
-    await enviarTexto(ctx, r.texto, { categoria: `consulta_${chave}` });
+    await enviarTexto(ctx, `${r.texto}\n\n_Nenhum crédito usado · saldo ${fmtCred(ctx.saldo)}_`, { categoria: `consulta_${chave}` });
     if (r.estado) await salvarConversa(ctx.de, { mercearia_id: ctx.mid, ...r.estado });
     return;
   }
 
   const texto = String(r || '');
-  const rodape = peso > 0
-    ? `\n\n_${fmtCred(peso)} usado · saldo ${fmtCred(ctx.saldo - peso)} · ${C.horaTZ(ctx.tz)}_\nOutras consultas: escreva *menu*`
-    : `\n\n_${C.horaTZ(ctx.tz)}_ · Outras consultas: escreva *menu*`;
-  const env = await enviarTexto(ctx, texto + rodape, { categoria: `consulta_${chave}`, pedido_id: peso > 0 ? pedido_id : null, pedido_tipo: peso > 0 ? 'consulta' : null });
+  const dica = dicaAtalhos(ctx.pessoa, chave);
+  // Sem horário: o próprio WhatsApp já mostra a hora da mensagem (o registro
+  // completo, com hora, fica em whatsapp_envios pro SuperAdmin).
+  const linhaUso = peso > 0 ? `${fmtCred(peso)} usado · saldo ${fmtCred(ctx.saldo - peso)}` : `Nenhum crédito usado · saldo ${fmtCred(ctx.saldo)}`;
+  const corpoBotoes = dica ? `${texto}\n\n_${dica}_` : texto;
+  const extras = { categoria: `consulta_${chave}`, pedido_id: peso > 0 ? pedido_id : null, pedido_tipo: peso > 0 ? 'consulta' : null };
+  // Botões de resposta rápida vão NA MESMA mensagem (não geram envio a mais).
+  // Se o texto passar do limite da Meta pra mensagem com botões, vai como texto.
+  const env = corpoBotoes.length <= 1000
+    ? await enviarLista(ctx, { type: 'button', body: { text: corpoBotoes }, footer: { text: linhaUso }, action: { buttons: botoesRapidos(ctx.pessoa, chave) } }, extras)
+    : await enviarTexto(ctx, `${texto}\n\n_${linhaUso}_${dica ? `\n${dica}` : ''}\nOutras consultas: escreva *menu*`, extras);
   await salvarConversa(ctx.de, { mercearia_id: ctx.mid, estado: null, dados: env.ok ? dadosDepois : {}, expira_em: null });
   if (!env.ok || peso <= 0) return; // falhou → nada debitado
 
-  const { data: deb, error } = await db.rpc('whatsapp_consumir_creditos', {
-    p_assinatura_id: ctx.assinatura.id, p_quantidade: peso, p_pedido_id: pedido_id, p_pedido_tipo: 'consulta',
-    p_descricao: `Consulta: ${def.titulo}`, p_criado_por_nome: `${ctx.pessoa.nome} (WhatsApp)`,
-  });
-  if (error || !deb?.ok) {
-    console.error('[WHATSAPP] débito de crédito:', error?.message || deb?.motivo);
-    return;
-  }
-  if (env.envio_id && !deb.ja_debitado) await db.from('whatsapp_envios').update({ creditos: peso }).eq('id', env.envio_id);
+  await debitar(ctx, { peso, pedido_id, pedido_tipo: 'consulta', descricao: `Consulta: ${def.titulo}`, envio_id: env.envio_id });
 }
 
 // Crédito de volta quando a resposta de um pedido não foi entregue
@@ -343,7 +412,7 @@ async function consultarProduto(ctx, termo, pedidoId) {
   await executarConsulta(ctx, 'estoque_produto', async () => {
     const r = await C.buscarProdutos(ctx.mid, t.slice(0, 80));
     if (!r.produtos.length) {
-      return { cobrar: false, texto: `Não achei nenhum produto com "${t.slice(0, 40)}" no cadastro. Confira o nome ou tente só uma parte (ex.: *coca*). Nenhum crédito foi usado.` };
+      return { cobrar: false, texto: `Não achei nenhum produto com "${t.slice(0, 40)}" no cadastro. Confira o nome ou tente só uma parte (ex.: *coca*).` };
     }
     if (r.exato || r.produtos.length === 1) return C.textoProduto(ctx.mid, r.produtos[0]);
     const mais = (r.total || 0) > 10 ? `\n\nAchei ${r.total}; mostrando os 10 mais parecidos. Se não estiver aqui, escreva um nome mais completo.` : '';
@@ -477,7 +546,7 @@ async function atender({ msg, de, variantes, ativos }) {
   // O que a pessoa quer?
   if (entrada.tipo === 'escolha') {
     const id = entrada.id;
-    if (id.startsWith('loja:')) return enviarMenu(ctx);
+    if (id.startsWith('loja:')) return enviarMenu(ctx, '', { conversa: false });
     if (id.startsWith('c:')) return rodarConsulta(ctx, id.slice(2));
     if (id.startsWith('p:')) {
       const prodId = id.slice(2);
@@ -488,7 +557,7 @@ async function atender({ msg, de, variantes, ativos }) {
       const continua = conversa.estado === 'escolher_produto' && (conversa.dados.opcoes || []).includes(prodId) ? conversa.dados.pedido_id : null;
       return executarConsulta(ctx, 'estoque_produto', async () => {
         const p = await C.produtoPorId(ctx.mid, prodId);
-        if (!p) return { cobrar: false, texto: 'Esse produto não foi encontrado (pode ter sido excluído). Nenhum crédito foi usado.' };
+        if (!p) return { cobrar: false, texto: 'Esse produto não foi encontrado (pode ter sido excluído).' };
         return C.textoProduto(ctx.mid, p);
       }, { pedidoId: continua, dadosDepois: { ultimo_produto: { id: prodId, em: new Date().toISOString() } } });
     }
@@ -500,7 +569,24 @@ async function atender({ msg, de, variantes, ativos }) {
 
   const cmd = cmdTexto;
   if (cmd) {
+    if (cmd.acao === 'menu' && cmd.saudacao) {
+      const ex = CONSULTAS.estoque_produto.pode(ctx.pessoa) ? '*estoque coca*' : CONSULTAS.vendas_hoje.pode(ctx.pessoa) ? '*vendas hoje*' : '*saldo*';
+      return enviarMenu(ctx, `Olá, ${primeiroNome(ctx.pessoa.nome) || 'tudo bem'}! 👋 Dica: não precisa mandar "oi" antes — pergunte direto o que você quer, por exemplo ${ex}. A resposta já vem na hora, sem passar pelo menu.`);
+    }
     if (cmd.acao === 'menu' || cmd.acao === 'trocar_loja') return enviarMenu(ctx);
+    if (cmd.acao === 'agradecimento') {
+      // "obrigado", "ok", 👍: responde só 1× a cada 12h; nas outras vezes, silêncio
+      // (não gera mensagem, não gasta nada). Quando responde, conta como
+      // mensagem sem consulta (grátis até o limite do dia).
+      if (await respondeuRecente(ctx.variantes, 12, 'agradecimento')) return;
+      const cob = await precoConversa(ctx);
+      if (cob.semSaldo) return; // sem saldo: nem responde
+      const ex = CONSULTAS.vendas_hoje.pode(ctx.pessoa) ? '*vendas hoje*' : CONSULTAS.estoque_produto.pode(ctx.pessoa) ? '*estoque coca*' : '*saldo*';
+      const env = await enviarTexto(ctx, `De nada! 😊 Quando precisar, é só perguntar direto, por exemplo ${ex}.\n\nNão precisa responder "obrigado" ou "ok": essas mensagens não trazem dados e, depois das grátis do dia, a resposta a elas gasta crédito.\n\n_${linhaConversa(ctx, cob)}_`,
+        { categoria: 'agradecimento', ...(cob.peso > 0 ? { pedido_id: cob.pedido_id, pedido_tipo: 'conversa' } : {}) });
+      if (env.ok && cob.peso > 0) await debitar(ctx, { peso: cob.peso, pedido_id: cob.pedido_id, pedido_tipo: 'conversa', descricao: 'Mensagem sem consulta (agradecimento)', envio_id: env.envio_id });
+      return;
+    }
     if (cmd.acao === 'suporte') {
       const link = await linkSuporte();
       return avisoUnico(ctx, 'suporte', 1, link
@@ -513,7 +599,10 @@ async function atender({ msg, de, variantes, ativos }) {
   if (conversa.estado === 'aguardando_produto' && conversa.mercearia_id === ctx.mid) {
     return rodarConsulta(ctx, 'estoque_produto', { termo: entrada.texto });
   }
-  return enviarMenu(ctx, 'Não entendi. 🙂 Escolha uma opção:');
+  const trecho = String(entrada.texto || '').trim().slice(0, 30);
+  const dica = dicaAtalhos(ctx.pessoa);
+  const sugestao = dica ? ` ${dica.replace('Dica: peça direto, sem o menu — ', 'Tente pedir direto, por exemplo: ')}.` : '';
+  return enviarMenu(ctx, `Não entendi${trecho ? ` "${trecho}${entrada.texto.trim().length > 30 ? '…' : ''}"` : ''}. 🙂${sugestao}`);
 }
 
 async function carregarParametros() {
