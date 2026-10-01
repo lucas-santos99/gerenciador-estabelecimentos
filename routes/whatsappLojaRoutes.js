@@ -18,6 +18,9 @@
 //   GET    /extrato                 → movimentos do ciclo atual
 //   POST   /pacotes                 → pede um pacote extra
 //   POST   /pacotes/:id/desistir    → desiste do pacote pendente
+//   POST   /numeros-extras          → pede +N números além do plano (01/10)
+//   POST   /numeros-extras/desistir → desiste do pedido de extras
+//   POST   /numeros-extras/remover  → tira 1 número extra (na hora)
 //   POST   /vinculos                → cadastra número (gera código)
 //   PATCH  /vinculos/:id            → troca a pessoa ligada ao número
 //   POST   /vinculos/:id/codigo     → gera um código novo
@@ -125,7 +128,7 @@ router.get('/', async (req, res) => {
     if (abertas.ativa) {
       resumo = await A.resumoCiclo(db, abertas.ativa.id, abertas.ativa.ciclo_inicio);
     }
-    const limite = abertas.ativa?.numeros || abertas.pendente?.numeros || 0;
+    const limite = abertas.ativa ? A.limiteNumeros(abertas.ativa) : (abertas.pendente?.numeros || 0);
     const ultima = (recusa || [])[0];
     const recente = ultima && ultima.encerrado_em && (Date.now() - new Date(ultima.encerrado_em).getTime()) < 15 * 86400000;
 
@@ -142,12 +145,20 @@ router.get('/', async (req, res) => {
         pausado_teto: abertas.ativa.teto_ciclo === abertas.ativa.ciclo_inicio && !!abertas.ativa.teto_pausado_em && !abertas.ativa.teto_liberado_em,
         // Plano ativo com aceite de uma versão antiga dos termos (01/10/2026)
         termos_pendentes: abertas.ativa.termos_versao !== A.TERMOS.versao,
+        valor_mensal: A.valorMensal(abertas.ativa),
       } : null,
       pendente: abertas.pendente,
       pacotes_pedidos: pacs || [],
       vinculos: (vinc || []).map(v => vinculoPublico(v, pessoas)),
       pessoas,
       limite_numeros: limite,
+      // Números extras (01/10/2026): preço atual por número e quantos dá pra ter
+      numero_extra: {
+        preco: abertas.ativa?.numero_extra_preco != null && Number(abertas.ativa.numeros_extras) > 0
+          ? Number(abertas.ativa.numero_extra_preco) : p.numeros.preco_extra,
+        max: p.numeros.max_extras,
+        disponivel: p.numeros.preco_extra > 0 && p.numeros.max_extras > 0,
+      },
       ultima_encerrada: recente ? ultima : null,
     });
   } catch (err) {
@@ -175,6 +186,77 @@ router.post('/aceitar-termos', async (req, res) => {
   } catch (err) {
     console.error('[WHATSAPP LOJA] aceitar termos:', err.message);
     res.status(500).json({ error: 'Erro ao registrar o aceite.' });
+  }
+});
+
+/* ── Números extras (01/10/2026) ───────────────────────────────
+   A loja pede +N números além dos do plano; o SuperAdmin master aprova
+   (cobrança combinada à parte nesta fase). Remover extra é na hora, desde
+   que os números cadastrados caibam no novo limite. */
+router.post('/numeros-extras', async (req, res) => {
+  const mid = req.user.mercearia_id;
+  const qtd = parseInt(req.body?.quantidade, 10);
+  if (!Number.isInteger(qtd) || qtd < 1 || qtd > 50) return res.status(400).json({ error: 'Quantidade inválida.' });
+  try {
+    const p = await parametros();
+    if (!(p.numeros.preco_extra > 0 && p.numeros.max_extras > 0)) return res.status(400).json({ error: 'Números extras não estão disponíveis no momento.' });
+    const { ativa } = await ativaEmDia(mid);
+    if (!ativa) return res.status(400).json({ error: 'Só dá pra pedir número extra com um plano ativo.' });
+    if (ativa.numeros_extras_pedido > 0) return res.status(409).json({ error: 'Já existe um pedido de número extra esperando aprovação.' });
+    if ((ativa.numeros_extras || 0) + qtd > p.numeros.max_extras) {
+      return res.status(409).json({ error: `O máximo é ${p.numeros.max_extras} número${p.numeros.max_extras === 1 ? '' : 's'} extra${p.numeros.max_extras === 1 ? '' : 's'} por loja.` });
+    }
+    const agora = new Date().toISOString();
+    const { data, error } = await db.from('whatsapp_assinaturas')
+      .update({ numeros_extras_pedido: qtd, numeros_extras_pedido_em: agora, numeros_extras_pedido_por_nome: req.user.nome, atualizado_em: agora })
+      .eq('id', ativa.id).eq('status', 'ativa').eq('numeros_extras_pedido', 0).select();
+    if (error) throw error;
+    if (!data || !data.length) return res.status(409).json({ error: 'Já existe um pedido de número extra esperando aprovação.' });
+    const preco = ativa.numero_extra_preco != null && ativa.numeros_extras > 0 ? Number(ativa.numero_extra_preco) : p.numeros.preco_extra;
+    auditar(req, 'whatsapp_numero_extra_pedido', `Pediu ${qtd} número${qtd === 1 ? '' : 's'} extra${qtd === 1 ? '' : 's'} de WhatsApp (R$ ${preco.toFixed(2)} por número/mês)`, { assinatura_id: ativa.id, quantidade: qtd, preco });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] numero extra:', err.message);
+    res.status(500).json({ error: 'Erro ao pedir o número extra.' });
+  }
+});
+
+router.post('/numeros-extras/desistir', async (req, res) => {
+  try {
+    const { ativa } = await ativaEmDia(req.user.mercearia_id);
+    if (!ativa || !ativa.numeros_extras_pedido) return res.status(404).json({ error: 'Nenhum pedido de número extra pendente.' });
+    await db.from('whatsapp_assinaturas')
+      .update({ numeros_extras_pedido: 0, numeros_extras_pedido_em: null, numeros_extras_pedido_por_nome: null, atualizado_em: new Date().toISOString() })
+      .eq('id', ativa.id).eq('status', 'ativa');
+    auditar(req, 'whatsapp_numero_extra_desistiu', 'Desistiu do pedido de número extra de WhatsApp', { assinatura_id: ativa.id });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] desistir numero extra:', err.message);
+    res.status(500).json({ error: 'Erro ao desistir do pedido.' });
+  }
+});
+
+router.post('/numeros-extras/remover', async (req, res) => {
+  const mid = req.user.mercearia_id;
+  try {
+    const { ativa } = await ativaEmDia(mid);
+    if (!ativa || !(ativa.numeros_extras > 0)) return res.status(404).json({ error: 'Você não tem número extra.' });
+    const { count } = await db.from('whatsapp_vinculos').select('id', { count: 'exact', head: true })
+      .eq('mercearia_id', mid).neq('status', 'removido');
+    const novoLimite = A.limiteNumeros(ativa) - 1;
+    if ((count || 0) > novoLimite) {
+      return res.status(409).json({ error: `Você tem ${count} números cadastrados. Remova um número antes de tirar o extra (o limite vai ficar em ${novoLimite}).` });
+    }
+    const { data, error } = await db.from('whatsapp_assinaturas')
+      .update({ numeros_extras: ativa.numeros_extras - 1, atualizado_em: new Date().toISOString() })
+      .eq('id', ativa.id).eq('status', 'ativa').eq('numeros_extras', ativa.numeros_extras).select();
+    if (error) throw error;
+    if (!data || !data.length) return res.status(409).json({ error: 'Os números mudaram. Atualize a tela e tente de novo.' });
+    auditar(req, 'whatsapp_numero_extra_removido', `Tirou 1 número extra de WhatsApp (ficou com ${ativa.numeros_extras - 1})`, { assinatura_id: ativa.id });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] remover numero extra:', err.message);
+    res.status(500).json({ error: 'Erro ao tirar o número extra.' });
   }
 });
 
@@ -333,8 +415,9 @@ router.post('/vinculos', async (req, res) => {
     if (!plano) return res.status(400).json({ error: 'Contrate um plano antes de cadastrar números.' });
     const { count } = await db.from('whatsapp_vinculos').select('id', { count: 'exact', head: true })
       .eq('mercearia_id', mid).neq('status', 'removido');
-    if ((count || 0) >= (plano.numeros || 1)) {
-      return res.status(409).json({ error: `Seu plano permite ${plano.numeros || 1} número${(plano.numeros || 1) === 1 ? '' : 's'}. Remova um ou troque de plano.` });
+    const lim = ativa ? A.limiteNumeros(ativa) : (plano.numeros || 1);
+    if ((count || 0) >= lim) {
+      return res.status(409).json({ error: `Seu plano permite ${lim} número${lim === 1 ? '' : 's'}. Remova um, peça um número extra ou troque de plano.` });
     }
     const { data: v, error } = await db.from('whatsapp_vinculos').insert({
       mercearia_id: mid, telefone, apelido, usuario_id: pessoa.id, status: 'pendente', criado_por_nome: req.user.nome,

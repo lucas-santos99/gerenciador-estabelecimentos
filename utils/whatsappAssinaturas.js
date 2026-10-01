@@ -24,8 +24,8 @@ const { TIMEZONE_PADRAO, hojeStrTZ } = require('./fusoHorario');
 // ok, obrigado, menu…), que só vale pra loja que aceitou esta versão.
 const TERMOS_VERSAO_CONVERSA = '2026-10-01';
 const TERMOS = Object.freeze({
-  versao: '2026-10-01',
-  novidades: 'Respostas do assistente a mensagens que não pedem dados (como “oi”, “ok”, “obrigado” ou pedir o menu de novo) passam a gastar crédito depois de algumas grátis por dia. As respostas mostram sempre o saldo que sobrou.',
+  versao: '2026-10-01b',
+  novidades: 'Respostas do assistente a mensagens que não pedem dados (como “oi”, “ok”, “obrigado” ou pedir o menu de novo) passam a gastar crédito depois de algumas grátis por dia na loja. As respostas mostram sempre o saldo que sobrou. E agora dá pra ter números de WhatsApp extras, além dos que vêm no plano, com valor mensal por número.',
   titulo: 'Termos do serviço de WhatsApp',
   secoes: [
     { t: 'O que é', p: [
@@ -35,7 +35,7 @@ const TERMOS = Object.freeze({
     { t: 'Créditos', p: [
       'Cada plano dá um saldo de créditos por ciclo mensal. Cada pedido completo gasta créditos conforme o tipo (tabela mostrada antes da contratação). Confirmações, PIN e até 3 correções dentro do mesmo pedido não gastam de novo.',
       'Mensagens que você envia não gastam crédito; o que gasta é a resposta do assistente. Pedido que dá erro ou mensagem que não é entregue também não gasta.',
-      'Respostas a mensagens que não pedem dados (como “oi”, “ok”, “obrigado”, pedir o menu de novo ou algo que o assistente não entendeu) são grátis até um limite por dia, por número; depois disso, cada uma gasta a quantidade de créditos mostrada na tabela de créditos. Ver o saldo, “produto não encontrado” e “sem permissão” não gastam.',
+      'Respostas a mensagens que não pedem dados (como “oi”, “ok”, “obrigado”, pedir o menu de novo ou algo que o assistente não entendeu) são grátis até um limite por dia na loja (somando todos os números); depois disso, cada uma gasta a quantidade de créditos mostrada na tabela de créditos. Ver o saldo, “produto não encontrado” e “sem permissão” não gastam.',
       'Cada resposta mostra quantos créditos usou e o saldo que sobrou.',
       'Créditos que sobram no fim do ciclo não passam para o ciclo seguinte.',
     ] },
@@ -46,6 +46,7 @@ const TERMOS = Object.freeze({
     { t: 'Preço, reajuste e cancelamento', p: [
       'O preço contratado vale para o seu ciclo. Reajustes são avisados com pelo menos 30 dias de antecedência e só valem a partir do ciclo seguinte; você pode cancelar antes.',
       'Você pode cancelar quando quiser: o serviço segue até o fim do ciclo já iniciado.',
+      'Cada plano inclui uma quantidade de números de WhatsApp. Números extras, quando disponíveis, têm valor mensal por número (mostrado antes de pedir), somado à mensalidade do plano enquanto estiverem ativos. Todos os números da loja usam o mesmo saldo de créditos.',
       'Nesta fase de lançamento, a ativação e a cobrança do plano são combinadas diretamente com a nossa equipe.',
     ] },
     { t: 'Seus dados', p: [
@@ -92,6 +93,18 @@ function gerarCodigo() {
 }
 function hashCodigo(codigo, telefone) {
   return crypto.createHash('sha256').update(`${codigo}:${telefone}`).digest('hex');
+}
+
+/* ── Números e valor mensal (01/10/2026) ──────────────────── */
+// Números que a loja pode cadastrar = os do plano + os extras aprovados
+function limiteNumeros(a) {
+  return a ? (Number(a.numeros) || 1) + (Number(a.numeros_extras) || 0) : 0;
+}
+// Mensalidade do WhatsApp = plano + extras × preço travado por número
+function valorMensal(a) {
+  if (!a) return 0;
+  const extras = (Number(a.numeros_extras) || 0) * (Number(a.numero_extra_preco) || 0);
+  return Math.round(((Number(a.preco) || 0) + extras) * 100) / 100;
 }
 
 /* ── Saldo / ciclo ────────────────────────────────────────── */
@@ -189,8 +202,14 @@ async function ativar(db, assinatura, autorNome) {
       .eq('assinatura_id', anterior.id).eq('status', 'aguardando');
   }
 
+  // Troca de plano: os números extras (e o preço travado deles) continuam
+  const extras = anterior ? {
+    numeros_extras: anterior.numeros_extras || 0, numero_extra_preco: anterior.numero_extra_preco ?? null,
+    numeros_extras_pedido: anterior.numeros_extras_pedido || 0, numeros_extras_pedido_em: anterior.numeros_extras_pedido_em || null,
+    numeros_extras_pedido_por_nome: anterior.numeros_extras_pedido_por_nome || null,
+  } : {};
   const { data, error } = await db.from('whatsapp_assinaturas')
-    .update({ status: 'ativa', ativado_em: agoraIso, ativado_por_nome: autorNome, ciclo_inicio: hoje, ciclo_fim: fimDoCiclo(hoje), cancelar_no_fim: false, atualizado_em: agoraIso })
+    .update({ status: 'ativa', ativado_em: agoraIso, ativado_por_nome: autorNome, ciclo_inicio: hoje, ciclo_fim: fimDoCiclo(hoje), cancelar_no_fim: false, atualizado_em: agoraIso, ...extras })
     .eq('id', assinatura.id).eq('status', 'aguardando').select();
   if (error) throw error;
   if (!data || !data.length) return null;
@@ -216,5 +235,5 @@ async function encerrarAgora(db, assinatura, autorNome, motivo) {
 module.exports = {
   TERMOS, TERMOS_VERSAO_CONVERSA, CODIGO_VALIDADE_HORAS,
   somarDias, fimDoCiclo, normalizarTelefone, formatarTelefone, gerarCodigo, hashCodigo,
-  timezoneDaLoja, resumoCiclo, lancar, garantirCiclo, ativar, encerrarAgora,
+  timezoneDaLoja, resumoCiclo, lancar, garantirCiclo, ativar, encerrarAgora, limiteNumeros, valorMensal,
 };

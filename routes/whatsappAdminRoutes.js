@@ -26,6 +26,7 @@
 //   POST   /assinaturas/:id/encerrar  → (master) encerra (agora ou no fim do ciclo)
 //   POST   /assinaturas/:id/ajuste    → (master) soma/tira créditos do ciclo
 //   POST   /assinaturas/:id/retomar   → (master) retoma assistente pausado pelo teto (30/09)
+//   POST   /assinaturas/:id/numeros-extras/aprovar|recusar|definir → (master) números extras (01/10)
 //   GET    /assinaturas/:id/extrato   → movimentos do ciclo atual
 //   POST   /pacotes/:id/aprovar       → (master) aprova pacote extra
 //   POST   /pacotes/:id/recusar       → (master) recusa pacote extra
@@ -411,8 +412,9 @@ async function receitaDoMes(mesStr) {
     let planos = 0;
     const ids = (ciclos || []).map(c => c.assinatura_id);
     if (ids.length) {
-      const { data: ass } = await db.from('whatsapp_assinaturas').select('id, preco').in('id', [...new Set(ids)]);
-      const preco = Object.fromEntries((ass || []).map(x => [x.id, Number(x.preco) || 0]));
+      const { data: ass } = await db.from('whatsapp_assinaturas').select('id, preco, numeros_extras, numero_extra_preco').in('id', [...new Set(ids)]);
+      // (01/10) mensalidade = plano + números extras (preço travado por loja)
+      const preco = Object.fromEntries((ass || []).map(x => [x.id, A.valorMensal(x)]));
       ids.forEach(id => { planos += preco[id] || 0; });
     }
     const { data: pacs } = await db.from('whatsapp_pacotes_compras').select('preco')
@@ -594,7 +596,10 @@ router.get('/assinaturas', async (req, res) => {
       const a = await A.garantirCiclo(db, a0, hojeStrTZ(lojas[a0.mercearia_id]?.timezone || TIMEZONE_PADRAO));
       if (!a || a.status !== 'ativa') continue;
       const r = await A.resumoCiclo(db, a.id, a.ciclo_inicio);
-      ativas.push({ ...a, ...r, loja_nome: nome(a.mercearia_id), teto: await situacaoTeto(a, lojas[a.mercearia_id]?.timezone || TIMEZONE_PADRAO) });
+      ativas.push({
+        ...a, ...r, loja_nome: nome(a.mercearia_id), teto: await situacaoTeto(a, lojas[a.mercearia_id]?.timezone || TIMEZONE_PADRAO),
+        valor_mensal: A.valorMensal(a), limite_numeros: A.limiteNumeros(a), numeros_cadastrados: await contarNumeros(a.mercearia_id),
+      });
     }
     const pendentes = (abertas || []).filter(x => x.status === 'aguardando').map(x => {
       const anterior = (abertas || []).find(y => y.id === x.substitui_id);
@@ -606,6 +611,7 @@ router.get('/assinaturas', async (req, res) => {
       ativas: ativas.sort((x, y) => x.loja_nome.localeCompare(y.loja_nome, 'pt-BR')),
       pacotes: (pacotes || []).map(x => ({ ...x, loja_nome: nome(x.mercearia_id) })),
       encerradas: (fechadas || []).map(x => ({ ...x, loja_nome: nome(x.mercearia_id) })),
+      numero_extra_preco_atual: (await carregarParametros()).numeros.preco_extra,
       pode_editar: !!req.user.is_master,
     });
   } catch (err) {
@@ -729,6 +735,79 @@ router.post('/assinaturas/:id/retomar', onlyMaster, async (req, res) => {
   } catch (err) {
     console.error('[WHATSAPP] retomar:', err.message);
     res.status(500).json({ error: 'Erro ao retomar o assistente.' });
+  }
+});
+
+/* ── Números extras (01/10/2026) ─────────────────────────────── */
+async function contarNumeros(mid) {
+  const { count } = await db.from('whatsapp_vinculos').select('id', { count: 'exact', head: true })
+    .eq('mercearia_id', mid).neq('status', 'removido');
+  return count || 0;
+}
+
+// Aprova o pedido de +N números (o preço por número fica travado pra loja)
+router.post('/assinaturas/:id/numeros-extras/aprovar', onlyMaster, async (req, res) => {
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a || a.status !== 'ativa' || !(a.numeros_extras_pedido > 0)) return res.status(404).json({ error: 'Pedido de número extra não encontrado.' });
+    const p = await carregarParametros();
+    const preco = a.numero_extra_preco != null && a.numeros_extras > 0 ? Number(a.numero_extra_preco) : p.numeros.preco_extra;
+    const novo = (a.numeros_extras || 0) + a.numeros_extras_pedido;
+    const { data, error } = await db.from('whatsapp_assinaturas')
+      .update({ numeros_extras: novo, numero_extra_preco: preco, numeros_extras_pedido: 0, numeros_extras_pedido_em: null, numeros_extras_pedido_por_nome: null, atualizado_em: new Date().toISOString() })
+      .eq('id', a.id).eq('status', 'ativa').eq('numeros_extras_pedido', a.numeros_extras_pedido).select();
+    if (error) throw error;
+    if (!data || !data.length) return res.status(409).json({ error: 'O pedido mudou. Atualize a tela.' });
+    auditarLoja(req, a.mercearia_id, 'whatsapp_numero_extra_aprovado',
+      `Aprovou ${a.numeros_extras_pedido} número${a.numeros_extras_pedido === 1 ? '' : 's'} extra${a.numeros_extras_pedido === 1 ? '' : 's'} de WhatsApp (agora ${novo}, R$ ${preco.toFixed(2)} por número/mês)`, { assinatura_id: a.id });
+    res.json(data[0]);
+  } catch (err) {
+    console.error('[WHATSAPP] aprovar numero extra:', err.message);
+    res.status(500).json({ error: 'Erro ao aprovar.' });
+  }
+});
+
+router.post('/assinaturas/:id/numeros-extras/recusar', onlyMaster, async (req, res) => {
+  const motivo = String(req.body?.motivo || '').trim().slice(0, 300);
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a || a.status !== 'ativa' || !(a.numeros_extras_pedido > 0)) return res.status(404).json({ error: 'Pedido de número extra não encontrado.' });
+    await db.from('whatsapp_assinaturas')
+      .update({ numeros_extras_pedido: 0, numeros_extras_pedido_em: null, numeros_extras_pedido_por_nome: null, atualizado_em: new Date().toISOString() })
+      .eq('id', a.id).eq('status', 'ativa');
+    auditarLoja(req, a.mercearia_id, 'whatsapp_numero_extra_recusado', `Recusou o pedido de número extra de WhatsApp${motivo ? ` — ${motivo}` : ''}`, { assinatura_id: a.id });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[WHATSAPP] recusar numero extra:', err.message);
+    res.status(500).json({ error: 'Erro ao recusar.' });
+  }
+});
+
+// Define direto quantos extras a loja tem e o preço por número dela
+router.post('/assinaturas/:id/numeros-extras/definir', onlyMaster, async (req, res) => {
+  const extras = parseInt(req.body?.extras, 10);
+  const preco = Number(String(req.body?.preco ?? '').replace(',', '.'));
+  if (!Number.isInteger(extras) || extras < 0 || extras > 50) return res.status(400).json({ error: 'Quantidade de extras inválida (0 a 50).' });
+  if (!Number.isFinite(preco) || preco < 0 || preco > 1000) return res.status(400).json({ error: 'Preço por número inválido.' });
+  try {
+    const a = await buscarAssinatura(req.params.id);
+    if (!a || a.status !== 'ativa') return res.status(404).json({ error: 'Plano ativo não encontrado.' });
+    const cadastrados = await contarNumeros(a.mercearia_id);
+    const novoLimite = (a.numeros || 1) + extras;
+    if (cadastrados > novoLimite) {
+      return res.status(409).json({ error: `A loja tem ${cadastrados} números cadastrados; com ${extras} extra${extras === 1 ? '' : 's'} o limite seria ${novoLimite}. Peça pra loja remover um número antes.` });
+    }
+    const precoArred = Math.round(preco * 100) / 100;
+    const { data, error } = await db.from('whatsapp_assinaturas')
+      .update({ numeros_extras: extras, numero_extra_preco: precoArred, atualizado_em: new Date().toISOString() })
+      .eq('id', a.id).eq('status', 'ativa').select();
+    if (error) throw error;
+    auditarLoja(req, a.mercearia_id, 'whatsapp_numero_extra_definido',
+      `Definiu os números extras de WhatsApp: ${a.numeros_extras || 0} → ${extras}, R$ ${Number(a.numero_extra_preco ?? 0).toFixed(2)} → R$ ${precoArred.toFixed(2)} por número/mês`, { assinatura_id: a.id });
+    res.json(data?.[0] || {});
+  } catch (err) {
+    console.error('[WHATSAPP] definir numeros extras:', err.message);
+    res.status(500).json({ error: 'Erro ao salvar.' });
   }
 });
 

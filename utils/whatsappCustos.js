@@ -42,12 +42,15 @@ const PARAMS_PADRAO = Object.freeze({
     correcoes_max: 3,
     pedidos_por_minuto: 5,
     pedidos_por_dia: 200,
-    conversa_gratis_dia: 2,   // respostas a "oi/ok/obrigado/menu" grátis por número por dia; depois gastam pesos.conversa (01/10/2026)
+    conversa_gratis_dia: 2,   // respostas a "oi/ok/obrigado/menu" grátis por LOJA por dia (somando os números); depois gastam pesos.conversa (01/10/2026)
   },
   precificacao: { impostos_pct: 6, taxa_gateway_pct: 5, margem_seguranca: 1.3, margem_minima_pct: 20 },
   teto_loja: { aviso_pct: 50, acao_pct: 70, acao: 'pausar' },
   teto_global: { mensal_reais: 200 },
   custos_fixos: { chip_mensal: 0 },
+  // Números extras além do plano (01/10/2026): R$ por número/mês e quantos
+  // extras uma loja pode ter. preco_extra = 0 → a loja não pode pedir extras.
+  numeros: { preco_extra: 4.9, max_extras: 5 },
   cobranca_auto: { ativo: false, dias_antes: [3, 1], dias_depois: [1, 3], lojas_desligadas: [] },
 });
 
@@ -141,6 +144,8 @@ function normalizarParametros(entrada) {
 
   p.teto_global.mensal_reais = num(g('teto_global').mensal_reais, 0, 1000000, p.teto_global.mensal_reais);
   p.custos_fixos.chip_mensal = num(g('custos_fixos').chip_mensal, 0, 10000, p.custos_fixos.chip_mensal);
+  p.numeros.preco_extra = num(g('numeros').preco_extra, 0, 1000, p.numeros.preco_extra);
+  p.numeros.max_extras  = inteiro(g('numeros').max_extras, 0, 50, p.numeros.max_extras);
 
   const cb = g('cobranca_auto');
   p.cobranca_auto.ativo       = cb.ativo === true;

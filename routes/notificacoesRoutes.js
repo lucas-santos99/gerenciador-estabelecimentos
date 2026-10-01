@@ -604,7 +604,7 @@ async function avisosAdmin(user, prefs, ctx) {
   // 3b) WhatsApp: planos e pacotes pedidos pelas lojas (29/09/2026)
   if (ativa('whatsapp')) {
     tarefas.push((async () => {
-      const [{ data: ass }, { data: pacs }, { data: tetos }] = await Promise.all([
+      const [{ data: ass }, { data: pacs }, { data: tetos }, { data: extras }] = await Promise.all([
         db.from('whatsapp_assinaturas').select('id, mercearia_id, plano_nome, preco, substitui_id, solicitado_por_nome, criado_em')
           .eq('status', 'aguardando').order('criado_em', { ascending: true }).limit(100),
         db.from('whatsapp_pacotes_compras').select('id, mercearia_id, nome, preco, solicitado_por_nome, criado_em')
@@ -612,6 +612,9 @@ async function avisosAdmin(user, prefs, ctx) {
         // (30/09) Teto de custo por loja: aviso ou assistente pausado neste ciclo
         db.from('whatsapp_assinaturas').select('id, mercearia_id, plano_nome, ciclo_inicio, teto_ciclo, teto_aviso_em, teto_pausado_em, teto_liberado_em')
           .eq('status', 'ativa').not('teto_aviso_em', 'is', null).limit(200),
+        // (01/10) Pedidos de números extras
+        db.from('whatsapp_assinaturas').select('id, mercearia_id, numeros_extras_pedido, numeros_extras_pedido_em, numeros_extras_pedido_por_nome')
+          .eq('status', 'ativa').gt('numeros_extras_pedido', 0).limit(200),
       ]);
       const tetoAtual = (tetos || []).filter(a => a.teto_ciclo === a.ciclo_inicio && !a.teto_liberado_em);
 
@@ -636,7 +639,7 @@ async function avisosAdmin(user, prefs, ctx) {
         }
       } catch (e) { console.error('[notificacoes] franquia whatsapp:', e.message); }
 
-      const todos = [...(ass || []), ...(pacs || []), ...tetoAtual];
+      const todos = [...(ass || []), ...(pacs || []), ...tetoAtual, ...(extras || [])];
       if (!todos.length) return;
       const ids = [...new Set(todos.map(x => x.mercearia_id).filter(Boolean))];
       const nomes = {};
@@ -657,6 +660,19 @@ async function avisosAdmin(user, prefs, ctx) {
           descricao: `${a.solicitado_por_nome ? `Por ${a.solicitado_por_nome} · ` : ''}esperando ativação há ${e.txt}`,
           grupo: e.d >= 2 ? 'atrasado' : 'hoje', prioridade: e.d >= 2 ? 'alta' : 'media',
           data_ref: a.criado_em, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
+          acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
+        });
+      });
+      (extras || []).forEach(a => {
+        const e = esperando(a.numeros_extras_pedido_em || new Date().toISOString());
+        const n = a.numeros_extras_pedido;
+        itens.push({
+          chave: `adm_whatsapp_numero_extra:${a.id}:${a.numeros_extras_pedido_em || ''}`,
+          categoria: 'whatsapp', tipo: 'whatsapp_numero_extra_pendente',
+          titulo: `${nomes[a.mercearia_id] || 'Estabelecimento'} pediu ${n} número${n === 1 ? '' : 's'} extra${n === 1 ? '' : 's'} de WhatsApp`,
+          descricao: `${a.numeros_extras_pedido_por_nome ? `Por ${a.numeros_extras_pedido_por_nome} · ` : ''}esperando aprovação há ${e.txt}`,
+          grupo: e.d >= 2 ? 'atrasado' : 'hoje', prioridade: e.d >= 2 ? 'alta' : 'media',
+          data_ref: a.numeros_extras_pedido_em, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
           acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
         });
       });

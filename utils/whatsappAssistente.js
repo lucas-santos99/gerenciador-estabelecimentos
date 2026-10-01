@@ -259,8 +259,9 @@ async function debitar(ctx, { peso, pedido_id, pedido_tipo, descricao, envio_id 
 
 /* ── Conversa sem consulta (01/10/2026) ─────────────────────────
    Respostas a "oi", "ok", "obrigado", pedir o menu de novo ou texto não
-   entendido: as `travas.conversa_gratis_dia` primeiras do dia (por número)
-   são grátis; depois, cada uma gasta `pesos.conversa`. Só vale pra loja que
+   entendido: as `travas.conversa_gratis_dia` primeiras do dia NA LOJA
+   (somando todos os números dela) são grátis; depois, cada uma gasta
+   `pesos.conversa`. Só vale pra loja que
    aceitou os termos a partir da versão que trouxe essa regra. */
 const CATEGORIAS_CONVERSA = ['menu', 'agradecimento'];
 async function precoConversa(ctx) {
@@ -268,7 +269,7 @@ async function precoConversa(ctx) {
   const gratis = ctx.params.travas.conversa_gratis_dia;
   const peso = ctx.params.pesos.conversa;
   const { count } = await db.from('whatsapp_envios').select('id', { count: 'exact', head: true })
-    .in('destino', ctx.variantes).eq('direcao', 'saida').in('categoria', CATEGORIAS_CONVERSA).neq('status', 'falhou')
+    .eq('mercearia_id', ctx.mid).eq('direcao', 'saida').in('categoria', CATEGORIAS_CONVERSA).neq('status', 'falhou')
     .gte('criado_em', inicioDiaTZ(hojeStrTZ(ctx.tz), ctx.tz).toISOString());
   const usadas = count || 0;
   if (usadas < gratis) return { peso: 0, aceitouRegra: true, gratis, restantesGratis: gratis - usadas - 1 };
@@ -277,8 +278,8 @@ async function precoConversa(ctx) {
 }
 // Linha de rodapé das respostas sem dados
 function linhaConversa(ctx, cob) {
-  if (cob.peso > 0) return `Esta resposta usou ${fmtCred(cob.peso)} (mensagem sem consulta; as ${cob.gratis} primeiras do dia são grátis). Saldo: ${fmtCred(ctx.saldo - cob.peso)}.`;
-  if (cob.aceitouRegra && cob.restantesGratis === 0) return `Saldo: ${fmtCred(ctx.saldo)}. A partir da próxima mensagem sem consulta de hoje (oi, ok, menu…), cada resposta gasta ${fmtCred(ctx.params.pesos.conversa)}.`;
+  if (cob.peso > 0) return `Esta resposta usou ${fmtCred(cob.peso)} (mensagem sem consulta; as ${cob.gratis} primeiras do dia na loja são grátis). Saldo: ${fmtCred(ctx.saldo - cob.peso)}.`;
+  if (cob.aceitouRegra && cob.restantesGratis === 0) return `Saldo: ${fmtCred(ctx.saldo)}. A partir da próxima mensagem sem consulta de hoje na loja (oi, ok, menu…), cada resposta gasta ${fmtCred(ctx.params.pesos.conversa)}.`;
   return `Saldo: ${fmtCred(ctx.saldo)}.`;
 }
 
