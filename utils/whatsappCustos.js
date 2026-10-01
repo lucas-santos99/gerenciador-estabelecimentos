@@ -51,6 +51,11 @@ const PARAMS_PADRAO = Object.freeze({
   // Números extras além do plano (01/10/2026): R$ por número/mês e quantos
   // extras uma loja pode ter. preco_extra = 0 → a loja não pode pedir extras.
   numeros: { preco_extra: 4.9, max_extras: 5 },
+  // Taxas de recebimento por forma de pagamento (01/10/2026) — usadas no
+  // valor líquido real de cada mensalidade/pacote registrado. Conferir na
+  // conta de cada provedor (Efí: Pix cobrança 1,19%; Asaas: cartão à vista
+  // R$ 0,49 + 2,99%, tabela padrão do site).
+  recebimento: { pix_efi_pct: 1.19, pix_efi_fixo: 0, cartao_asaas_pct: 2.99, cartao_asaas_fixo: 0.49 },
   cobranca_auto: { ativo: false, dias_antes: [3, 1], dias_depois: [1, 3], lojas_desligadas: [] },
 });
 
@@ -146,6 +151,11 @@ function normalizarParametros(entrada) {
   p.custos_fixos.chip_mensal = num(g('custos_fixos').chip_mensal, 0, 10000, p.custos_fixos.chip_mensal);
   p.numeros.preco_extra = num(g('numeros').preco_extra, 0, 1000, p.numeros.preco_extra);
   p.numeros.max_extras  = inteiro(g('numeros').max_extras, 0, 50, p.numeros.max_extras);
+  const rc = g('recebimento');
+  p.recebimento.pix_efi_pct       = num(rc.pix_efi_pct, 0, 20, p.recebimento.pix_efi_pct);
+  p.recebimento.pix_efi_fixo      = num(rc.pix_efi_fixo, 0, 50, p.recebimento.pix_efi_fixo);
+  p.recebimento.cartao_asaas_pct  = num(rc.cartao_asaas_pct, 0, 20, p.recebimento.cartao_asaas_pct);
+  p.recebimento.cartao_asaas_fixo = num(rc.cartao_asaas_fixo, 0, 50, p.recebimento.cartao_asaas_fixo);
 
   const cb = g('cobranca_auto');
   p.cobranca_auto.ativo       = cb.ativo === true;
@@ -244,7 +254,32 @@ function simular(p, { meta_pct = 0, dolar = null, usd_interp = null } = {}) {
   return s;
 }
 
+/* ── Pagamentos (01/10/2026) ───────────────────────────────── */
+// Formas de pagamento de uma mensalidade/pacote do WhatsApp
+const FORMAS_PAGAMENTO = Object.freeze({
+  pix_efi: 'Pix (Efí)',
+  cartao_asaas: 'Cartão (Asaas)',
+  dinheiro: 'Dinheiro',
+  transferencia: 'Transferência / Pix direto',
+  cortesia: 'Cortesia',
+  teste: 'Teste',
+  nao_informado: 'Não informado',
+});
+// Cortesia e teste liberam o ciclo sem receita (valor recebido = 0)
+const FORMAS_SEM_RECEITA = Object.freeze(['cortesia', 'teste']);
+// Taxa estimada que o provedor desconta de um valor recebido
+function taxaRecebimento(p, forma, valor) {
+  const v = Number(valor) || 0;
+  if (v <= 0) return 0;
+  const r = (p && p.recebimento) || PARAMS_PADRAO.recebimento;
+  let t = 0;
+  if (forma === 'pix_efi') t = v * r.pix_efi_pct / 100 + r.pix_efi_fixo;
+  else if (forma === 'cartao_asaas') t = v * r.cartao_asaas_pct / 100 + r.cartao_asaas_fixo;
+  return Math.min(v, Math.round(t * 100) / 100);
+}
+
 module.exports = {
+  FORMAS_PAGAMENTO, FORMAS_SEM_RECEITA, taxaRecebimento,
   TIPOS_PEDIDO, ACOES_TETO, PARAMS_PADRAO,
   normalizarParametros, aplicarDolarAuto, iaEmReais, piorCasoPorPedido, custoMaxPorCredito, tiposDoPlano, calcularPlano, simular, arred,
 };

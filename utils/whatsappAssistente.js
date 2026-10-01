@@ -647,6 +647,10 @@ async function atender({ msg, de, variantes, ativos }) {
   if (!W.tiposDoPlano(assinatura.recursos).includes('consulta')) {
     return avisoUnico(ctx, 'sem_consultas', 12, `O plano de WhatsApp de ${loja.nome_fantasia || 'sua loja'} (${assinatura.plano_nome}) não inclui consultas. O dono pode trocar de plano na tela *WhatsApp* do sistema.`);
   }
+  // (01/10) Ciclo novo esperando o pagamento: sem créditos até confirmar
+  if (A.aguardandoPagamento(assinatura)) {
+    return avisoUnico(ctx, 'aguardando_pagamento', 12, `O plano de WhatsApp de ${loja.nome_fantasia || 'sua loja'} renovou em ${C.fmtData(assinatura.ciclo_inicio)} e está aguardando o pagamento da mensalidade (${C.brl(A.valorMensal(assinatura))}). Assim que o pagamento for confirmado, os créditos do novo ciclo entram e as consultas voltam na hora.`);
+  }
   ctx.assinatura = assinatura;
   ctx.tipos = W.tiposDoPlano(assinatura.recursos);
   ctx.saldo = (await A.resumoCiclo(db, assinatura.id, assinatura.ciclo_inicio)).saldo;

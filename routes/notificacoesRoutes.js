@@ -74,7 +74,7 @@ const CATEGORIAS_ADMIN = [
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: true } },
   { id: 'solicitacoes', label: 'Solicitações',        icone: '✉️', descricao: 'Solicitações de alteração esperando resposta.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
-  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar, lojas que passaram do teto de custo, a franquia grátis da Meta (80% e esgotada) e o teto global do mês (80% e acima).',
+  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar, lojas que passaram do teto de custo, a franquia grátis da Meta (80% e esgotada) e o teto global do mês (80% e acima) e ciclos renovados aguardando pagamento.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
   { id: 'cadastros',    label: 'Novos cadastros',     icone: '🏪', descricao: 'Avisa quando um estabelecimento novo é cadastrado no sistema (pra conferir os dados, dar boas-vindas, acompanhar o 1º pagamento).',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: false } },
@@ -616,6 +616,11 @@ async function avisosAdmin(user, prefs, ctx) {
         db.from('whatsapp_assinaturas').select('id, mercearia_id, numeros_extras_pedido, numeros_extras_pedido_em, numeros_extras_pedido_por_nome')
           .eq('status', 'ativa').gt('numeros_extras_pedido', 0).limit(200),
       ]);
+      // (01/10, SQL 18) Ciclos renovados esperando o pagamento
+      const { data: aguard } = await db.from('whatsapp_assinaturas')
+        .select('id, mercearia_id, plano_nome, preco, numeros_extras, numero_extra_preco, ciclo_inicio, aguardando_pagamento_desde')
+        .eq('status', 'ativa').not('aguardando_pagamento_desde', 'is', null).limit(200);
+      const aguardando = (aguard || []).filter(a => a.aguardando_pagamento_desde === a.ciclo_inicio);
       const tetoAtual = (tetos || []).filter(a => a.teto_ciclo === a.ciclo_inicio && !a.teto_liberado_em);
 
       // (01/10) Franquia grátis da Meta (1.000 respostas/mês por número)
@@ -660,7 +665,7 @@ async function avisosAdmin(user, prefs, ctx) {
         }
       } catch (e) { console.error('[notificacoes] teto global whatsapp:', e.message); }
 
-      const todos = [...(ass || []), ...(pacs || []), ...tetoAtual, ...(extras || [])];
+      const todos = [...(ass || []), ...(pacs || []), ...tetoAtual, ...(extras || []), ...aguardando];
       if (!todos.length) return;
       const ids = [...new Set(todos.map(x => x.mercearia_id).filter(Boolean))];
       const nomes = {};
@@ -694,6 +699,19 @@ async function avisosAdmin(user, prefs, ctx) {
           descricao: `${a.numeros_extras_pedido_por_nome ? `Por ${a.numeros_extras_pedido_por_nome} · ` : ''}esperando aprovação há ${e.txt}`,
           grupo: e.d >= 2 ? 'atrasado' : 'hoje', prioridade: e.d >= 2 ? 'alta' : 'media',
           data_ref: a.numeros_extras_pedido_em, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
+          acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
+        });
+      });
+      aguardando.forEach(a => {
+        const d = diasEntre(a.ciclo_inicio, hojeStr);
+        const valor = (Number(a.preco) || 0) + (Number(a.numeros_extras) || 0) * (Number(a.numero_extra_preco) || 0);
+        itens.push({
+          chave: `adm_whatsapp_aguardando_pag:${a.id}:${a.ciclo_inicio}`,
+          categoria: 'whatsapp', tipo: 'whatsapp_aguardando_pagamento',
+          titulo: `${nomes[a.mercearia_id] || 'Estabelecimento'}: WhatsApp renovou e está aguardando pagamento (${brl(valor)})`,
+          descricao: `Plano "${a.plano_nome}" · ciclo desde ${a.ciclo_inicio.split('-').reverse().join('/')}${d > 0 ? ` (${d} dia${d === 1 ? '' : 's'})` : ''}. Os créditos entram quando você registrar o pagamento na aba Lojas.`,
+          grupo: d >= 3 ? 'atrasado' : 'hoje', prioridade: d >= 3 ? 'alta' : 'media',
+          data_ref: a.ciclo_inicio, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
           acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },
         });
       });

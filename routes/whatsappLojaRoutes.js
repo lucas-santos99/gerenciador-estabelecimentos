@@ -146,6 +146,8 @@ router.get('/', async (req, res) => {
         // Plano ativo com aceite de uma versão antiga dos termos (01/10/2026)
         termos_pendentes: abertas.ativa.termos_versao !== A.TERMOS.versao,
         valor_mensal: A.valorMensal(abertas.ativa),
+        // (01/10) Ciclo novo esperando o pagamento: os créditos entram quando for confirmado
+        aguardando_pagamento: A.aguardandoPagamento(abertas.ativa),
       } : null,
       pendente: abertas.pendente,
       pacotes_pedidos: pacs || [],
