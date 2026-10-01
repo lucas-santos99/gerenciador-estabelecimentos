@@ -118,11 +118,14 @@ async function enviar(conteudo, { para, tipo = 'resposta', mercearia_id = null, 
     custo_meta_estimado: custo, creditos,
   };
   try {
+    // `conteudo` pode ser uma função (ex.: documento: sobe o arquivo antes);
+    // se ela falhar, o envio fica registrado como "falhou", igual aos outros.
+    const corpo = typeof conteudo === 'function' ? await conteudo() : conteudo;
     const r = await graph('POST', `${PHONE_NUMBER_ID}/messages`, {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: destino,
-      ...conteudo,
+      ...corpo,
     });
     const id = r.messages?.[0]?.id || null;
     const { data: reg } = await db.from('whatsapp_envios').insert({ ...base, meta_message_id: id, status: 'enviado' }).select('id').maybeSingle();
@@ -173,6 +176,37 @@ function limparInterativo(i) {
 }
 async function enviarInterativo({ interativo, ...opcoes }) {
   return enviar({ type: 'interactive', interactive: limparInterativo(interativo) }, opcoes);
+}
+
+/* ── Documento (PDF) — 01/10/2026 ───────────────────────────── */
+// Sobe o arquivo pra Meta (POST /{phone-id}/media, multipart) e devolve o
+// id da mídia. A Meta guarda o arquivo por 30 dias; subir não é cobrado.
+async function subirMidia(buffer, { nome = 'arquivo.pdf', mime = 'application/pdf' } = {}) {
+  if (!token()) throw new ErroMeta('WHATSAPP_TOKEN não configurado no servidor.', { codigo: 'SEM_TOKEN' });
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('type', mime);
+  form.append('file', new Blob([buffer], { type: mime }), nome);
+  const resp = await chamarFetch('POST', `${GRAPH}/${PHONE_NUMBER_ID}/media`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token()}` }, body: form,
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok || json.error || !json.id) {
+    const e = json.error || {};
+    throw new ErroMeta(e.error_user_msg || e.message || `Meta respondeu HTTP ${resp.status} ao subir o arquivo`, {
+      status: resp.status, codigo: e.code ?? null, subcodigo: e.error_subcode ?? null, detalhe: e.error_data?.details || null,
+    });
+  }
+  return json.id;
+}
+
+// Envia um PDF como documento. `legenda` aparece embaixo do arquivo (até 1024).
+async function enviarDocumento({ pdf, nomeArquivo, legenda = '', ...opcoes }) {
+  const nome = String(nomeArquivo || 'relatorio.pdf').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 120);
+  return enviar(async () => {
+    const id = await subirMidia(pdf, { nome, mime: 'application/pdf' });
+    return { type: 'document', document: { id, filename: nome, ...(legenda ? { caption: corta(legenda, 1024) } : {}) } };
+  }, opcoes);
 }
 
 /* ── Franquia grátis da Meta (01/10/2026) ───────────────────── */
@@ -260,6 +294,6 @@ function explicarErro(codigo) {
 
 module.exports = {
   PHONE_NUMBER_ID, WABA_ID, configuracao, graph, ErroMeta, parametros,
-  variantesTelefone, enviarTexto, enviarInterativo, limparInterativo, statusNumero, appsAssinados, assinarWebhook,
+  variantesTelefone, enviarTexto, enviarInterativo, enviarDocumento, subirMidia, limparInterativo, statusNumero, appsAssinados, assinarWebhook,
   assinaturaValida, verifyTokenConfere, explicarErro, franquiaDoMes,
 };

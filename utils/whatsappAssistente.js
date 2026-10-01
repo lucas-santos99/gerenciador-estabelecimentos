@@ -30,6 +30,14 @@
 //     (whatsapp_envios) e compara com o preço do plano. Aviso% → avisa o
 //     SuperAdmin; Ação% → pausa o assistente (ou só avisa), até o master
 //     retomar ou o ciclo virar.
+//
+// Relatórios em PDF (01/10/2026)
+//   • Menu → "Relatório em PDF" → lista dos relatórios que a pessoa pode ver
+//     (mesmas permissões do painel) → o PDF chega como documento. Ou direto:
+//     "pdf vendas mês", "pdf estoque", "pdf fiado", "pdf contas"…
+//   • Só pra plano com o recurso "pdf". Gasta `pesos.pdf` (pedido_tipo 'pdf');
+//     a lista e o documento são o mesmo pedido. PDF com a Identidade dos
+//     Relatórios (utils/relatorioPdf.js + utils/whatsappRelatorios.js).
 // ============================================================
 const crypto = require('crypto');
 const db = require('../db/supabaseAdmin');
@@ -39,6 +47,7 @@ const W = require('./whatsappCustos');
 const A = require('./whatsappAssinaturas');
 const M = require('./whatsappMeta');
 const C = require('./whatsappConsultas');
+const R = require('./whatsappRelatorios');
 
 const MIN = 1 / 60; // 1 minuto, em horas (para respondeuRecente)
 
@@ -56,6 +65,7 @@ const CONSULTAS = {
   estoque_baixo:   { titulo: 'Estoque baixo',       atalho: 'estoque baixo', botao: 'Estoque baixo',   pode: (x) => tem(x, 'estoque') },
   fiado:           { titulo: 'Quem deve (fiado)',   atalho: 'fiado',         botao: 'Quem deve',       pode: (x) => tem(x, 'clientes') },
   contas:          { titulo: 'Contas a pagar',      atalho: 'contas',        botao: 'Contas a pagar',  pode: (x) => tem(x, 'financeiro', 'financeiro_contas_pagar', 'fornecedores') },
+  pdf:             { titulo: 'Relatório em PDF',    atalho: 'pdf vendas mês', botao: 'Relatório PDF', pode: (x) => R.ORDEM.some(k => R.RELATORIOS[k].pode(x)), recurso: 'pdf', dicaAtalho: 'pdf + vendas, estoque, fiado…' },
   saldo:           { titulo: 'Meus créditos',       atalho: 'saldo',         botao: 'Meus créditos',   pode: () => true, gratis: true },
 };
 // Ordem de preferência dos botões rápidos que vão junto com cada resposta
@@ -95,6 +105,8 @@ function interpretar(texto) {
   if (/^(muito )?(obrigad[oa]s?|obg|brigad[oa]|valeu|vlw|ok|okay|okk+|blz|beleza|show|top|certo|perfeito|otimo|massa|joia|tmj|entendi|ta bom|ta|fechou|boa|legal|certinho|beleza entao)( (obrigad[oa]|valeu|mesmo|demais|entao))?$/.test(t)) return { acao: 'agradecimento' };
   if (/^(trocar|mudar)( de)? loja$|^lojas?$/.test(t)) return { acao: 'trocar_loja' };
   if (/\b(suporte|atendente|humano|atendimento|falar com (alguem|uma pessoa|voces))\b/.test(t)) return { acao: 'suporte' };
+  // Relatório em PDF: "pdf vendas mês", "relatório estoque", "fiado em pdf"
+  if (/\bpdf\b|^relatorios?\b/.test(t)) return { acao: 'pdf', rel: relatorioDoTexto(t) };
   if (/^(meu |meus |ver )?(saldo|creditos?)( do whatsapp)?$/.test(t)) return { acao: 'consulta', chave: 'saldo' };
   if (/\bestoque (baixo|minimo|acabando)\b|\b(acabando|em falta|sem estoque|zerados?|repor|reposicao)\b/.test(t)) return { acao: 'consulta', chave: 'estoque_baixo' };
   // "estoque coca" / "produto coca" (prefixo forte, vem antes de tudo)
@@ -116,6 +128,24 @@ function interpretar(texto) {
   m = /^(tem|quantos|quantas|qtd|quanto tem de|quanto tem|buscar|procurar)\s+(.+)$/.exec(t);
   if (m) return { acao: 'consulta', chave: 'estoque_produto', termo: termoApos(m[1].split(' ').length) };
   return null;
+}
+
+// "pdf vendas mes passado" → 'vendas_mes_passado'. null = não disse qual (abre a lista).
+function relatorioDoTexto(t) {
+  const r = ` ${String(t).replace(/\b(pdf|relatorios?)\b/g, ' ').replace(/\s+/g, ' ').trim()} `;
+  if (/\b(estoque|produtos?)\b/.test(r)) {
+    return /\b(baixo|minimo|acabando|falta|faltando|repor|reposicao|zerados?)\b/.test(r) ? 'estoque_baixo' : 'estoque';
+  }
+  if (/\b(acabando|em falta|repor|reposicao|zerados?)\b/.test(r)) return 'estoque_baixo';
+  if (/\b(fiado|fiados|devedor(es)?|devem|devendo|caderneta|clientes?)\b|\bquem (me )?deve\b/.test(r)) return 'fiado';
+  if (/\b(contas?|boletos?|pagar|vencimentos?)\b/.test(r)) return 'contas';
+  const periodo = /\b(mes (passado|anterior)|ultimo mes)\b/.test(r) ? 'vendas_mes_passado'
+    : /\bontem\b/.test(r) ? 'vendas_ontem'
+      : /\b(semana|7 dias|sete dias)\b/.test(r) ? 'vendas_7d'
+        : /\b(hoje|dia)\b/.test(r) ? 'vendas_hoje'
+          : /\b(mes|mensal)\b/.test(r) ? 'vendas_mes' : null;
+  if (/\b(vend\w*|fatur\w*|caixa)\b/.test(r)) return periodo || 'vendas_mes';
+  return periodo;
 }
 
 /* ── Conversa (estado por número) ───────────────────────────── */
@@ -285,7 +315,7 @@ function linhaConversa(ctx, cob) {
 
 /* ── Menu ───────────────────────────────────────────────────── */
 function opcoesDoMenu(ctx) {
-  const rows = Object.entries(CONSULTAS).filter(([, c]) => c.pode(ctx.pessoa))
+  const rows = Object.entries(CONSULTAS).filter(([, c]) => c.pode(ctx.pessoa) && (!c.recurso || ctx.tipos.includes(c.recurso)))
     .map(([k, c]) => ({ id: `c:${k}`, title: c.titulo, description: `Ou escreva: ${c.dicaAtalho || c.atalho}${c.gratis ? ' (não gasta crédito)' : ''}` }));
   if (ctx.multiLoja && rows.length < 10) rows.push({ id: 'c:trocar_loja', title: 'Trocar de loja', description: 'Este número está em mais de uma loja' });
   return rows;
@@ -454,6 +484,8 @@ async function rodarConsulta(ctx, chave, cmd = {}) {
       });
     case 'estoque_produto':
       return consultarProduto(ctx, cmd.termo, null);
+    case 'pdf':
+      return pedirRelatorio(ctx);
     case 'estoque_baixo':
       return executarConsulta(ctx, chave, () => C.estoqueBaixo(ctx.mid));
     case 'fiado':
@@ -467,6 +499,93 @@ async function rodarConsulta(ctx, chave, cmd = {}) {
       if (C.PERIODOS[chave]) return executarConsulta(ctx, chave, () => C.vendas(ctx.mid, ctx.tz, chave));
       return enviarMenu(ctx);
   }
+}
+
+/* ── Relatórios em PDF ───────────────────────────────────────── */
+function relatoriosDaPessoa(ctx) {
+  return R.ORDEM.filter(k => R.RELATORIOS[k].pode(ctx.pessoa) && !(k === 'fiado' && ctx.loja.fiado_ativo === false));
+}
+// Barra o pedido de PDF (sem gastar nada) quando o plano não tem o recurso,
+// a pessoa não pode ver o relatório ou o saldo não dá. true = barrou.
+async function barrarPdf(ctx, chave = null) {
+  if (!ctx.tipos.includes('pdf')) {
+    await avisoUnico(ctx, 'sem_pdf', 1, `O plano de WhatsApp de ${ctx.loja.nome_fantasia || 'sua loja'} (${ctx.assinatura.plano_nome}) não inclui relatórios em PDF. O dono pode trocar de plano na tela *WhatsApp* do sistema. Nenhum crédito foi usado.`);
+    return true;
+  }
+  if (chave === 'fiado' && ctx.loja.fiado_ativo === false) {
+    await avisoUnico(ctx, 'sem_permissao', MIN, '📒 O fiado está desligado nas configurações desta loja, então não há relatório de fiado. Nenhum crédito foi usado.');
+    return true;
+  }
+  const permitidos = relatoriosDaPessoa(ctx);
+  if (!permitidos.length || (chave && !permitidos.includes(chave))) {
+    const nome = chave ? `o relatório *${R.RELATORIOS[chave].titulo}*` : 'relatórios';
+    await avisoUnico(ctx, 'sem_permissao', MIN, `Você não tem permissão para ver ${nome} no sistema, então também não dá pra pedir por aqui. Se precisar, peça ao dono da loja para liberar. Nenhum crédito foi usado.`);
+    return true;
+  }
+  if (ctx.saldo < ctx.params.pesos.pdf) {
+    await avisoSemSaldo(ctx);
+    return true;
+  }
+  return false;
+}
+
+// Lista dos relatórios (faz parte do pedido: sozinha não gasta crédito)
+async function pedirRelatorio(ctx) {
+  if (await barrarPdf(ctx)) return;
+  if (await respondeuRecente(ctx.variantes, 20 / 3600, 'escolha_pdf')) return; // toque repetido
+  const permitidos = relatoriosDaPessoa(ctx);
+  const pedido_id = crypto.randomUUID();
+  const comPedido = (ctx.params.travas.envios.pdf || 2) >= 2;
+  const exemplo = R.RELATORIOS[permitidos[0]].atalho;
+  const env = await enviarLista(ctx, {
+    type: 'list',
+    header: { text: 'Relatório em PDF' },
+    body: { text: `Qual relatório você quer? Ele chega aqui como arquivo PDF, com os dados e a logo da loja.\n\nCada relatório usa ${fmtCred(ctx.params.pesos.pdf)} (escolher na lista faz parte do mesmo pedido). Saldo: ${fmtCred(ctx.saldo)}.\n\nDa próxima vez, peça direto: *${exemplo}*` },
+    action: { button: 'Ver relatórios', sections: [{ title: 'Relatórios', rows: permitidos.map(k => ({
+      id: `r:${k}`, title: R.RELATORIOS[k].lista, description: `${R.RELATORIOS[k].desc} · "${R.RELATORIOS[k].atalho}"`,
+    })) }] },
+  }, { categoria: 'escolha_pdf', ...(comPedido ? { pedido_id, pedido_tipo: 'pdf' } : {}) });
+  if (env.ok) await salvarConversa(ctx.de, { mercearia_id: ctx.mid, estado: 'escolher_relatorio', dados: { pedido_id: comPedido ? pedido_id : null, opcoes: permitidos }, expira_em: expiraEm(30) });
+}
+
+// Gera e manda o PDF; o crédito só sai depois que a Meta aceitou o envio.
+async function enviarRelatorio(ctx, chave, conversa, { pedidoId = null } = {}) {
+  if (!R.RELATORIOS[chave]) return pedirRelatorio(ctx);
+  if (await barrarPdf(ctx, chave)) return;
+  // Toque repetido no mesmo relatório (até 2 min) → não reenvia nem cobra de novo
+  const ult = conversa.dados.ultimo_relatorio;
+  if (ult && ult.chave === chave && Date.now() - Date.parse(ult.em) < 120000) return;
+  await salvarConversa(ctx.de, { mercearia_id: ctx.mid, estado: null, dados: { ultimo_relatorio: { chave, em: new Date().toISOString() } }, expira_em: null });
+
+  const peso = ctx.params.pesos.pdf;
+  const pedido_id = pedidoId || crypto.randomUUID();
+  const falhou = async (texto) => {
+    await salvarConversa(ctx.de, { mercearia_id: ctx.mid, estado: null, dados: {}, expira_em: null });
+    await avisoUnico(ctx, 'erro', MIN, `${texto} Tente de novo em instantes. Nenhum crédito foi usado.`);
+  };
+  let r;
+  try {
+    r = await R.gerar(chave, { mid: ctx.mid, tz: ctx.tz, pessoa: ctx.pessoa });
+  } catch (e) {
+    console.error(`[WHATSAPP] relatório ${chave}:`, e.message);
+    return falhou('Não consegui gerar esse relatório agora.');
+  }
+  const legenda = [
+    `📄 *${r.titulo}* — ${ctx.loja.nome_fantasia || 'sua loja'}`,
+    r.resumoTxt,
+    '',
+    `_${fmtCred(peso)} usado · saldo ${fmtCred(ctx.saldo - peso)}_`,
+    'Outro relatório: escreva *pdf* · Consultas: *menu*',
+  ].join('\n');
+  const env = await M.enviarDocumento({
+    para: ctx.de, pdf: r.pdf, nomeArquivo: r.arquivo, legenda,
+    tipo: 'resposta', mercearia_id: ctx.mid, categoria: `pdf_${chave}`, pedido_id, pedido_tipo: 'pdf',
+  });
+  if (!env.ok) {
+    console.error(`[WHATSAPP] envio do PDF ${chave}:`, env.erro);
+    return falhou('Não consegui enviar o PDF agora.');
+  }
+  await debitar(ctx, { peso, pedido_id, pedido_tipo: 'pdf', descricao: `Relatório PDF: ${r.titulo}`, envio_id: env.envio_id });
 }
 
 /* ── Entrada principal ──────────────────────────────────────── */
@@ -528,6 +647,7 @@ async function atender({ msg, de, variantes, ativos }) {
     return avisoUnico(ctx, 'sem_consultas', 12, `O plano de WhatsApp de ${loja.nome_fantasia || 'sua loja'} (${assinatura.plano_nome}) não inclui consultas. O dono pode trocar de plano na tela *WhatsApp* do sistema.`);
   }
   ctx.assinatura = assinatura;
+  ctx.tipos = W.tiposDoPlano(assinatura.recursos);
   ctx.saldo = (await A.resumoCiclo(db, assinatura.id, assinatura.ciclo_inicio)).saldo;
 
   // Trava por dia (por loja): mensagens de consulta enviadas hoje
@@ -549,6 +669,11 @@ async function atender({ msg, de, variantes, ativos }) {
     const id = entrada.id;
     if (id.startsWith('loja:')) return enviarMenu(ctx, '', { conversa: false });
     if (id.startsWith('c:')) return rodarConsulta(ctx, id.slice(2));
+    if (id.startsWith('r:')) {
+      const chave = id.slice(2);
+      const continua = conversa.estado === 'escolher_relatorio' && (conversa.dados.opcoes || []).includes(chave) ? conversa.dados.pedido_id : null;
+      return enviarRelatorio(ctx, chave, conversa, { pedidoId: continua });
+    }
     if (id.startsWith('p:')) {
       const prodId = id.slice(2);
       if (!CONSULTAS.estoque_produto.pode(ctx.pessoa)) return rodarConsulta(ctx, 'estoque_produto');
@@ -595,6 +720,7 @@ async function atender({ msg, de, variantes, ativos }) {
         : 'Este WhatsApp é automático. Para falar com a nossa equipe, use o "Fale Conosco" dentro do sistema.');
     }
     if (cmd.acao === 'consulta') return rodarConsulta(ctx, cmd.chave, cmd);
+    if (cmd.acao === 'pdf') return cmd.rel ? enviarRelatorio(ctx, cmd.rel, conversa) : pedirRelatorio(ctx);
   }
   // Texto livre depois de "Qual produto?"
   if (conversa.estado === 'aguardando_produto' && conversa.mercearia_id === ctx.mid) {
@@ -610,4 +736,4 @@ async function carregarParametros() {
   return M.parametros();
 }
 
-module.exports = { atender, estornarPedido, interpretar, lerEntrada, CONSULTAS, verificarTeto, custoDoCiclo };
+module.exports = { atender, estornarPedido, interpretar, relatorioDoTexto, lerEntrada, CONSULTAS, verificarTeto, custoDoCiclo };

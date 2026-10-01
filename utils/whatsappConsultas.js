@@ -73,10 +73,16 @@ function intervalo(chave, tz) {
   if (chave === 'vendas_ontem') { const o = somarDias(hoje, -1); return { de: o, ate: o }; }
   if (chave === 'vendas_7d') return { de: somarDias(hoje, -6), ate: hoje };
   if (chave === 'vendas_mes') return { de: `${hoje.slice(0, 8)}01`, ate: hoje };
+  if (chave === 'vendas_mes_passado') { // só no relatório em PDF
+    const fim = somarDias(`${hoje.slice(0, 8)}01`, -1);
+    return { de: `${fim.slice(0, 8)}01`, ate: fim };
+  }
   return { de: hoje, ate: hoje };
 }
 
-async function vendas(mid, tz, chave) {
+// Vendas do período (sem as canceladas) já somadas por forma de pagamento.
+// Usado pela consulta (texto) e pelo relatório em PDF.
+async function dadosVendas(mid, tz, chave) {
   const { de, ate } = intervalo(chave, tz);
   const inicio = inicioDiaTZ(de, tz).toISOString();
   const fim = inicioDiaTZ(somarDias(ate, 1), tz).toISOString(); // até o fim do dia (exclusivo)
@@ -104,7 +110,11 @@ async function vendas(mid, tz, chave) {
     if (fatias && fatias.length) fatias.forEach(f => soma(f.meio_pagamento, f.valor));
     else soma(v.meio_pagamento, v.valor_total);
   });
+  return { de, ate, lista, total, porMeio };
+}
 
+async function vendas(mid, tz, chave) {
+  const { de, ate, lista, total, porMeio } = await dadosVendas(mid, tz, chave);
   const periodoTxt = de === ate ? fmtData(de) : `${fmtData(de)} a ${fmtData(ate)}`;
   const linhas = [`📊 *${PERIODOS[chave].titulo}* (${periodoTxt})`];
   if (!lista.length) {
@@ -162,14 +172,16 @@ async function fiado(mid, tz, loja) {
 
 /* ── Contas a pagar (atrasadas + próximos 7 dias) ───────────── */
 // verContas: contas "da casa" (Financeiro); verFornecedores: contas de compras a prazo
-async function contas(mid, tz, { verContas, verFornecedores }) {
+// Contas em aberto que vencem até `dias` à frente (inclui as atrasadas), já
+// com o nome do fornecedor e filtradas pela permissão. Consulta e PDF usam.
+async function dadosContas(mid, tz, { verContas, verFornecedores }, dias = 7) {
   const hoje = hojeStrTZ(tz);
-  const limite = somarDias(hoje, 7);
+  const limite = somarDias(hoje, dias);
   const { data: lista, error } = await db.from('contas_a_pagar')
     .select('id, descricao, valor, data_vencimento, status')
     .eq('mercearia_id', mid).neq('status', 'paga')
     .not('data_vencimento', 'is', null).lte('data_vencimento', limite)
-    .order('data_vencimento', { ascending: true }).limit(300);
+    .order('data_vencimento', { ascending: true }).limit(dias > 7 ? 2000 : 300);
   if (error) throw new Error(error.message);
 
   let fornecedorDaConta = {};
@@ -185,6 +197,11 @@ async function contas(mid, tz, { verContas, verFornecedores }) {
     (compras || []).forEach(c => { fornecedorDaConta[c.conta_a_pagar_id] = nomes[c.fornecedor_id] || 'fornecedor'; });
   }
   const visiveis = (lista || []).filter(c => (fornecedorDaConta[c.id] ? verFornecedores : verContas));
+  return { hoje, visiveis, fornecedorDaConta };
+}
+
+async function contas(mid, tz, permissoes) {
+  const { hoje, visiveis, fornecedorDaConta } = await dadosContas(mid, tz, permissoes, 7);
   const titulo = '🧾 *Contas a pagar* (atrasadas e próximos 7 dias)';
   if (!visiveis.length) return `${titulo}\n\nNenhuma conta atrasada ou vencendo nos próximos 7 dias. ✅`;
 
@@ -338,6 +355,6 @@ async function textoProduto(mid, p) {
 }
 
 module.exports = {
-  PERIODOS, brl, qtd, fmtData, somarDias, diasEntre, horaTZ, normalizar, todas,
-  vendas, fiado, contas, estoqueBaixo, buscarProdutos, produtoPorId, textoProduto,
+  PERIODOS, brl, qtd, fmtData, somarDias, diasEntre, horaTZ, normalizar, todas, dataStrTZ, rotuloMeio, intervalo,
+  dadosVendas, dadosContas, vendas, fiado, contas, estoqueBaixo, buscarProdutos, produtoPorId, textoProduto,
 };
