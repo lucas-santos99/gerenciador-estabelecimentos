@@ -493,9 +493,12 @@ router.get('/uso', async (req, res) => {
     const custoLojas = Math.max(0, G.lojas.meta + G.lojas.ia - gratis);
     const custoSeu = G.seu.meta + G.seu.ia;
     const chip = p.custos_fixos.chip_mensal;
+    let franquia = null;
+    try { franquia = await M.franquiaDoMes(mesStr); } catch (e) { console.error('[WHATSAPP] franquia:', e.message); }
 
     res.json({
       mes: mesStr,
+      franquia,
       total_mensagens: linhas.length,
       custo_meta: W.arred(meta),
       custo_ia: W.arred(ia),
@@ -797,7 +800,9 @@ router.get('/conexao', async (req, res) => {
   const r = {
     config, numero: null, webhook_assinado: null, erro: null, pode_editar: !!req.user.is_master,
     webhook_url: `${proto}://${req.get('host')}/api/whatsapp/webhook`,
+    franquia: null,
   };
+  try { r.franquia = await M.franquiaDoMes(); } catch (e) { console.error('[WHATSAPP] franquia:', e.message); }
   if (!config.token) return res.json(r);
   try {
     r.numero = await M.statusNumero();

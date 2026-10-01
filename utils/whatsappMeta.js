@@ -17,6 +17,7 @@
 const crypto = require('crypto');
 const db = require('../db/supabaseAdmin');
 const W = require('./whatsappCustos');
+const { TIMEZONE_PADRAO, inicioDiaTZ } = require('./fusoHorario');
 
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '1311181085415438';
 const WABA_ID         = process.env.WHATSAPP_WABA_ID || '1421993583238754';
@@ -46,9 +47,25 @@ class ErroMeta extends Error {
   }
 }
 
+// Falha de rede ("fetch failed": conexão caiu/reiniciou entre o Railway e a
+// Meta). Leitura (GET) tenta de novo uma vez; envio (POST) não, pra nunca
+// mandar a mesma mensagem duas vezes.
+async function chamarFetch(metodo, url, opcoes) {
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      return await fetch(url, opcoes);
+    } catch (e) {
+      const causa = e?.cause?.code || e?.cause?.message || e?.message || 'erro';
+      console.warn(`[WHATSAPP] falha de rede com a Meta (${metodo}, tentativa ${tentativa}): ${causa}`);
+      if (metodo === 'GET' && tentativa < 2) { await new Promise(r => setTimeout(r, 400)); continue; }
+      throw new ErroMeta('Não foi possível falar com a Meta agora (falha de rede). Tente de novo em instantes.', { codigo: 'REDE', detalhe: String(causa).slice(0, 120) });
+    }
+  }
+}
+
 async function graph(metodo, caminho, corpo) {
   if (!token()) throw new ErroMeta('WHATSAPP_TOKEN não configurado no servidor.', { codigo: 'SEM_TOKEN' });
-  const resp = await fetch(`${GRAPH}/${caminho}`, {
+  const resp = await chamarFetch(metodo, `${GRAPH}/${caminho}`, {
     method: metodo,
     headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
     body: corpo ? JSON.stringify(corpo) : undefined,
@@ -158,6 +175,44 @@ async function enviarInterativo({ interativo, ...opcoes }) {
   return enviar({ type: 'interactive', interactive: limparInterativo(interativo) }, opcoes);
 }
 
+/* ── Franquia grátis da Meta (01/10/2026) ───────────────────── */
+// Desde 01/10/2026 a Meta cobra cada mensagem livre (resposta dentro da
+// janela de 24h), mas cada NÚMERO tem 1.000 grátis por mês. É assunto só do
+// SuperAdmin: o comerciante paga a mensalidade fixa do plano (créditos) e
+// nunca vê essa franquia. Contamos aqui o que já saiu no mês (respostas +
+// testes, sem as que falharam) e projetamos o mês no ritmo atual.
+// Mês no fuso de Brasília (aproximação do ciclo de cobrança da Meta).
+async function franquiaDoMes(mesStr = null) {
+  const p = await parametros();
+  const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE_PADRAO }).format(new Date());
+  const mes = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(mesStr || '')) ? mesStr : hoje.slice(0, 7);
+  const [a, m] = mes.split('-').map(Number);
+  const proximo = m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, '0')}`;
+  const { count, error } = await db.from('whatsapp_envios').select('id', { count: 'exact', head: true })
+    .eq('direcao', 'saida').in('tipo', ['resposta', 'teste']).neq('status', 'falhou')
+    .gte('criado_em', inicioDiaTZ(`${mes}-01`, TIMEZONE_PADRAO).toISOString())
+    .lt('criado_em', inicioDiaTZ(`${proximo}-01`, TIMEZONE_PADRAO).toISOString());
+  if (error) throw new Error(error.message);
+  const usadas = count || 0;
+  const gratis = p.meta.respostas_gratis_mes;
+  const preco = p.meta.preco_resposta;
+  const diasMes = new Date(Date.UTC(a, m, 0)).getUTCDate();
+  const mesAtual = mes === hoje.slice(0, 7);
+  const dia = mesAtual ? Number(hoje.slice(8, 10)) : diasMes;
+  const projecao = mesAtual && dia > 0 ? Math.round((usadas / dia) * diasMes) : usadas;
+  // Dia em que, no ritmo atual, a franquia acaba (se acabar dentro do mês)
+  const ritmo = dia > 0 ? usadas / dia : 0;
+  const diaFim = mesAtual && ritmo > 0 && usadas < gratis && projecao > gratis ? Math.min(diasMes, Math.ceil(gratis / ritmo)) : null;
+  const r2 = (v) => Math.round(v * 100) / 100;
+  return {
+    mes, mes_atual: mesAtual, usadas, gratis, restantes: Math.max(0, gratis - usadas),
+    pct: gratis > 0 ? Math.round((usadas / gratis) * 100) : null,
+    preco_resposta: preco,
+    excedentes: Math.max(0, usadas - gratis), custo_excedente: r2(Math.max(0, usadas - gratis) * preco),
+    projecao, custo_projetado: r2(Math.max(0, projecao - gratis) * preco), dia_fim_franquia: diaFim,
+  };
+}
+
 /* ── Status do número e do webhook ──────────────────────────── */
 async function statusNumero() {
   return graph('GET', `${PHONE_NUMBER_ID}?fields=verified_name,display_phone_number,quality_rating,name_status,code_verification_status,platform_type,throughput,status,messaging_limit_tier`);
@@ -206,5 +261,5 @@ function explicarErro(codigo) {
 module.exports = {
   PHONE_NUMBER_ID, WABA_ID, configuracao, graph, ErroMeta, parametros,
   variantesTelefone, enviarTexto, enviarInterativo, limparInterativo, statusNumero, appsAssinados, assinarWebhook,
-  assinaturaValida, verifyTokenConfere, explicarErro,
+  assinaturaValida, verifyTokenConfere, explicarErro, franquiaDoMes,
 };

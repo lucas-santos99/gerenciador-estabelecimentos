@@ -74,7 +74,7 @@ const CATEGORIAS_ADMIN = [
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: true } },
   { id: 'solicitacoes', label: 'Solicitações',        icone: '✉️', descricao: 'Solicitações de alteração esperando resposta.',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
-  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar, e lojas que passaram do teto de custo.',
+  { id: 'whatsapp',     label: 'WhatsApp',            icone: '💬', descricao: 'Lojas pedindo plano de WhatsApp, troca de plano ou pacote extra, esperando você ativar ou recusar, lojas que passaram do teto de custo e a franquia grátis da Meta (80% e esgotada).',
     padrao: { ativo: true, antecedencia_dias: 0, frequencia: 'sempre', intervalo_horas: 4, no_resumo: true } },
   { id: 'cadastros',    label: 'Novos cadastros',     icone: '🏪', descricao: 'Avisa quando um estabelecimento novo é cadastrado no sistema (pra conferir os dados, dar boas-vindas, acompanhar o 1º pagamento).',
     padrao: { ativo: true, antecedencia_dias: 7, frequencia: 'uma_vez', intervalo_horas: 4, no_resumo: false } },
@@ -614,6 +614,28 @@ async function avisosAdmin(user, prefs, ctx) {
           .eq('status', 'ativa').not('teto_aviso_em', 'is', null).limit(200),
       ]);
       const tetoAtual = (tetos || []).filter(a => a.teto_ciclo === a.ciclo_inicio && !a.teto_liberado_em);
+
+      // (01/10) Franquia grátis da Meta (1.000 respostas/mês por número)
+      try {
+        const f = await require('../utils/whatsappMeta').franquiaDoMes();
+        if (f.gratis > 0 && f.pct >= 80) {
+          const acabou = f.usadas >= f.gratis;
+          itens.push({
+            chave: `adm_whatsapp_franquia:${f.mes}:${acabou ? 'acabou' : '80'}`,
+            categoria: 'whatsapp', tipo: acabou ? 'whatsapp_franquia_acabou' : 'whatsapp_franquia_perto',
+            titulo: acabou
+              ? `Acabaram as ${f.gratis.toLocaleString('pt-BR')} respostas grátis da Meta deste mês`
+              : `Respostas grátis da Meta: ${f.pct}% usadas neste mês`,
+            descricao: acabou
+              ? `Agora cada resposta custa ${brl(f.preco_resposta)} (sem cartão na Meta, elas não são enviadas). Usadas: ${f.usadas.toLocaleString('pt-BR')}.`
+              : `${f.usadas.toLocaleString('pt-BR')} de ${f.gratis.toLocaleString('pt-BR')} · restam ${f.restantes.toLocaleString('pt-BR')}. Depois, cada resposta custa ${brl(f.preco_resposta)}.`,
+            grupo: 'hoje', prioridade: acabou ? 'alta' : 'media',
+            data_ref: null, meta: { mes: f.mes, usadas: f.usadas },
+            acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=conexao' },
+          });
+        }
+      } catch (e) { console.error('[notificacoes] franquia whatsapp:', e.message); }
+
       const todos = [...(ass || []), ...(pacs || []), ...tetoAtual];
       if (!todos.length) return;
       const ids = [...new Set(todos.map(x => x.mercearia_id).filter(Boolean))];
