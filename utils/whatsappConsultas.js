@@ -235,6 +235,14 @@ async function estoqueBaixo(mid) {
 
 /* ── Produto: busca e estoque ───────────────────────────────── */
 const PALAVRAS_VAZIAS = new Set(['de', 'da', 'do', 'das', 'dos', 'o', 'a', 'os', 'as', 'e', 'um', 'uma']);
+// Palavras de pergunta que não fazem parte do nome do produto (01/10):
+// "quantas pepsi twist tenho no estoque?" → busca só "pepsi twist"
+const PALAVRAS_PERGUNTA = new Set([
+  'tenho', 'temos', 'tem', 'ha', 'existe', 'existem', 'no', 'na', 'nos', 'nas', 'em', 'meu', 'minha', 'meus', 'minhas',
+  'estoque', 'estoques', 'loja', 'mercado', 'aqui', 'ai', 'ainda', 'hoje', 'agora', 'sobrou', 'sobrando', 'resta', 'restam',
+  'disponivel', 'disponiveis', 'unidade', 'unidades', 'quantos', 'quantas', 'quanto', 'quanta', 'qtd', 'quantidade',
+  'produto', 'produtos', 'ver', 'consultar', 'saber', 'quero', 'me', 'diga', 'fala', 'por', 'favor', 'pf', 'pfv',
+]);
 
 // Procura no cadastro da loja. Devolve { produtos: [...], exato: bool }.
 // Nunca "chuta": com mais de um candidato, quem escolhe é a pessoa.
@@ -254,7 +262,10 @@ async function buscarProdutos(mid, termo) {
     }
   }
 
-  const tokens = normalizar(bruto).split(' ').filter(t => t && !PALAVRAS_VAZIAS.has(t));
+  const todosTokens = normalizar(bruto).split(' ').filter(t => t && !PALAVRAS_VAZIAS.has(t));
+  const semPergunta = todosTokens.filter(t => !PALAVRAS_PERGUNTA.has(t));
+  // Se sobrou alguma coisa, busca só pelo que parece nome; senão usa tudo
+  const tokens = semPergunta.length ? semPergunta : todosTokens;
   if (!tokens.length) return { produtos: [], exato: false };
   const todos = await todas(() => db.from('produtos').select(campos).eq('mercearia_id', mid).order('nome', { ascending: true }), 20000);
 
