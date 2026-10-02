@@ -46,7 +46,7 @@ const authUser = require('../middlewares/authUser');
 const somenteSuperAdmin = require('../middlewares/somenteSuperAdmin');
 const onlyMaster = require('../middlewares/onlyMaster');
 const { registrar } = require('./auditoriaRoutes');
-const { TIMEZONE_PADRAO, inicioDiaTZ, hojeStrTZ } = require('../utils/fusoHorario');
+const { TIMEZONE_PADRAO, inicioDiaTZ, fimDiaTZ, hojeStrTZ } = require('../utils/fusoHorario');
 const W = require('../utils/whatsappCustos');
 const A = require('../utils/whatsappAssinaturas');
 const WC = require('../utils/whatsappCobrancas');
@@ -370,9 +370,16 @@ router.delete('/planos/:id', onlyMaster, async (req, res) => {
 
 router.get('/historico', async (req, res) => {
   try {
-    const { data, error } = await db.from('whatsapp_planos_historico')
-      .select('id, plano_id, plano_nome, acao, antes, depois, usuario_nome, criado_em')
-      .order('criado_em', { ascending: false }).limit(100);
+    // (02/10) Filtro por período (?de=AAAA-MM-DD&ate=AAAA-MM-DD, horário de Brasília).
+    // Sem filtro: as 100 mais recentes; com filtro: até 500 do período.
+    const DATA = /^\d{4}-\d{2}-\d{2}$/;
+    const de = DATA.test(String(req.query.de || '')) ? String(req.query.de) : null;
+    const ate = DATA.test(String(req.query.ate || '')) ? String(req.query.ate) : null;
+    let q = db.from('whatsapp_planos_historico')
+      .select('id, plano_id, plano_nome, acao, antes, depois, usuario_nome, criado_em');
+    if (de) q = q.gte('criado_em', inicioDiaTZ(de, TIMEZONE_PADRAO).toISOString());
+    if (ate) q = q.lte('criado_em', fimDiaTZ(ate, TIMEZONE_PADRAO).toISOString());
+    const { data, error } = await q.order('criado_em', { ascending: false }).limit(de || ate ? 500 : 100);
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
@@ -717,7 +724,7 @@ router.get('/uso/lojas', async (req, res) => {
 router.get('/lojas', async (req, res) => {
   try {
     const { data, error } = await db.from('mercearias')
-      .select('id, nome_fantasia, status_assinatura, data_vencimento')
+      .select('id, nome_fantasia, tipo_estabelecimento, status_assinatura, data_vencimento')
       .neq('status_assinatura', 'excluida')
       .order('nome_fantasia', { ascending: true });
     if (error) throw error;
@@ -1198,9 +1205,9 @@ router.post('/teste', onlyMaster, async (req, res) => {
 // Últimas mensagens (enviadas e recebidas) — acompanhamento da ligação
 router.get('/mensagens', async (req, res) => {
   try {
-    const lim = Math.min(100, Math.max(1, parseInt(req.query.limite, 10) || 30));
+    const lim = Math.min(300, Math.max(1, parseInt(req.query.limite, 10) || 30));
     const { data, error } = await db.from('whatsapp_envios')
-      .select('id, mercearia_id, direcao, tipo, destino, status, erro_codigo, erro_mensagem, custo_meta_estimado, criado_em')
+      .select('id, mercearia_id, direcao, tipo, pedido_tipo, destino, status, erro_codigo, erro_mensagem, custo_meta_estimado, criado_em')
       .order('criado_em', { ascending: false }).limit(lim);
     if (error) throw error;
     const ids = [...new Set((data || []).map(x => x.mercearia_id).filter(Boolean))];
