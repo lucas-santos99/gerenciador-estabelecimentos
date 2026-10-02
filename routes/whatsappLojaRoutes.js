@@ -5,9 +5,11 @@
 // contratar (com aceite dos termos), acompanhar saldo/extrato, pedir
 // pacote extra, cancelar e cadastrar os números que podem usar o saldo.
 //
-// Nesta fase a contratação fica "aguardando ativação" até o SuperAdmin
-// master ativar (cobrança combinada à parte). Regras de ciclo/saldo em
-// utils/whatsappAssinaturas.js.
+// (02/10/2026) A loja paga por Pix (Efí) ou cartão (Asaas) aqui mesmo e o
+// pagamento confirmado ativa o plano / libera os créditos sozinho
+// (utils/whatsappCobrancas.js). O SuperAdmin master continua podendo
+// ativar e registrar pagamento na mão (dinheiro, cortesia, teste).
+// Regras de ciclo/saldo em utils/whatsappAssinaturas.js.
 //
 //   GET    /                        → tudo que a tela precisa
 //   POST   /assinar                 → solicita um plano (ou troca)
@@ -18,6 +20,8 @@
 //   GET    /extrato                 → movimentos do ciclo atual
 //   POST   /pacotes                 → pede um pacote extra
 //   POST   /pacotes/:id/desistir    → desiste do pacote pendente
+//   POST   /cobranca                → gera (ou reaproveita) o Pix + link de cartão do que há pra pagar
+//   GET    /cobranca/:grupo         → o pagamento já caiu? (a tela consulta enquanto espera)
 //   POST   /numeros-extras          → pede +N números além do plano (01/10)
 //   POST   /numeros-extras/desistir → desiste do pedido de extras
 //   POST   /numeros-extras/remover  → tira 1 número extra (na hora)
@@ -34,6 +38,7 @@ const { registrar } = require('./auditoriaRoutes');
 const { hojeStrTZ } = require('../utils/fusoHorario');
 const W = require('../utils/whatsappCustos');
 const A = require('../utils/whatsappAssinaturas');
+const WC = require('../utils/whatsappCobrancas');
 
 function somenteDono(req, res, next) {
   if (req.user?.role === 'merchant' && req.user.mercearia_id) return next();
@@ -129,6 +134,17 @@ router.get('/', async (req, res) => {
       resumo = await A.resumoCiclo(db, abertas.ativa.id, abertas.ativa.ciclo_inicio);
     }
     const limite = abertas.ativa ? A.limiteNumeros(abertas.ativa) : (abertas.pendente?.numeros || 0);
+    // (02/10) O que dá pra pagar agora pela tela (ativação, ciclo aguardando ou renovação adiantada)
+    let pagar = null, proximoPago = false, extraAgora = null;
+    if (p.pagamento_online.ativo && (abertas.ativa || abertas.pendente)) {
+      try {
+        const alvo = await WC.alvoDaLoja(db, mid, {}, p);
+        if (!alvo.erro) pagar = { tipo: alvo.tipo, motivo: alvo.motivo, valor: alvo.valor, ciclo_inicio: alvo.ciclo_inicio, descricao: alvo.descricao };
+        proximoPago = !!alvo.proximo_pago;
+        // Quanto custa 1 número extra hoje (proporcional aos dias que faltam do ciclo)
+        if (abertas.ativa) extraAgora = await WC.valorNumeroExtra(db, abertas.ativa, 1, p, hojeStrTZ(abertas.tz));
+      } catch (e) { console.error('[WHATSAPP LOJA] alvo do pagamento:', e.message); }
+    }
     const ultima = (recusa || [])[0];
     const recente = ultima && ultima.encerrado_em && (Date.now() - new Date(ultima.encerrado_em).getTime()) < 15 * 86400000;
 
@@ -160,8 +176,14 @@ router.get('/', async (req, res) => {
           ? Number(abertas.ativa.numero_extra_preco) : p.numeros.preco_extra,
         max: p.numeros.max_extras,
         disponivel: p.numeros.preco_extra > 0 && p.numeros.max_extras > 0,
+        // (02/10) Com o pagamento pela tela: valor a pagar hoje por 1 número
+        agora: extraAgora,
       },
       ultima_encerrada: recente ? ultima : null,
+      pagamento_online: {
+        ativo: p.pagamento_online.ativo, dias_antecipar: p.pagamento_online.dias_antecipar,
+        cartao_minimo: WC.CARTAO_MINIMO, pagar, proximo_pago: proximoPago,
+      },
     });
   } catch (err) {
     console.error('[WHATSAPP LOJA] GET:', err.message);
@@ -230,6 +252,7 @@ router.post('/numeros-extras/desistir', async (req, res) => {
     await db.from('whatsapp_assinaturas')
       .update({ numeros_extras_pedido: 0, numeros_extras_pedido_em: null, numeros_extras_pedido_por_nome: null, atualizado_em: new Date().toISOString() })
       .eq('id', ativa.id).eq('status', 'ativa');
+    WC.cancelarPendentes(db, { assinatura_id: ativa.id, tipo: 'numero_extra' });
     auditar(req, 'whatsapp_numero_extra_desistiu', 'Desistiu do pedido de número extra de WhatsApp', { assinatura_id: ativa.id });
     res.json({ ok: true });
   } catch (err) {
@@ -305,6 +328,7 @@ router.post('/desistir', async (req, res) => {
     const agora = new Date().toISOString();
     await db.from('whatsapp_assinaturas').update({ status: 'desistiu', encerrado_em: agora, encerrado_por_nome: req.user.nome, atualizado_em: agora })
       .eq('id', pendente.id).eq('status', 'aguardando');
+    WC.cancelarPendentes(db, { assinatura_id: pendente.id, tipo: 'ativacao' });
     auditar(req, 'whatsapp_solicitacao_desistiu', `Desistiu da solicitação do plano de WhatsApp "${pendente.plano_nome}"`, { assinatura_id: pendente.id });
     res.json({ ok: true });
   } catch (err) {
@@ -321,6 +345,8 @@ async function mudarCancelamento(req, res, valor) {
       .update({ cancelar_no_fim: valor, atualizado_em: new Date().toISOString() })
       .eq('id', ativa.id).eq('status', 'ativa').select().single();
     if (error) throw error;
+    // Cancelou: uma renovação adiantada ainda não paga deixa de valer
+    if (valor && !A.aguardandoPagamento(ativa)) WC.cancelarPendentes(db, { assinatura_id: ativa.id, tipo: 'mensalidade' });
     auditar(req, valor ? 'whatsapp_cancelamento_agendado' : 'whatsapp_cancelamento_desfeito',
       valor ? `Cancelou o plano de WhatsApp "${ativa.plano_nome}" (vale até ${ativa.ciclo_fim})` : `Desfez o cancelamento do plano de WhatsApp "${ativa.plano_nome}"`,
       { assinatura_id: ativa.id });
@@ -382,11 +408,45 @@ router.post('/pacotes/:id/desistir', async (req, res) => {
       .update({ status: 'desistiu', resolvido_em: new Date().toISOString(), resolvido_por_nome: req.user.nome })
       .eq('id', req.params.id).eq('mercearia_id', req.user.mercearia_id).eq('status', 'aguardando').select();
     if (!data || !data.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    WC.cancelarPendentes(db, { pacote_id: data[0].id });
     auditar(req, 'whatsapp_pacote_desistiu', `Desistiu do pacote extra "${data[0].nome}"`, { pacote_id: data[0].id });
     res.json({ ok: true });
   } catch (err) {
     console.error('[WHATSAPP LOJA] desistir pacote:', err.message);
     res.status(500).json({ error: 'Erro ao desistir do pacote.' });
+  }
+});
+
+/* ── Pagamento pela tela (02/10/2026) ──────────────────────────
+   Gera o Pix (Efí) e o link de cartão (Asaas) do que a loja tem pra pagar
+   agora: a solicitação pendente, o ciclo aguardando pagamento, a renovação
+   adiantada, um pacote extra (pacote_id) ou o pedido de número extra
+   (numero_extra: true). Quem libera é o webhook do
+   provedor; GET /cobranca/:grupo é o que a tela consulta enquanto espera
+   (e confere direto no provedor, como reserva do webhook). */
+router.post('/cobranca', async (req, res) => {
+  const pacoteId = req.body?.pacote_id ? String(req.body.pacote_id) : null;
+  if (pacoteId && !UUID.test(pacoteId)) return res.status(400).json({ error: 'Pacote inválido.' });
+  try {
+    // numero_extra: paga o pedido de número extra que está aberto (SQL 20)
+    const r = await WC.gerar(db, req.user.mercearia_id, { pacote_id: pacoteId, numero_extra: !pacoteId && req.body?.numero_extra === true });
+    if (r.erro) return res.status(r.http || 400).json({ error: r.erro });
+    res.json(r);
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] cobranca:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Erro ao gerar o pagamento.' });
+  }
+});
+
+router.get('/cobranca/:grupo', async (req, res) => {
+  if (!UUID.test(req.params.grupo)) return res.status(400).json({ error: 'Pagamento inválido.' });
+  try {
+    const r = await WC.conferir(db, req.user.mercearia_id, req.params.grupo);
+    if (!r) return res.status(404).json({ error: 'Pagamento não encontrado.' });
+    res.json(r);
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] status da cobranca:', err.message);
+    res.status(500).json({ error: 'Erro ao consultar o pagamento.' });
   }
 });
 

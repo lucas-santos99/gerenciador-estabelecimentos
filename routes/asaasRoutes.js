@@ -12,6 +12,7 @@ const {
   buscarValorPlano, valorDoPlano, diasDoPlano, registrarCobranca, marcarCobrancaCancelada,
   aplicarPagamento, estornarPagamento, podeVerCobranca, tokenConfere,
 } = require("../utils/licencaPagamentos");
+const WC = require("../utils/whatsappCobrancas"); // (02/10/2026) cartão do plano de WhatsApp
 
 const ASAAS_API_KEY  = process.env.ASAAS_API_KEY;
 const ASAAS_API_URL  = process.env.ASAAS_API_URL || "https://api.asaas.com/v3";
@@ -388,6 +389,11 @@ router.post("/webhook", async (req, res) => {
       : null;
     if (!tipo || !payment?.id) return res.status(200).json({ ok: true, ignorado: true });
 
+    // (02/10/2026) Cartão do plano de WhatsApp (externalReference
+    // "whatsapp|<id da cobrança>"): fluxo próprio — utils/whatsappCobrancas.js.
+    const refWa = WC.REF_ASAAS.exec(payment.externalReference || "");
+    if (refWa) return await webhookWhatsapp(res, event, tipo, payment, refWa[1].toLowerCase());
+
     // Só cobranças de licença (externalReference "mercearia_id|dias").
     // Outras cobranças da conta Asaas não são deste fluxo.
     const refWebhook = REF_LICENCA.exec(payment.externalReference || "");
@@ -491,6 +497,45 @@ router.post("/webhook", async (req, res) => {
   }
 });
 
+// (02/10/2026) Pagamento do plano de WhatsApp pelo cartão. Confere na API
+// do Asaas (status, valor, taxa real = value − netValue) e aplica uma vez
+// só. Estorno / contestação viram alerta pro SuperAdmin (não tiram
+// créditos sozinhos). Erro aqui sobe pro catch do webhook (500 → reenvio).
+async function webhookWhatsapp(res, event, tipo, payment, cobId) {
+  const respApi = await fetch(`${ASAAS_API_URL}/payments/${encodeURIComponent(payment.id)}`, { headers: asaasHeaders() });
+  const pag = await respApi.json().catch(() => ({}));
+  if (respApi.status === 404) {
+    console.warn(`[ASAAS] Pagamento ${payment.id} (WhatsApp) não existe na API — ignorado.`);
+    return res.status(200).json({ ok: true, ignorado: true });
+  }
+  if (!respApi.ok || !pag?.id) {
+    console.error(`[ASAAS] Não consegui confirmar o pagamento ${payment.id} (WhatsApp) na API (HTTP ${respApi.status}).`);
+    return res.status(500).json({ error: "Falha ao confirmar pagamento no Asaas." });
+  }
+  const cob = await WC.buscar(db, "asaas", pag.id);
+  const refApi = WC.REF_ASAAS.exec(pag.externalReference || "");
+  if (!cob || !refApi || refApi[1].toLowerCase() !== cob.id || cob.id !== cobId) {
+    console.warn(`[ASAAS] Pagamento ${payment.id}: referência de WhatsApp não confere com a cobrança registrada — ignorado.`);
+    return res.status(200).json({ ok: true, ignorado: true });
+  }
+
+  if (tipo === "pago") {
+    const r = await WC.receberAsaas(db, cob, pag, event);
+    if (r.resultado === "ocupado") return res.status(500).json({ error: "Pagamento em processamento, reenviar." });
+    console.log(`[ASAAS] Cartão do WhatsApp ${pag.id} (${event}): ${r.resultado}`);
+    return res.status(200).json({ ok: true });
+  }
+  if (tipo === "estorno") {
+    if (STATUS_PAGO.includes(pag.status)) return res.status(200).json({ ok: true, ignorado: true });
+    await WC.estornar(db, cob, event, "estornado ou contestado");
+    return res.status(200).json({ ok: true });
+  }
+  WC.alertar(cob, event === "PAYMENT_PARTIALLY_REFUNDED"
+    ? `Pagamento ${pag.id} do WhatsApp teve reembolso parcial no Asaas — os créditos não foram alterados, revise se precisa ajustar`
+    : `Contestação do pagamento ${pag.id} do WhatsApp foi revertida a nosso favor no Asaas`, { evento: event, status: pag.status });
+  return res.status(200).json({ ok: true });
+}
+
 // Atualiza o status informativo em mercearias só se for a cobrança que
 // está salva lá — não apaga a referência de uma cobrança mais nova.
 async function atualizarStatusNaLoja(mercearia_id, payment_id, status) {
@@ -505,3 +550,10 @@ async function atualizarStatusNaLoja(mercearia_id, payment_id, status) {
 }
 
 module.exports = router;
+// (02/10/2026) Ajudantes usados pela cobrança do WhatsApp (utils/whatsappCobrancas.js)
+module.exports.asaas = {
+  url: ASAAS_API_URL,
+  headers: asaasHeaders,
+  clienteDe: obterOuCriarClienteAsaas,
+  configurado: () => !!ASAAS_API_KEY,
+};

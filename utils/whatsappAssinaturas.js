@@ -20,6 +20,11 @@
 //     ciclo novo, sem créditos, até o SuperAdmin registrar o pagamento
 //     (whatsapp_pagamentos, com forma, taxa e valor líquido). A ativação e
 //     o pacote extra também registram o pagamento.
+//   - (02/10/2026, SQL 19) A loja paga por Pix (Efí) ou cartão (Asaas) na
+//     própria tela; o pagamento confirmado registra tudo sozinho
+//     (utils/whatsappCobrancas.js). Dá pra pagar a renovação alguns dias
+//     antes: o pagamento fica guardado pro ciclo seguinte e, na virada, os
+//     créditos entram na hora (garantirCiclo → liberarSePago).
 // ============================================================
 const crypto = require('crypto');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('./fusoHorario');
@@ -30,8 +35,8 @@ const W = require('./whatsappCustos');
 // ok, obrigado, menu…), que só vale pra loja que aceitou esta versão.
 const TERMOS_VERSAO_CONVERSA = '2026-10-01';
 const TERMOS = Object.freeze({
-  versao: '2026-10-01c',
-  novidades: 'Os créditos de cada ciclo novo entram quando o pagamento da mensalidade do WhatsApp é confirmado (até lá, o assistente fica aguardando o pagamento). Respostas a mensagens que não pedem dados (como “oi”, “ok” ou “obrigado”) gastam crédito depois de algumas grátis por dia na loja, e toda resposta mostra o saldo. Números de WhatsApp extras têm valor mensal por número.',
+  versao: '2026-10-02b',
+  novidades: 'Número extra pode ser comprado a qualquer hora: você paga na hora só o proporcional aos dias que faltam do ciclo e ele é liberado assim que o pagamento é confirmado. O pagamento do plano, da mensalidade e dos pacotes extras passa a ser feito por Pix ou cartão na própria tela do WhatsApp, com liberação automática quando o pagamento é confirmado. Os créditos de cada ciclo novo entram quando o pagamento da mensalidade do WhatsApp é confirmado (até lá, o assistente fica aguardando o pagamento). Respostas a mensagens que não pedem dados (como “oi”, “ok” ou “obrigado”) gastam crédito depois de algumas grátis por dia na loja, e toda resposta mostra o saldo. Números de WhatsApp extras têm valor mensal por número.',
   titulo: 'Termos do serviço de WhatsApp',
   secoes: [
     { t: 'O que é', p: [
@@ -54,7 +59,8 @@ const TERMOS = Object.freeze({
       'Você pode cancelar quando quiser: o serviço segue até o fim do ciclo já iniciado.',
       'O ciclo renova todo mês na mesma data. Os créditos do ciclo novo entram assim que o pagamento da mensalidade do WhatsApp for confirmado; até lá, o assistente avisa que está aguardando o pagamento. O ciclo não muda de data por causa de atraso.',
       'Cada plano inclui uma quantidade de números de WhatsApp. Números extras, quando disponíveis, têm valor mensal por número (mostrado antes de pedir), somado à mensalidade do plano enquanto estiverem ativos. Todos os números da loja usam o mesmo saldo de créditos.',
-      'Nesta fase de lançamento, a ativação e a cobrança do plano são combinadas diretamente com a nossa equipe.',
+      'Número extra comprado no meio do ciclo: você paga na hora só o valor proporcional aos dias que faltam até a renovação, e ele é liberado quando o pagamento é confirmado. A partir da mensalidade seguinte entra o valor mensal cheio. Ao retirar um número extra, o que já foi pago no ciclo não é devolvido.',
+      'O pagamento é feito por Pix ou cartão na própria tela do WhatsApp do sistema. O plano, os créditos do ciclo e os pacotes extras são liberados automaticamente quando o pagamento é confirmado. A mensalidade do ciclo seguinte pode ser paga alguns dias antes da renovação; nada é debitado sem você pagar.',
     ] },
     { t: 'Seus dados', p: [
       'O sistema só responde com dados do seu próprio estabelecimento e respeita as permissões de cada pessoa vinculada. Toda ação feita pelo WhatsApp fica registrada na auditoria.',
@@ -152,6 +158,44 @@ async function lancar(db, mov) {
   const { error } = await db.from('whatsapp_creditos_mov').insert(mov);
   if (error) throw error;
 }
+// Igual ao lancar, mas "já existe" (índice único do SQL 19: créditos do
+// ciclo e de pacote só entram uma vez) não é erro. Devolve true se lançou.
+async function lancarUmaVez(db, mov) {
+  const { error } = await db.from('whatsapp_creditos_mov').insert(mov);
+  if (error && error.code === '23505') return false;
+  if (error) throw error;
+  return true;
+}
+
+// Libera os créditos do ciclo atual (uma vez só) e tira o "aguardando
+// pagamento". Devolve a assinatura atualizada.
+async function creditarCiclo(db, a, descricao, autorNome) {
+  await lancarUmaVez(db, {
+    mercearia_id: a.mercearia_id, assinatura_id: a.id, ciclo_inicio: a.ciclo_inicio, tipo: 'credito_ciclo',
+    quantidade: a.creditos, descricao: String(descricao || `Créditos do ciclo (${a.plano_nome})`).slice(0, 300), criado_por_nome: autorNome || null,
+  });
+  if (!a.aguardando_pagamento_desde) return a;
+  const { data } = await db.from('whatsapp_assinaturas')
+    .update({ aguardando_pagamento_desde: null, atualizado_em: new Date().toISOString() })
+    .eq('id', a.id).eq('ciclo_inicio', a.ciclo_inicio).select();
+  return (data && data[0]) || { ...a, aguardando_pagamento_desde: null };
+}
+
+// Mensalidade registrada para um ciclo desta assinatura (ou null)
+async function pagamentoDoCiclo(db, assinaturaId, cicloInicio) {
+  const { data } = await db.from('whatsapp_pagamentos').select('*')
+    .eq('assinatura_id', assinaturaId).eq('ciclo_inicio', cicloInicio).eq('referencia', 'mensalidade').maybeSingle();
+  return data || null;
+}
+
+// Ciclo aguardando pagamento que JÁ tem a mensalidade registrada (paga
+// adiantada antes da virada): libera os créditos na hora.
+async function liberarSePago(db, a) {
+  if (!aguardandoPagamento(a)) return a;
+  const pg = await pagamentoDoCiclo(db, a.id, a.ciclo_inicio);
+  if (!pg) return a;
+  return creditarCiclo(db, a, `Créditos do ciclo (${a.plano_nome}) — pagamento adiantado ${W.FORMAS_PAGAMENTO[pg.forma] || pg.forma}`, pg.registrado_por_nome);
+}
 
 // Vira o(s) ciclo(s) vencido(s) de uma assinatura ativa. Devolve a
 // assinatura atualizada (ou a mesma, se nada mudou).
@@ -185,7 +229,8 @@ async function garantirCiclo(db, assinatura, hojeStr) {
     const { data: atual } = await db.from('whatsapp_assinaturas').select('*').eq('id', a.id).maybeSingle();
     a = atual;
   }
-  return a;
+  // (02/10) Mensalidade paga adiantada → créditos na virada, sem esperar
+  return liberarSePago(db, a);
 }
 
 // Ativa uma assinatura "aguardando". Se for troca de plano, encerra a
@@ -227,7 +272,7 @@ async function ativar(db, assinatura, autorNome, pagamento) {
       ciclo_inicio: hoje, referencia: 'mensalidade', registrado_por_nome: autorNome,
     });
   }
-  await lancar(db, { mercearia_id: assinatura.mercearia_id, assinatura_id: assinatura.id, ciclo_inicio: hoje, tipo: 'credito_ciclo', quantidade: assinatura.creditos, descricao: `Créditos do ciclo (${assinatura.plano_nome})`, criado_por_nome: autorNome });
+  await lancarUmaVez(db, { mercearia_id: assinatura.mercearia_id, assinatura_id: assinatura.id, ciclo_inicio: hoje, tipo: 'credito_ciclo', quantidade: assinatura.creditos, descricao: `Créditos do ciclo (${assinatura.plano_nome})`, criado_por_nome: autorNome });
   return data[0];
 }
 
@@ -284,14 +329,8 @@ async function registrarPagamentoCiclo(db, a, pagamento, autorNome) {
     ...pagamento, mercearia_id: a.mercearia_id, assinatura_id: a.id,
     ciclo_inicio: a.ciclo_inicio, referencia: 'mensalidade', registrado_por_nome: autorNome,
   });
-  const { data } = await db.from('whatsapp_assinaturas')
-    .update({ aguardando_pagamento_desde: null, atualizado_em: new Date().toISOString() })
-    .eq('id', a.id).eq('ciclo_inicio', a.ciclo_inicio).select();
-  await lancar(db, {
-    mercearia_id: a.mercearia_id, assinatura_id: a.id, ciclo_inicio: a.ciclo_inicio, tipo: 'credito_ciclo',
-    quantidade: a.creditos, descricao: `Créditos do ciclo (${a.plano_nome}) — pagamento ${W.FORMAS_PAGAMENTO[pagamento.forma] || pagamento.forma}`, criado_por_nome: autorNome,
-  });
-  return { assinatura: (data && data[0]) || a, pagamento: pag };
+  const atual = await creditarCiclo(db, a, `Créditos do ciclo (${a.plano_nome}) — pagamento ${W.FORMAS_PAGAMENTO[pagamento.forma] || pagamento.forma}`, autorNome);
+  return { assinatura: atual, pagamento: pag };
 }
 
 const aguardandoPagamento = (a) => !!(a && a.status === 'ativa' && a.aguardando_pagamento_desde && a.aguardando_pagamento_desde === a.ciclo_inicio);
@@ -316,4 +355,5 @@ module.exports = {
   somarDias, fimDoCiclo, normalizarTelefone, formatarTelefone, gerarCodigo, hashCodigo,
   timezoneDaLoja, resumoCiclo, lancar, garantirCiclo, ativar, encerrarAgora, limiteNumeros, valorMensal,
   montarPagamento, inserirPagamento, registrarPagamentoCiclo, aguardandoPagamento,
+  lancarUmaVez, creditarCiclo, pagamentoDoCiclo, liberarSePago,
 };

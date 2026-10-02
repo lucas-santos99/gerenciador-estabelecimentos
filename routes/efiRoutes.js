@@ -22,6 +22,7 @@ const {
   buscarValorPlano, valorDoPlano, diasDoPlano, registrarCobranca, marcarCobrancaCancelada,
   buscarCobranca, aplicarPagamento, estornarPagamento, podeVerCobranca, tokenConfere,
 } = require("../utils/licencaPagamentos");
+const WC = require("../utils/whatsappCobrancas"); // (02/10/2026) Pix do plano de WhatsApp
 
 const EFI_CLIENT_ID       = process.env.EFI_CLIENT_ID;
 const EFI_CLIENT_SECRET   = process.env.EFI_CLIENT_SECRET;
@@ -377,6 +378,25 @@ router.post("/webhook/:token/pix", async (req, res) => {
       const txid = pagamento?.txid;
       if (!txid) continue; // Pix direto na chave, sem cobrança — não é licença
 
+      // (02/10/2026) Pix do plano de WhatsApp (ativação, mensalidade do ciclo
+      // ou pacote extra): fluxo próprio — utils/whatsappCobrancas.js. Mesmas
+      // garantias: confere na API do Efí e aplica uma vez só.
+      const cobWa = await WC.buscar(db, "efi", txid);
+      if (cobWa) {
+        let apiWa;
+        try {
+          apiWa = (await efiPixRequest("GET", `/v2/cob/${encodeURIComponent(txid)}`)).data;
+        } catch (e) {
+          if (e.response?.status === 404) { console.warn(`⚠️ Webhook Efí: txid ${txid} (WhatsApp) não existe na API do Efí — ignorado.`); continue; }
+          throw e;
+        }
+        const rWa = await WC.receberPix(db, cobWa, apiWa, pagamento.endToEndId);
+        // Outro processo está aplicando este mesmo pagamento: pede reenvio.
+        if (rWa.resultado === "ocupado") throw new Error(`cobrança do WhatsApp ${txid} em processamento`);
+        console.log(`[EFI] Pix do WhatsApp ${txid}: ${rWa.resultado}`);
+        continue;
+      }
+
       // Cobrança registrada (novo) ou, para cobranças antigas, a loja
       // que ainda tem esse txid salvo.
       const cob = await buscarCobranca("efi", txid);
@@ -515,3 +535,7 @@ router.post("/configurar-webhook", authUser, onlyMaster, async (req, res) => {
 });
 
 module.exports = router;
+// (02/10/2026) Ajudantes usados pela cobrança do WhatsApp (utils/whatsappCobrancas.js)
+module.exports.efiPixRequest = efiPixRequest;
+module.exports.efiConfigurado = () => faltando.length === 0;
+module.exports.EFI_CHAVE_PIX = EFI_CHAVE_PIX;

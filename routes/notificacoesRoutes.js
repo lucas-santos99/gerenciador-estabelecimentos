@@ -553,7 +553,7 @@ async function avisosAdmin(user, prefs, ctx) {
       const desde = new Date(agora - ant('pagamentos') * 86400000).toISOString();
       const { data } = await db.from('auditoria')
         .select('id, mercearia_id, acao, descricao, criado_em')
-        .in('acao', ['licenca_renovada_cartao', 'licenca_renovada_pix', 'licenca_pagamento_estornado', 'licenca_pagamento_alerta'])
+        .in('acao', ['licenca_renovada_cartao', 'licenca_renovada_pix', 'licenca_pagamento_estornado', 'licenca_pagamento_alerta', 'whatsapp_pagamento_automatico', 'whatsapp_pagamento_alerta'])
         .gte('criado_em', desde).order('criado_em', { ascending: false }).limit(100);
       if (!data?.length) return;
       const ids = [...new Set(data.map(a => a.mercearia_id).filter(Boolean))];
@@ -564,17 +564,22 @@ async function avisosAdmin(user, prefs, ctx) {
       }
       data.forEach(a => {
         const nome = nomes[a.mercearia_id] || 'Estabelecimento';
-        const problema = a.acao === 'licenca_pagamento_estornado' || a.acao === 'licenca_pagamento_alerta';
+        const problema = a.acao === 'licenca_pagamento_estornado' || a.acao === 'licenca_pagamento_alerta' || a.acao === 'whatsapp_pagamento_alerta';
+        // (02/10/2026) Pagamentos automáticos do plano de WhatsApp (utils/whatsappCobrancas.js)
+        const doWhats = a.acao.startsWith('whatsapp_');
         itens.push({
           chave: `adm_pagamento:${a.id}`,
           categoria: 'pagamentos', tipo: a.acao,
-          titulo: a.acao === 'licenca_pagamento_estornado' ? `${nome}: pagamento estornado — dias removidos da licença`
+          titulo: a.acao === 'whatsapp_pagamento_alerta' ? `${nome}: pagamento do WhatsApp precisa de revisão`
+            : a.acao === 'whatsapp_pagamento_automatico' ? `${nome} pagou o WhatsApp (${/Pix/.test(a.descricao || '') ? 'Pix' : 'cartão'})`
+            : a.acao === 'licenca_pagamento_estornado' ? `${nome}: pagamento estornado — dias removidos da licença`
             : a.acao === 'licenca_pagamento_alerta' ? `${nome}: pagamento precisa de revisão`
             : `${nome} renovou a assinatura (${a.acao.endsWith('pix') ? 'Pix' : 'cartão'})`,
           descricao: a.descricao || '',
           grupo: problema ? 'atrasado' : 'info', prioridade: problema ? 'alta' : 'baixa', data_ref: a.criado_em,
           meta: { mercearia_id: a.mercearia_id },
-          acao: a.mercearia_id ? { tipo: 'rota', rota: `/admin/estabelecimentos/${a.mercearia_id}?view=details` } : null,
+          acao: doWhats ? { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' }
+            : a.mercearia_id ? { tipo: 'rota', rota: `/admin/estabelecimentos/${a.mercearia_id}?view=details` } : null,
         });
       });
     })());
@@ -709,7 +714,7 @@ async function avisosAdmin(user, prefs, ctx) {
           chave: `adm_whatsapp_aguardando_pag:${a.id}:${a.ciclo_inicio}`,
           categoria: 'whatsapp', tipo: 'whatsapp_aguardando_pagamento',
           titulo: `${nomes[a.mercearia_id] || 'Estabelecimento'}: WhatsApp renovou e está aguardando pagamento (${brl(valor)})`,
-          descricao: `Plano "${a.plano_nome}" · ciclo desde ${a.ciclo_inicio.split('-').reverse().join('/')}${d > 0 ? ` (${d} dia${d === 1 ? '' : 's'})` : ''}. Os créditos entram quando você registrar o pagamento na aba Lojas.`,
+          descricao: `Plano "${a.plano_nome}" · ciclo desde ${a.ciclo_inicio.split('-').reverse().join('/')}${d > 0 ? ` (${d} dia${d === 1 ? '' : 's'})` : ''}. Os créditos entram quando a loja pagar pela tela (Pix ou cartão) ou você registrar o pagamento na aba Lojas.`,
           grupo: d >= 3 ? 'atrasado' : 'hoje', prioridade: d >= 3 ? 'alta' : 'media',
           data_ref: a.ciclo_inicio, meta: { assinatura_id: a.id, mercearia_id: a.mercearia_id },
           acao: { tipo: 'rota', rota: '/admin/whatsapp?aba=lojas' },

@@ -49,6 +49,7 @@ const { registrar } = require('./auditoriaRoutes');
 const { TIMEZONE_PADRAO, inicioDiaTZ, hojeStrTZ } = require('../utils/fusoHorario');
 const W = require('../utils/whatsappCustos');
 const A = require('../utils/whatsappAssinaturas');
+const WC = require('../utils/whatsappCobrancas');
 const Assistente = require('../utils/whatsappAssistente');
 const C = require('../utils/whatsappConsultas');
 
@@ -419,7 +420,7 @@ async function receitaDoMes(mesStr) {
     let planos = 0, pacotes = 0, taxas = 0, ciclos = 0, cortesias = 0, cortesiaValor = 0;
     (data || []).forEach(pg => {
       const b = Number(pg.valor_bruto) || 0;
-      if (pg.referencia === 'pacote') pacotes += b; else { planos += b; ciclos++; }
+      if (pg.referencia === 'pacote') pacotes += b; else { planos += b; if (pg.referencia === 'mensalidade') ciclos++; }
       taxas += Number(pg.taxa) || 0;
       if (W.FORMAS_SEM_RECEITA.includes(pg.forma)) { cortesias++; cortesiaValor += Number(pg.valor_tabela) || 0; }
     });
@@ -816,6 +817,7 @@ router.post('/assinaturas/:id/ativar', onlyMaster, async (req, res) => {
     if (pag.erro) return res.status(400).json({ error: pag.erro });
     const ativa = await A.ativar(db, a, req.user.nome || req.user.email, pag);
     if (!ativa) return res.status(409).json({ error: 'Essa solicitação já foi resolvida.' });
+    WC.cancelarPendentes(db, { assinatura_id: a.id, tipo: 'ativacao' }); // (02/10) Pix/cartão gerados pela loja deixam de valer
     auditarLoja(req, a.mercearia_id, 'whatsapp_plano_ativado_loja',
       `Ativou o plano de WhatsApp "${a.plano_nome}" (R$ ${a.preco}/mês, ${a.creditos} créditos) — ciclo ${ativa.ciclo_inicio} a ${ativa.ciclo_fim}. Pagamento ${descPag(pag)}`,
       { assinatura_id: a.id, pagamento: pag });
@@ -836,6 +838,7 @@ router.post('/assinaturas/:id/recusar', onlyMaster, async (req, res) => {
       .update({ status: 'recusada', motivo: motivo || null, encerrado_em: agora, encerrado_por_nome: req.user.nome, atualizado_em: agora })
       .eq('id', a.id).eq('status', 'aguardando').select();
     if (!data || !data.length) return res.status(409).json({ error: 'Essa solicitação já foi resolvida.' });
+    WC.cancelarPendentes(db, { assinatura_id: a.id });
     auditarLoja(req, a.mercearia_id, 'whatsapp_plano_recusado_loja', `Recusou a solicitação do plano de WhatsApp "${a.plano_nome}"${motivo ? ` — ${motivo}` : ''}`, { assinatura_id: a.id });
     res.json(data[0]);
   } catch (err) {
@@ -861,6 +864,8 @@ router.post('/assinaturas/:id/encerrar', onlyMaster, async (req, res) => {
       if (error) throw error;
       r = data;
     }
+    // (02/10) Encerrou agora: nada mais a pagar. Agendou: a renovação adiantada deixa de valer.
+    WC.cancelarPendentes(db, imediato ? { assinatura_id: a.id } : (A.aguardandoPagamento(a) ? {} : { assinatura_id: a.id, tipo: 'mensalidade' }));
     auditarLoja(req, a.mercearia_id, 'whatsapp_plano_encerrado_loja',
       `${imediato ? 'Encerrou agora o' : 'Agendou o encerramento (no fim do ciclo) do'} plano de WhatsApp "${a.plano_nome}"${motivo ? ` — ${motivo}` : ''}`, { assinatura_id: a.id });
     res.json(r);
@@ -947,6 +952,7 @@ router.post('/assinaturas/:id/numeros-extras/aprovar', onlyMaster, async (req, r
       .eq('id', a.id).eq('status', 'ativa').eq('numeros_extras_pedido', a.numeros_extras_pedido).select();
     if (error) throw error;
     if (!data || !data.length) return res.status(409).json({ error: 'O pedido mudou. Atualize a tela.' });
+    WC.cancelarPendentes(db, { assinatura_id: a.id, tipo: 'numero_extra' }); // (02/10) Pix/cartão gerados pela loja deixam de valer
     auditarLoja(req, a.mercearia_id, 'whatsapp_numero_extra_aprovado',
       `Aprovou ${a.numeros_extras_pedido} número${a.numeros_extras_pedido === 1 ? '' : 's'} extra${a.numeros_extras_pedido === 1 ? '' : 's'} de WhatsApp (agora ${novo}, R$ ${preco.toFixed(2)} por número/mês)`, { assinatura_id: a.id });
     res.json(data[0]);
@@ -964,6 +970,7 @@ router.post('/assinaturas/:id/numeros-extras/recusar', onlyMaster, async (req, r
     await db.from('whatsapp_assinaturas')
       .update({ numeros_extras_pedido: 0, numeros_extras_pedido_em: null, numeros_extras_pedido_por_nome: null, atualizado_em: new Date().toISOString() })
       .eq('id', a.id).eq('status', 'ativa');
+    WC.cancelarPendentes(db, { assinatura_id: a.id, tipo: 'numero_extra' });
     auditarLoja(req, a.mercearia_id, 'whatsapp_numero_extra_recusado', `Recusou o pedido de número extra de WhatsApp${motivo ? ` — ${motivo}` : ''}`, { assinatura_id: a.id });
     res.json({ ok: true });
   } catch (err) {
@@ -991,6 +998,7 @@ router.post('/assinaturas/:id/numeros-extras/definir', onlyMaster, async (req, r
       .update({ numeros_extras: extras, numero_extra_preco: precoArred, atualizado_em: new Date().toISOString() })
       .eq('id', a.id).eq('status', 'ativa').select();
     if (error) throw error;
+    WC.cancelarPendentes(db, { assinatura_id: a.id, tipo: 'numero_extra' });
     auditarLoja(req, a.mercearia_id, 'whatsapp_numero_extra_definido',
       `Definiu os números extras de WhatsApp: ${a.numeros_extras || 0} → ${extras}, R$ ${Number(a.numero_extra_preco ?? 0).toFixed(2)} → R$ ${precoArred.toFixed(2)} por número/mês`, { assinatura_id: a.id });
     res.json(data?.[0] || {});
@@ -1012,6 +1020,7 @@ router.post('/assinaturas/:id/pagamento', onlyMaster, async (req, res) => {
     if (pag.erro) return res.status(400).json({ error: pag.erro });
     const r = await A.registrarPagamentoCiclo(db, a, pag, req.user.nome || req.user.email);
     if (!r) return res.status(409).json({ error: 'O ciclo atual desta loja já está pago.' });
+    WC.cancelarPendentes(db, { assinatura_id: a.id, tipo: 'mensalidade' });
     auditarLoja(req, a.mercearia_id, 'whatsapp_pagamento_registrado',
       `Registrou o pagamento do ciclo ${a.ciclo_inicio} a ${a.ciclo_fim} do WhatsApp (${a.plano_nome}) e liberou ${a.creditos} créditos. ${descPag(pag)}`,
       { assinatura_id: a.id, pagamento: pag });
@@ -1038,7 +1047,7 @@ router.patch('/pagamentos/:id', onlyMaster, async (req, res) => {
     if (error) throw error;
     const antes = { forma: atual.forma, valor_bruto: Number(atual.valor_bruto), taxa: Number(atual.taxa), valor_liquido: Number(atual.valor_liquido), pago_em: atual.pago_em, valor_tabela: Number(atual.valor_tabela) };
     auditarLoja(req, atual.mercearia_id, 'whatsapp_pagamento_corrigido',
-      `Corrigiu o pagamento do WhatsApp (${atual.referencia === 'pacote' ? 'pacote extra' : `ciclo ${atual.ciclo_inicio}`}): antes ${descPag(antes)} → agora ${descPag(pag)}`,
+      `Corrigiu o pagamento do WhatsApp (${atual.referencia === 'pacote' ? 'pacote extra' : atual.referencia === 'numero_extra' ? 'número extra' : `ciclo ${atual.ciclo_inicio}`}): antes ${descPag(antes)} → agora ${descPag(pag)}`,
       { pagamento_id: atual.id, antes, depois: pag });
     res.json(data);
   } catch (err) {
@@ -1085,7 +1094,8 @@ router.post('/pacotes/:id/aprovar', onlyMaster, async (req, res) => {
       .eq('id', pac.id).eq('status', 'aguardando').select();
     if (!data || !data.length) return res.status(409).json({ error: 'Esse pedido já foi resolvido.' });
     await A.inserirPagamento(db, { ...pag, mercearia_id: a.mercearia_id, assinatura_id: a.id, ciclo_inicio: a.ciclo_inicio, referencia: 'pacote', pacote_id: pac.id, registrado_por_nome: req.user.nome });
-    await A.lancar(db, { mercearia_id: a.mercearia_id, assinatura_id: a.id, ciclo_inicio: a.ciclo_inicio, tipo: 'pacote', quantidade: pac.creditos, descricao: `Pacote extra: ${pac.nome}`, criado_por_nome: req.user.nome });
+    await A.lancarUmaVez(db, { mercearia_id: a.mercearia_id, assinatura_id: a.id, ciclo_inicio: a.ciclo_inicio, tipo: 'pacote', quantidade: pac.creditos, pedido_id: pac.id, descricao: `Pacote extra: ${pac.nome}`, criado_por_nome: req.user.nome });
+    WC.cancelarPendentes(db, { pacote_id: pac.id });
     auditarLoja(req, a.mercearia_id, 'whatsapp_pacote_aprovado', `Aprovou o pacote extra de WhatsApp "${pac.nome}" (+${pac.creditos} créditos, R$ ${pac.preco}). Pagamento ${descPag(pag)}`, { pacote_id: pac.id, pagamento: pag });
     res.json(data[0]);
   } catch (err) {
@@ -1102,6 +1112,7 @@ router.post('/pacotes/:id/recusar', onlyMaster, async (req, res) => {
       .update({ status: 'recusado', motivo: motivo || null, resolvido_em: new Date().toISOString(), resolvido_por_nome: req.user.nome })
       .eq('id', req.params.id).eq('status', 'aguardando').select();
     if (!data || !data.length) return res.status(404).json({ error: 'Pedido não encontrado ou já resolvido.' });
+    WC.cancelarPendentes(db, { pacote_id: data[0].id });
     auditarLoja(req, data[0].mercearia_id, 'whatsapp_pacote_recusado', `Recusou o pacote extra de WhatsApp "${data[0].nome}"${motivo ? ` — ${motivo}` : ''}`, { pacote_id: data[0].id });
     res.json(data[0]);
   } catch (err) {

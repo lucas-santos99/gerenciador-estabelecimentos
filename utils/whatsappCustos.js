@@ -57,6 +57,10 @@ const PARAMS_PADRAO = Object.freeze({
   // R$ 0,49 + 2,99%, tabela padrão do site).
   recebimento: { pix_efi_pct: 1.19, pix_efi_fixo: 0, cartao_asaas_pct: 2.99, cartao_asaas_fixo: 0.49 },
   cobranca_auto: { ativo: false, dias_antes: [3, 1], dias_depois: [1, 3], lojas_desligadas: [] },
+  // Pagamento do plano de WhatsApp pela própria tela da loja (02/10/2026):
+  // Pix (Efí) + cartão (Asaas), com liberação automática. dias_antecipar =
+  // quantos dias antes do fim do ciclo a loja já pode pagar a renovação.
+  pagamento_online: { ativo: true, dias_antecipar: 7 },
 });
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -164,6 +168,10 @@ function normalizarParametros(entrada) {
   p.cobranca_auto.lojas_desligadas = Array.isArray(cb.lojas_desligadas)
     ? [...new Set(cb.lojas_desligadas.filter(id => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)))].slice(0, 5000)
     : [];
+
+  const po = g('pagamento_online');
+  p.pagamento_online.ativo = po.ativo !== false;
+  p.pagamento_online.dias_antecipar = inteiro(po.dias_antecipar, 0, 28, p.pagamento_online.dias_antecipar);
 
   return p;
 }
