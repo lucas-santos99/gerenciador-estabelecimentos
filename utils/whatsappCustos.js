@@ -54,8 +54,9 @@ const PARAMS_PADRAO = Object.freeze({
   // Taxas de recebimento por forma de pagamento (01/10/2026) — usadas no
   // valor líquido real de cada mensalidade/pacote registrado. Conferir na
   // conta de cada provedor (Efí: Pix cobrança 1,19%; Asaas: cartão à vista
-  // R$ 0,49 + 2,99%, tabela padrão do site).
-  recebimento: { pix_efi_pct: 1.19, pix_efi_fixo: 0, cartao_asaas_pct: 2.99, cartao_asaas_fixo: 0.49 },
+  // R$ 0,49 + 2,99%, tabela padrão do site). (02/10/2026) Cartão de débito
+  // separado: R$ 0,35 + 1,89% (a fatura do Asaas aceita débito à vista).
+  recebimento: { pix_efi_pct: 1.19, pix_efi_fixo: 0, cartao_asaas_pct: 2.99, cartao_asaas_fixo: 0.49, debito_asaas_pct: 1.89, debito_asaas_fixo: 0.35 },
   cobranca_auto: { ativo: false, dias_antes: [3, 1], dias_depois: [1, 3], lojas_desligadas: [] },
   // Pagamento do plano de WhatsApp pela própria tela da loja (02/10/2026):
   // Pix (Efí) + cartão (Asaas), com liberação automática. dias_antecipar =
@@ -160,6 +161,8 @@ function normalizarParametros(entrada) {
   p.recebimento.pix_efi_fixo      = num(rc.pix_efi_fixo, 0, 50, p.recebimento.pix_efi_fixo);
   p.recebimento.cartao_asaas_pct  = num(rc.cartao_asaas_pct, 0, 20, p.recebimento.cartao_asaas_pct);
   p.recebimento.cartao_asaas_fixo = num(rc.cartao_asaas_fixo, 0, 50, p.recebimento.cartao_asaas_fixo);
+  p.recebimento.debito_asaas_pct  = num(rc.debito_asaas_pct, 0, 20, p.recebimento.debito_asaas_pct);
+  p.recebimento.debito_asaas_fixo = num(rc.debito_asaas_fixo, 0, 50, p.recebimento.debito_asaas_fixo);
 
   const cb = g('cobranca_auto');
   p.cobranca_auto.ativo       = cb.ativo === true;
@@ -266,7 +269,8 @@ function simular(p, { meta_pct = 0, dolar = null, usd_interp = null } = {}) {
 // Formas de pagamento de uma mensalidade/pacote do WhatsApp
 const FORMAS_PAGAMENTO = Object.freeze({
   pix_efi: 'Pix (Efí)',
-  cartao_asaas: 'Cartão (Asaas)',
+  cartao_asaas: 'Cartão de crédito (Asaas)',
+  debito_asaas: 'Cartão de débito (Asaas)',
   dinheiro: 'Dinheiro',
   transferencia: 'Transferência / Pix direto',
   cortesia: 'Cortesia',
@@ -283,6 +287,7 @@ function taxaRecebimento(p, forma, valor) {
   let t = 0;
   if (forma === 'pix_efi') t = v * r.pix_efi_pct / 100 + r.pix_efi_fixo;
   else if (forma === 'cartao_asaas') t = v * r.cartao_asaas_pct / 100 + r.cartao_asaas_fixo;
+  else if (forma === 'debito_asaas') t = v * r.debito_asaas_pct / 100 + r.debito_asaas_fixo;
   return Math.min(v, Math.round(t * 100) / 100);
 }
 

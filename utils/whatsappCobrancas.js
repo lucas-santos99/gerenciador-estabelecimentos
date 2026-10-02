@@ -560,7 +560,9 @@ async function receberAsaas(db, cob, pag, evento) {
   const valor = Number(pag.value);
   const liquido = Number(pag.netValue);
   const taxa = Number.isFinite(liquido) && liquido > 0 && liquido <= valor ? r2(valor - liquido) : null;
-  return confirmar(db, cob, { forma: 'cartao_asaas', valor_pago: valor, taxa, pagamento_ref: pag.id, evento: evento || pag.status });
+  // A fatura de cartão à vista também aceita débito: o Asaas informa em billingType
+  const forma = pag.billingType === 'DEBIT_CARD' ? 'debito_asaas' : 'cartao_asaas';
+  return confirmar(db, cob, { forma, valor_pago: valor, taxa, pagamento_ref: pag.id, evento: evento || pag.status });
 }
 
 // Conferência pela tela (reserva do webhook): olha o provedor no máximo a
