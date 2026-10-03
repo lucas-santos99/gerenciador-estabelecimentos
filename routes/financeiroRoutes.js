@@ -161,6 +161,34 @@ router.get('/resumo',
 
         });
 
+        // Pendências (os dois cartões da tela): antes a tela lia estes
+        // campos e eles não vinham — mostrava sempre R$ 0,00. Se uma das
+        // somas falhar, o resto do resumo continua saindo normalmente.
+        resumo.total_fiado_pendente = 0;
+        resumo.total_contas_pagar_pendente = 0;
+        try {
+            const [fiado, comprasComConta, contas] = await Promise.all([
+                supabaseAdmin.from('clientes').select('saldo_devedor')
+                    .eq('mercearia_id', req.user.mercearia_id).gt('saldo_devedor', 0.01),
+                supabaseAdmin.from('compras').select('conta_a_pagar_id')
+                    .eq('mercearia_id', req.user.mercearia_id).not('conta_a_pagar_id', 'is', null),
+                supabaseAdmin.from('contas_a_pagar').select('id, valor')
+                    .eq('mercearia_id', req.user.mercearia_id).eq('status', 'pendente'),
+            ]);
+            if (fiado.error) throw fiado.error;
+            if (contas.error) throw contas.error;
+            resumo.total_fiado_pendente = (fiado.data || [])
+                .reduce((s, c) => s + (parseFloat(c.saldo_devedor) || 0), 0);
+            // Só as despesas da loja (as mesmas da aba Contas a Pagar daqui):
+            // conta de compra de fornecedor fica no módulo Fornecedores.
+            const deFornecedor = new Set((comprasComConta.data || []).map(c => c.conta_a_pagar_id));
+            resumo.total_contas_pagar_pendente = (contas.data || [])
+                .filter(c => !deFornecedor.has(c.id))
+                .reduce((s, c) => s + (parseFloat(c.valor) || 0), 0);
+        } catch (e) {
+            console.error('[ERRO] GET /api/financeiro/resumo (pendências):', e.message);
+        }
+
         res.status(200).json(resumo);
 
     } catch (error) {
