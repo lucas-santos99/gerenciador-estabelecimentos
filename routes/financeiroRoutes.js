@@ -9,11 +9,42 @@ const authUser = require('../middlewares/authUser');
 // 🔥 PROTEGE TODAS AS ROTAS
 router.use(authUser);
 
-const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { verificarPermissao, temPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, hojeStrTZ, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+
+// ── Permissões do operador (módulo + ação marcada na tela) ─────────
+// Dono e super_admin passam sempre.
+const PERM_CONTAS = [PERMISSOES.FINANCEIRO, PERMISSOES.FINANCEIRO_CONTAS_PAGAR];
+const exigeContas = (mensagem) => verificarPermissao(PERM_CONTAS, { mensagem });
+
+// Mexer numa conta específica (pagar, editar, excluir): a permissão do
+// operador depende do tipo da conta. Conta nascida de uma compra de
+// fornecedor (compras.conta_a_pagar_id) é de quem pode "Lançar compras";
+// as demais, de quem gerencia as contas a pagar do Financeiro.
+// Devolve true se já respondeu 403 (a rota deve parar).
+async function negouPelaConta(req, res, contaId, textoCompra, textoConta) {
+    if (temPermissao(req)) return false; // dono / super_admin
+    const supabaseAdmin = require('../db/supabaseAdmin');
+    const { data: comprasDaConta, error: errCompra } = await supabaseAdmin
+        .from('compras')
+        .select('id')
+        .eq('conta_a_pagar_id', contaId)
+        .eq('mercearia_id', req.user.mercearia_id)
+        .limit(1);
+    if (errCompra) throw errCompra;
+
+    const ehContaDeCompra = (comprasDaConta || []).length > 0;
+    const pode = ehContaDeCompra
+        ? temPermissao(req, [PERMISSOES.FORNECEDORES, PERMISSOES.FORNECEDORES_COMPRAR])
+        : temPermissao(req, PERM_CONTAS);
+    if (pode) return false;
+
+    res.status(403).json({ error: ehContaDeCompra ? textoCompra : textoConta, codigo: 'SEM_PERMISSAO' });
+    return true;
+}
 
 
 // ============================================================
@@ -21,7 +52,7 @@ const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 // ============================================================
 
 router.get('/',
-    //verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    exigeContas('Sem permissão para ver as contas a pagar.'),
     async (req, res) => {
 
     const supabaseAdmin = require('../db/supabaseAdmin');
@@ -102,7 +133,7 @@ router.get('/',
 // ============================================================
 
 router.get('/resumo',
-    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    verificarPermissao([PERMISSOES.FINANCEIRO, PERMISSOES.FINANCEIRO_VER_RESUMO], { mensagem: 'Sem permissão para ver o resumo do dia.' }),
     async (req, res) => {
 
     try {
@@ -206,7 +237,7 @@ router.get('/resumo',
 // ============================================================
 
 router.post('/',
-    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    exigeContas('Sem permissão para lançar contas a pagar.'),
     async (req, res) => {
 
     const supabaseAdmin = require('../db/supabaseAdmin');
@@ -265,13 +296,16 @@ router.post('/',
 // ============================================================
 
 router.put('/:contaId/pagar',
-    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
     const supabaseAdmin = require('../db/supabaseAdmin');
     const { contaId } = req.params;
 
     try {
+
+        if (await negouPelaConta(req, res, contaId,
+            'Sem permissão para marcar compras como pagas.',
+            'Sem permissão para marcar contas como pagas.')) return;
 
         const { data, error } = await supabaseAdmin
             .from('contas_a_pagar')
@@ -317,7 +351,7 @@ router.put('/:contaId/pagar',
 // ============================================================
 
 router.get('/historico',
-    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
+    verificarPermissao([PERMISSOES.RELATORIOS, PERMISSOES.RELATORIOS_HISTORICO], { mensagem: 'Sem permissão para ver o histórico de vendas.' }),
     async (req, res) => {
 
     const { data_inicio, data_fim } = req.query;
@@ -467,7 +501,7 @@ router.get('/historico',
 // ============================================================
 
 router.get('/relatorio_dre',
-    verificarPermissao(PERMISSOES.VER_RELATORIOS),
+    verificarPermissao([PERMISSOES.FINANCEIRO, PERMISSOES.FINANCEIRO_VER_DRE], { mensagem: 'Sem permissão para ver o DRE.' }),
     async (req, res) => {
 
     const { data_inicio, data_fim } = req.query;
@@ -510,13 +544,16 @@ router.get('/relatorio_dre',
 // ============================================================
 
 router.delete('/:contaId',
-    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
     const supabaseAdmin = require('../db/supabaseAdmin');
     const { contaId } = req.params;
 
     try {
+
+        if (await negouPelaConta(req, res, contaId,
+            'Sem permissão para excluir contas de compras de fornecedor.',
+            'Sem permissão para excluir contas a pagar.')) return;
 
         const { data, error } = await supabaseAdmin
             .from('contas_a_pagar')
@@ -560,7 +597,6 @@ router.delete('/:contaId',
 // ============================================================
 
 router.put('/:contaId',
-    verificarPermissao(PERMISSOES.VER_FINANCEIRO),
     async (req, res) => {
 
     const supabaseAdmin = require('../db/supabaseAdmin');
@@ -575,6 +611,10 @@ router.put('/:contaId',
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
+
+        if (await negouPelaConta(req, res, contaId,
+            'Sem permissão para editar contas de compras de fornecedor.',
+            'Sem permissão para editar contas a pagar.')) return;
 
         const { data, error } = await supabaseAdmin
             .from('contas_a_pagar')
@@ -622,7 +662,7 @@ router.put('/:contaId',
 // ============================================================
 
 router.get('/relatorio_produtos',
-    verificarPermissao(PERMISSOES.VER_RELATORIOS),
+    verificarPermissao([PERMISSOES.RELATORIOS, PERMISSOES.RELATORIOS_PRODUTOS], { mensagem: 'Sem permissão para ver os produtos mais vendidos.' }),
     async (req, res) => {
 
     const { data_inicio, data_fim, categoria_id } = req.query;
@@ -662,7 +702,7 @@ router.get('/relatorio_produtos',
 // ============================================================
 
 router.get('/relatorio_vendas_operador',
-    verificarPermissao(PERMISSOES.VER_RELATORIOS),
+    verificarPermissao([PERMISSOES.RELATORIOS, PERMISSOES.RELATORIOS_OPERADORES], { mensagem: 'Sem permissão para ver as vendas por operador.' }),
     async (req, res) => {
 
     const { data_inicio, data_fim } = req.query;

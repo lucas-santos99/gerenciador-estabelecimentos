@@ -3,6 +3,7 @@ const express  = require('express');
 const router   = express.Router();
 const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
+const { temPermissao } = require('../middlewares/verificarPermissao');
 const { registrar } = require('./auditoriaRoutes');
 const { TIMEZONE_PADRAO, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
@@ -37,6 +38,12 @@ router.post('/', async (req, res) => {
 
   if (!mercearia_id) {
     return res.status(403).json({ error: 'Sem estabelecimento vinculado.' });
+  }
+
+  // Operador só pede alteração se tiver Configurações + "pedir alteração
+  // dos dados" marcados. Dono continua como sempre.
+  if (role === 'operator' && !temPermissao(req, ['config', 'config_editar_dados'])) {
+    return res.status(403).json({ error: 'Sem permissão para pedir alteração dos dados da loja.', codigo: 'SEM_PERMISSAO' });
   }
 
   const { campos, detalhes } = req.body;

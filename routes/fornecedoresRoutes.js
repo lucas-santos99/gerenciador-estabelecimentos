@@ -13,6 +13,11 @@ console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
 
 router.use(authUser);
 
+// ── Permissões do operador: módulo + ação marcada na tela ──────────
+// Ler/listar exige só o módulo "Fornecedores".
+const F = PERMISSOES;
+const exigeModulo = verificarPermissao(F.FORNECEDORES, { mensagem: 'Sem permissão para acessar Fornecedores.' });
+
 /* ── helpers ─────────────────────────────────────────────── */
 function mercearia(req) { return req.user.mercearia_id; }
 function operadorId(req) { return req.user.role === 'operator' ? req.user.id : null; }
@@ -55,7 +60,7 @@ async function buscarCategoriasPorFornecedor(mid, fornecedorIds) {
    1. LISTAR FORNECEDORES (com números rápidos: gasto no mês,
       última compra, formas de pagamento já usadas) — GET /api/fornecedores?busca=
 ════════════════════════════════════════════════════════════ */
-router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (req, res) => {
+router.get('/', exigeModulo, async (req, res) => {
   const mid = mercearia(req);
   const { busca, categoria_id } = req.query;
 
@@ -139,7 +144,7 @@ router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (re
    2. BUSCAR FORNECEDOR (pra selects rápidos, ex: tela de compra)
       GET /api/fornecedores/buscar-rapido?termo=
 ════════════════════════════════════════════════════════════ */
-router.get('/buscar-rapido', async (req, res) => {
+router.get('/buscar-rapido', exigeModulo, async (req, res) => {
   const mid = mercearia(req);
   const { termo } = req.query;
   try {
@@ -165,7 +170,7 @@ router.get('/buscar-rapido', async (req, res) => {
    3. DETALHES DO FORNECEDOR — histórico + produtos fornecidos
       GET /api/fornecedores/:id
 ════════════════════════════════════════════════════════════ */
-router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (req, res) => {
+router.get('/:id', exigeModulo, async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 
@@ -269,7 +274,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async 
 /* ════════════════════════════════════════════════════════════
    4. CRIAR FORNECEDOR — POST /api/fornecedores
 ════════════════════════════════════════════════════════════ */
-router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (req, res) => {
+router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_ADICIONAR], { mensagem: 'Sem permissão para cadastrar fornecedores.' }), async (req, res) => {
   const mid = mercearia(req);
   const {
     nome, razao_social, cnpj_cpf, telefone, whatsapp, email,
@@ -340,7 +345,7 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_ADICIONAR), async (r
 /* ════════════════════════════════════════════════════════════
    5. EDITAR FORNECEDOR — PUT /api/fornecedores/:id
 ════════════════════════════════════════════════════════════ */
-router.put('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EDITAR), async (req, res) => {
+router.put('/:id', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_EDITAR], { mensagem: 'Sem permissão para editar fornecedores.' }), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
   const {
@@ -418,7 +423,7 @@ router.put('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EDITAR), async (re
 /* ════════════════════════════════════════════════════════════
    6. EXCLUIR (soft) FORNECEDOR — DELETE /api/fornecedores/:id
 ════════════════════════════════════════════════════════════ */
-router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_EXCLUIR), async (req, res) => {
+router.delete('/:id', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_EXCLUIR], { mensagem: 'Sem permissão para excluir fornecedores.' }), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 

@@ -2,6 +2,8 @@ const express = require('express');
 const router  = express.Router();
 const db      = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
+const { temPermissao } = require('../middlewares/verificarPermissao');
+const { negarSeEmContagem } = require('../utils/inventarioTrava');
 
 console.log('🔥 VENDAS ROUTES ATUALIZADO 🔥');
 
@@ -27,6 +29,19 @@ router.post('/finalizar', async (req, res) => {
   const { valor_total, meio_pagamento, carrinho, clienteId, cpfNota, pagamentos } = req.body;
   const totalVendaFloat = parseFloat(valor_total);
   const dividida = Array.isArray(pagamentos) && pagamentos.length > 1;
+
+  // Permissões do operador (dono passa sempre): precisa do módulo PDV e
+  // da ação "Realizar vendas"; se a venda — ou alguma fatia da venda
+  // dividida — for no Fiado, precisa também de "Vender no fiado".
+  if (!temPermissao(req, ['pdv', 'pdv_realizar_venda'])) {
+    return res.status(403).json({ error: 'Sem permissão para realizar vendas.', codigo: 'SEM_PERMISSAO' });
+  }
+  const temFiado = dividida
+    ? pagamentos.some(p => p && p.meioPagamento === 'Fiado')
+    : meio_pagamento === 'Fiado';
+  if (temFiado && !temPermissao(req, ['pdv', 'pdv_realizar_venda', 'pdv_fiado'])) {
+    return res.status(403).json({ error: 'Sem permissão para vender no fiado.', codigo: 'SEM_PERMISSAO' });
+  }
 
   if (isNaN(totalVendaFloat) || totalVendaFloat <= 0 || !carrinho?.length) {
     return res.status(400).json({ error: 'Dados da venda incompletos ou valor total inválido.' });
@@ -93,6 +108,9 @@ router.post('/finalizar', async (req, res) => {
 
     const produtoIds  = [...new Set(carrinho.map(i => i.produto_id))];
     const variacaoIds = [...new Set(carrinho.map(i => i.produto_variacao_id).filter(Boolean))];
+
+    // Inventário em andamento: produto em contagem não pode ser vendido.
+    if (await negarSeEmContagem(req, res, produtoIds, 'vender')) return;
 
     const { data: produtosCadastro, error: errProd } = await db
       .from('produtos')
@@ -432,6 +450,10 @@ router.post('/:id/cancelar', async (req, res) => {
       .from('itens_venda')
       .select('produto_id, produto_variacao_id, quantidade, produtos ( nome )')
       .eq('venda_id', id);
+
+    // Inventário em andamento: cancelar devolveria itens ao estoque de um
+    // produto que está sendo contado.
+    if (await negarSeEmContagem(req, res, (itens || []).map(i => i.produto_id), 'cancelar esta venda')) return;
 
     let fatiasDivididas = null;
     if (venda.meio_pagamento === 'Dividido') {

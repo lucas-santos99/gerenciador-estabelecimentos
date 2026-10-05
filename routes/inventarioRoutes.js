@@ -5,6 +5,7 @@ const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
+const { inventarioEmAndamento, negarSeEmContagem } = require('../utils/inventarioTrava');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
@@ -56,7 +57,7 @@ router.get('/', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) => {
    POST /api/inventario
    body: { nome, tipo, categoria_id?, observacoes? }
 ════════════════════════════════════════════════════════════ */
-router.post('/', verificarPermissao(PERMISSOES.INVENTARIO_CONTAR), async (req, res) => {
+router.post('/', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARIO_CONTAR], { mensagem: 'Sem permissão para fazer contagens de inventário.' }), async (req, res) => {
   const mid = mercearia(req);
   if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
@@ -153,6 +154,25 @@ router.post('/', verificarPermissao(PERMISSOES.INVENTARIO_CONTAR), async (req, r
    3. DETALHE DO INVENTÁRIO COM ITENS
    GET /api/inventario/:id
 ════════════════════════════════════════════════════════════ */
+// Inventário em andamento (ou null) — usado pelo PDV e pelas outras telas
+// pra avisar que os produtos em contagem estão travados. Não exige o
+// módulo Inventário: quem está no caixa precisa saber por que não vende.
+router.get('/em-andamento', async (req, res) => {
+  try {
+    const inv = await inventarioEmAndamento(mercearia(req));
+    if (!inv) return res.json(null);
+    let categoria_nome = null;
+    if (inv.tipo === 'por_categoria' && inv.categoria_id) {
+      const { data: cat } = await db.from('categorias').select('nome').eq('id', inv.categoria_id).maybeSingle();
+      categoria_nome = cat?.nome || null;
+    }
+    res.json({ id: inv.id, nome: inv.nome, tipo: inv.tipo, categoria_nome, usuario_nome: inv.usuario_nome, iniciado_em: inv.iniciado_em, total_produtos: inv.total_produtos });
+  } catch (err) {
+    console.error('[INVENTÁRIO] em-andamento:', err.message);
+    res.status(500).json({ error: 'Erro ao consultar inventário' });
+  }
+});
+
 router.get('/:id', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
@@ -204,7 +224,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) =
    PATCH /api/inventario/:id/item/:itemId
    body: { estoque_contado, observacao? }
 ════════════════════════════════════════════════════════════ */
-router.patch('/:id/item/:itemId', verificarPermissao(PERMISSOES.INVENTARIO_CONTAR), async (req, res) => {
+router.patch('/:id/item/:itemId', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARIO_CONTAR], { mensagem: 'Sem permissão para fazer contagens de inventário.' }), async (req, res) => {
   const mid = mercearia(req);
   const { id, itemId } = req.params;
   const { estoque_contado, observacao } = req.body;
@@ -288,7 +308,7 @@ router.patch('/:id/item/:itemId', verificarPermissao(PERMISSOES.INVENTARIO_CONTA
    POST /api/inventario/:id/finalizar
    body: { aplicar_apenas_divergencias: bool }
 ════════════════════════════════════════════════════════════ */
-router.post('/:id/finalizar', verificarPermissao(PERMISSOES.INVENTARIO_FINALIZAR), async (req, res) => {
+router.post('/:id/finalizar', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARIO_FINALIZAR], { mensagem: 'Sem permissão para finalizar o inventário.' }), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
   const { aplicar_apenas_divergencias = false } = req.body;
@@ -408,7 +428,7 @@ router.post('/:id/finalizar', verificarPermissao(PERMISSOES.INVENTARIO_FINALIZAR
    6. CANCELAR INVENTÁRIO
    PATCH /api/inventario/:id/cancelar
 ════════════════════════════════════════════════════════════ */
-router.patch('/:id/cancelar', verificarPermissao(PERMISSOES.INVENTARIO_CONTAR), async (req, res) => {
+router.patch('/:id/cancelar', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARIO_CONTAR], { mensagem: 'Sem permissão para fazer contagens de inventário.' }), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 
@@ -484,7 +504,7 @@ router.get('/movimentacoes/listar', verificarPermissao(PERMISSOES.INVENTARIO), a
    POST /api/inventario/ajuste-rapido
    body: { produto_id, tipo, quantidade, motivo }
 ════════════════════════════════════════════════════════════ */
-router.post('/ajuste-rapido', verificarPermissao(PERMISSOES.INVENTARIO_AJUSTE), async (req, res) => {
+router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARIO_AJUSTE], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para ajustar o estoque.' }), async (req, res) => {
   const mid = mercearia(req);
   if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
@@ -501,6 +521,9 @@ router.post('/ajuste-rapido', verificarPermissao(PERMISSOES.INVENTARIO_AJUSTE), 
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
   try {
+    // Produto em contagem de inventário não recebe ajuste por fora
+    if (await negarSeEmContagem(req, res, [produto_id], 'ajustar o estoque')) return;
+
     const { data: produto } = await db
       .from('produtos')
       .select('id, nome, marca, unidade_medida, estoque_atual, categoria_id, categorias(nome)')

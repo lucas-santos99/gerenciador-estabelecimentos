@@ -20,6 +20,8 @@ const PERMISSOES = {
   PDV_REALIZAR_VENDA: 'pdv_realizar_venda',
   PDV_CANCELAR_VENDA: 'pdv_cancelar_venda',
   PDV_FIADO:          'pdv_fiado',
+  // Não existe desconto no PDV: a constante fica (compatibilidade com o
+  // que já está gravado), mas a opção saiu das telas de permissão.
   PDV_DESCONTO:       'pdv_desconto',
 
   // ── Ações granulares — Estoque ───────────────────────────
@@ -83,7 +85,6 @@ const MODULOS_PERMISSOES = [
       { id: 'pdv_realizar_venda', label: 'Realizar vendas' },
       { id: 'pdv_cancelar_venda', label: 'Cancelar vendas' },
       { id: 'pdv_fiado',          label: 'Vender no fiado' },
-      { id: 'pdv_desconto',       label: 'Aplicar desconto' },
     ],
   },
   {
@@ -109,9 +110,9 @@ const MODULOS_PERMISSOES = [
     id: 'financeiro', label: 'Financeiro', icone: '💰',
     desc: 'Fluxo de caixa e contas a pagar',
     acoes: [
-      { id: 'financeiro_ver_resumo',   label: 'Ver resumo do caixa' },
-      { id: 'financeiro_ver_dre',      label: 'Ver DRE' },
-      { id: 'financeiro_contas_pagar', label: 'Gerenciar contas a pagar' },
+      { id: 'financeiro_ver_resumo',   label: 'Ver resumo do dia (caixa)' },
+      { id: 'financeiro_ver_dre',      label: 'Ver DRE (resultado do período)' },
+      { id: 'financeiro_contas_pagar', label: 'Ver e gerenciar contas a pagar' },
     ],
   },
   {
@@ -140,7 +141,7 @@ const MODULOS_PERMISSOES = [
       { id: 'fornecedores_adicionar', label: 'Adicionar fornecedores' },
       { id: 'fornecedores_editar',    label: 'Editar fornecedores' },
       { id: 'fornecedores_excluir',   label: 'Excluir fornecedores' },
-      { id: 'fornecedores_comprar',   label: 'Lançar compras' },
+      { id: 'fornecedores_comprar',   label: 'Lançar compras e marcar como pagas' },
       { id: 'fornecedores_cancelar',  label: 'Cancelar compras' },
     ],
   },
@@ -153,7 +154,7 @@ const MODULOS_PERMISSOES = [
     id: 'config', label: 'Configurações', icone: '⚙️',
     desc: 'Configurações do estabelecimento',
     acoes: [
-      { id: 'config_editar_dados', label: 'Editar dados do estabelecimento' },
+      { id: 'config_editar_dados', label: 'Pedir alteração dos dados do estabelecimento' },
       { id: 'config_editar_logo',  label: 'Alterar logo' },
     ],
   },

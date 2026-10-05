@@ -80,10 +80,26 @@ module.exports = async function authUser(req, res, next) {
 
     // Para operadores: carregar permissões e injetar no req.user
     if (profile.role === 'operator') {
-      const { data: rows } = await supabaseAdmin
-        .from('permissoes_operador')
-        .select('permissao_id')
-        .eq('operador_id', userId);
+      // Em paralelo: permissões + situação do operador. As rotas de
+      // operador (ativar/desativar/excluir) só gravam `operadores.status`
+      // — sem conferir aqui, operador desativado ou excluído continuava
+      // entrando, porque `profiles.is_active` seguia verdadeiro.
+      const [{ data: rows }, { data: operador }] = await Promise.all([
+        supabaseAdmin
+          .from('permissoes_operador')
+          .select('permissao_id')
+          .eq('operador_id', userId),
+        supabaseAdmin
+          .from('operadores')
+          .select('status')
+          .eq('id', userId)
+          .maybeSingle(),
+      ]);
+
+      // Sem registro em `operadores` (cadastro antigo) → não bloqueia.
+      if (operador && operador.status !== 'ativo') {
+        return res.status(403).json({ error: 'Usuário inativo. Contate o administrador.' });
+      }
 
       req.user.permissoes = (rows || []).map(r => r.permissao_id);
       req.permissoes      = req.user.permissoes; // cache para verificarPermissao

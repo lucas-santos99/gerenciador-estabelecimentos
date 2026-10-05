@@ -13,6 +13,19 @@ const { erroSenhaFraca } = require("../utils/senha");
 // Todas as rotas deste arquivo exigem autenticação
 router.use(authUser);
 
+// Gerenciar operadores (listar, criar, editar, ativar/desativar, excluir,
+// permissões, senha) é só do DONO da loja. Antes as rotas só conferiam se
+// o operador era do mesmo estabelecimento — um operador conseguia chamar
+// a API direto e dar todas as permissões pra si mesmo. A única rota que o
+// operador usa aqui é a que devolve as próprias permissões.
+router.use((req, res, next) => {
+  if (req.method === "GET" && req.path === "/minhas-permissoes") return next();
+  if (req.user.role !== "merchant") {
+    return res.status(403).json({ error: "Só o dono da loja gerencia os operadores.", codigo: "SOMENTE_DONO" });
+  }
+  next();
+});
+
 function quemFez(req) { return req.user.role === "operator" ? req.user.id : null; }
 
 /* ============================================================

@@ -3,7 +3,8 @@ const db = require('../db/supabaseAdmin');
 const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
-const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { verificarPermissao, temPermissao } = require('../middlewares/verificarPermissao');
+const { negarSeEmContagem } = require('../utils/inventarioTrava');
 const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 const { contemPalavraProibida } = require('../utils/filtroPalavroes');
@@ -86,14 +87,61 @@ async function erroCodigosEVariacoes(mercearia_id, produtoIdAtual, codigo_barras
 // Sincroniza a lista de variações (tamanho/cor) de um produto com o que
 // veio do formulário — cria as novas, atualiza as existentes, e remove
 // (ou só desativa, se já apareceu numa venda) as que sumiram da lista.
-async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas = []) {
+// Toda mudança de estoque fica no histórico (Inventário → Movimentações),
+// com motivo e quem fez — inclusive o estoque inicial de um produto novo e
+// o estoque das variações. `ctx` = { req, produto: { id, nome, marca,
+// unidade_medida }, categoria_nome }.
+async function registrarMovimentacaoEstoque(ctx, { tipo, antes, depois, motivo, referencia_tipo, variacaoId = null }) {
+  try {
+    const { req, produto } = ctx;
+    const { error } = await db.from('movimentacoes_estoque').insert({
+      mercearia_id:            req.user.mercearia_id,
+      produto_id:              produto.id,
+      produto_nome:            produto.nome,
+      produto_marca:           produto.marca || null,
+      unidade_medida:          produto.unidade_medida || 'un',
+      tipo,
+      quantidade_anterior:     antes,
+      quantidade_movimentacao: Math.abs(depois - antes),
+      quantidade_posterior:    depois,
+      motivo,
+      referencia_tipo,
+      categoria_nome:          ctx.categoria_nome || null,
+      operador_id:             req.user.role === 'operator' ? req.user.id : null,
+      usuario_nome:            req.user.nome || req.user.email,
+      produto_variacao_id:     variacaoId,
+    });
+    if (error) console.error('[ESTOQUE] movimentação não registrada:', error.message);
+  } catch (e) {
+    console.error('[ESTOQUE] movimentação não registrada:', e.message);
+  }
+}
+
+// Variações já existentes cujo estoque veio diferente do que está gravado.
+async function variacoesComEstoqueAlterado(produtoId, variacoesEnviadas = []) {
+  const comId = (variacoesEnviadas || []).filter(v => v && v.id);
+  if (comId.length === 0) return [];
+  const { data: atuais } = await db
+    .from('produto_variacoes')
+    .select('id, estoque_atual, tamanho, cor, genero')
+    .eq('produto_id', produtoId)
+    .eq('ativo', true);
+  const porId = new Map((atuais || []).map(v => [v.id, v]));
+  return comId.filter(v => {
+    const atual = porId.get(v.id);
+    return atual && Math.abs((parseFloat(v.estoque_atual) || 0) - (parseFloat(atual.estoque_atual) || 0)) > 0.0005;
+  });
+}
+
+async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas = [], ctx = null) {
   const { data: existentes } = await db
     .from('produto_variacoes')
-    .select('id')
+    .select('id, estoque_atual')
     .eq('produto_id', produtoId)
     .eq('ativo', true);
 
   const idsExistentes = new Set((existentes || []).map(v => v.id));
+  const estoqueAntes = new Map((existentes || []).map(v => [v.id, parseFloat(v.estoque_atual) || 0]));
   const idsEnviados = new Set(variacoesEnviadas.filter(v => v.id).map(v => v.id));
 
   // Removeu da lista — apaga de vez, a não ser que já tenha sido vendida
@@ -135,10 +183,27 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
       const { data: linha, error: errUpd } = await db.from('produto_variacoes').update(payload).eq('id', v.id).select().single();
       if (errUpd) console.error(`[ERRO] variação ${v.id} (produto ${produtoId}) não atualizada:`, errUpd.message);
       if (linha) resultado.push(linha);
+      // Estoque de variação alterado no cadastro → fica no histórico, com o motivo informado
+      const antes = estoqueAntes.get(v.id) || 0;
+      if (linha && ctx && Math.abs(payload.estoque_atual - antes) > 0.0005) {
+        await registrarMovimentacaoEstoque(ctx, {
+          tipo: 'correcao', antes, depois: payload.estoque_atual,
+          motivo: `Variação ${rotuloVariacao(payload)}: ${ctx.motivo || 'estoque alterado no cadastro do produto'}`,
+          referencia_tipo: 'cadastro_produto', variacaoId: v.id,
+        });
+      }
     } else {
       const { data: linha, error: errIns } = await db.from('produto_variacoes').insert(payload).select().single();
       if (errIns) console.error(`[ERRO] variação nova (produto ${produtoId}) não criada:`, errIns.message);
       if (linha) resultado.push(linha);
+      // Variação nova que já nasce com estoque → entrada de estoque inicial
+      if (linha && ctx && payload.estoque_atual > 0) {
+        await registrarMovimentacaoEstoque(ctx, {
+          tipo: 'entrada', antes: 0, depois: payload.estoque_atual,
+          motivo: `Estoque inicial — cadastro da variação ${rotuloVariacao(payload)}`,
+          referencia_tipo: 'cadastro_produto', variacaoId: linha.id,
+        });
+      }
     }
   }
 
@@ -193,6 +258,20 @@ router.param('id', (req, res, next, id) => {
   if (req.user?.mercearia_id && String(id) === String(req.user.mercearia_id)) return next();
   return res.status(403).json({ error: 'Acesso negado a este estabelecimento.' });
 });
+
+/* Estoque mínimo é OPCIONAL: vazio, ausente, 0, negativo ou inválido
+   viram 0, que significa "sem estoque mínimo" (sem alerta de estoque
+   baixo). A coluna produtos.estoque_minimo é NOT NULL — nunca gravar null. */
+function normalizarEstoqueMinimo(valor) {
+  const n = parseFloat(valor);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/* Texto do estoque mínimo pra auditoria: 0 → "sem mínimo" */
+function fmtEstoqueMinimo(valor, unidade) {
+  const n = normalizarEstoqueMinimo(valor);
+  return n > 0 ? fmtEstoque(n, unidade) : 'sem mínimo';
+}
 
 /* Formata estoque no padrão brasileiro com unidade */
 function fmtEstoque(valor, unidade) {
@@ -444,7 +523,7 @@ router.get('/:id/opcoes-variacao', async (req, res) => {
 // --- Rota POST: /:id/opcoes-variacao — adiciona um preset manualmente
 // (a tela de gerenciar usa essa; a criação "automática" ao digitar um
 // valor novo numa variação usa upsert direto, dentro de sincronizarVariacoes) ---
-router.post('/:id/opcoes-variacao', async (req, res) => {
+router.post('/:id/opcoes-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const estabelecimentoId = req.params.id;
     const { tipo, valor } = req.body;
 
@@ -491,7 +570,7 @@ router.post('/:id/opcoes-variacao', async (req, res) => {
 // Remove um preset da lista de sugestões. Não afeta produtos que já
 // usam esse valor — tamanho/cor ficam gravados como texto simples em
 // cada variação, não como referência a essa tabela.
-router.delete('/:id/opcoes-variacao/:optId', async (req, res) => {
+router.delete('/:id/opcoes-variacao/:optId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const { id: estabelecimentoId, optId } = req.params;
     try {
         // Busca antes de apagar só pra descrever direito na auditoria
@@ -850,7 +929,7 @@ function codigoNaFaixaInterna(codigo) {
 // --- Rota GET: /:id/produtos/gerar-codigo-interno ---
 // Usada pelo botão "Gerar código interno" no cadastro de produto (e nas
 // variações) — devolve um EAN-13 pronto pra imprimir e colar na peça.
-router.get('/:id/produtos/gerar-codigo-interno', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
+router.get('/:id/produtos/gerar-codigo-interno', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para gerar código de produto.' }), async (req, res) => {
   try {
     const codigo = await gerarEAN13Interno(req.params.id);
     res.json({ codigo });
@@ -951,7 +1030,7 @@ router.get('/:id/produtos/lookup-codigo', async (req, res) => {
 
 
 
-router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), async (req, res) => {
+router.post('/:id/produtos', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], { mensagem: 'Sem permissão para cadastrar produtos.' }), async (req, res) => {
 
     const estabelecimentoId = req.params.id;
 
@@ -1024,7 +1103,7 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
                 marca: marca || null,
                 codigo_barras: codigo_barras || null,
                 estoque_atual: parseFloat(estoque_atual) || 0,
-                estoque_minimo: parseFloat(estoque_minimo) || 10,
+                estoque_minimo: normalizarEstoqueMinimo(estoque_minimo),
                 preco_custo: parseFloat(preco_custo) || 0,
                 preco_venda: parseFloat(preco_venda) || 0,
                 categoria_id: categoria_id || null,
@@ -1043,8 +1122,20 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
         // Cria as variações já na largada, se o produto nasceu com elas —
         // guarda o retorno (com os ids reais) na resposta, pra o front saber
         // pra qual linha subir foto logo em seguida, sem precisar recarregar.
+        const ctxEstoque = { req, produto: { id: data.id, nome: data.nome, marca: data.marca, unidade_medida: data.unidade_medida } };
+
+        // Estoque inicial entra no histórico de movimentações, como
+        // qualquer outra entrada — o estoque nunca "aparece" sem registro.
+        if ((parseFloat(data.estoque_atual) || 0) > 0) {
+          await registrarMovimentacaoEstoque(ctxEstoque, {
+            tipo: 'entrada', antes: 0, depois: parseFloat(data.estoque_atual),
+            motivo: 'Estoque inicial — cadastro do produto',
+            referencia_tipo: 'cadastro_produto',
+          });
+        }
+
         if ((tem_variacoes === true || tem_variacoes === 'true') && Array.isArray(variacoes) && variacoes.length > 0) {
-          data.variacoes = await sincronizarVariacoes(data.id, estabelecimentoId, variacoes);
+          data.variacoes = await sincronizarVariacoes(data.id, estabelecimentoId, variacoes, ctxEstoque);
         }
 
         // Contribui pro catálogo global — próximo estabelecimento que
@@ -1082,7 +1173,7 @@ router.post('/:id/produtos', verificarPermissao(PERMISSOES.ESTOQUE_ADICIONAR), a
 
 
 // --- Rota PUT /:id/produtos/:produtoId ---
-router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+router.put('/:id/produtos/:produtoId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
 
     const { id: estabelecimentoId, produtoId } = req.params;
 
@@ -1148,12 +1239,29 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
             .eq('mercearia_id', estabelecimentoId)
             .single();
 
+        // Estoque de variação alterado na tela precisa de motivo (vai pro
+        // histórico de movimentações) e não pode acontecer com o produto
+        // em contagem de inventário.
+        const motivoEstoque = String(req.body.motivo_estoque || '').trim().slice(0, 200);
+        const temVar = tem_variacoes === true || tem_variacoes === 'true';
+        const varAlteradas = temVar ? await variacoesComEstoqueAlterado(produtoId, variacoes) : [];
+        if (varAlteradas.length > 0) {
+            if (!motivoEstoque) {
+                return res.status(400).json({ error: 'Informe o motivo da alteração de estoque das variações.', codigo: 'MOTIVO_ESTOQUE' });
+            }
+            if (await negarSeEmContagem(req, res, [produtoId], 'alterar o estoque')) return;
+        }
+
+        // O estoque do produto NÃO é alterado por esta rota: depois de
+        // criado, ele só muda por venda, compra, ajuste de estoque (com
+        // motivo) ou inventário. O valor que vem do formulário é o de
+        // quando a tela foi aberta — gravá-lo de volta apagaria as vendas
+        // feitas nesse meio-tempo.
         const updateData = {
             nome: nome,
             marca: marca || null,
             codigo_barras: codigo_barras || null,
-            estoque_atual: parseFloat(estoque_atual) || 0,
-            estoque_minimo: parseFloat(estoque_minimo) || 10,
+            estoque_minimo: normalizarEstoqueMinimo(estoque_minimo),
             preco_custo: parseFloat(preco_custo) || 0,
             preco_venda: parseFloat(preco_venda) || 0,
             categoria_id: categoria_id || null,
@@ -1190,7 +1298,10 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
         // vazia, e sincronizarVariacoes já cuida de desativar/remover
         // as que existiam antes. Guarda o retorno (ids reais) na resposta,
         // pra o front conseguir subir foto de uma variação recém-criada.
-        data.variacoes = await sincronizarVariacoes(produtoId, estabelecimentoId, Array.isArray(variacoes) ? variacoes : []);
+        data.variacoes = await sincronizarVariacoes(produtoId, estabelecimentoId, Array.isArray(variacoes) ? variacoes : [], {
+          req, motivo: motivoEstoque,
+          produto: { id: produtoId, nome: data.nome, marca: data.marca, unidade_medida: data.unidade_medida },
+        });
 
         // Corrigir nome/marca na edição também atualiza o catálogo global
         // (diferente da criação, que só grava se ainda não existir) — assim
@@ -1206,7 +1317,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
             preco_venda:    parseFloat(produtoAtual.preco_venda),
             preco_custo:    parseFloat(produtoAtual.preco_custo),
             estoque_atual:  parseFloat(produtoAtual.estoque_atual),
-            estoque_minimo: parseFloat(produtoAtual.estoque_minimo),
+            estoque_minimo: normalizarEstoqueMinimo(produtoAtual.estoque_minimo),
             unidade_medida: produtoAtual.unidade_medida,
         } : null;
 
@@ -1215,10 +1326,16 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
             ...(marca ? { marca } : {}),
             preco_venda:    parseFloat(preco_venda) || 0,
             preco_custo:    parseFloat(preco_custo) || 0,
-            estoque_atual:  parseFloat(estoque_atual),
-            estoque_minimo: parseFloat(estoque_minimo),
+            estoque_atual:  parseFloat(data.estoque_atual) || 0,
+            estoque_minimo: normalizarEstoqueMinimo(estoque_minimo),
             unidade_medida: unidade_medida || 'un',
         };
+
+        // Só cita o estoque mínimo na descrição quando ele mudou
+        const minimoMudou = metaAntes && metaAntes.estoque_minimo !== metaDepois.estoque_minimo;
+        const textoMinimo = minimoMudou
+          ? ` · estoque mínimo: ${fmtEstoqueMinimo(metaAntes.estoque_minimo, metaAntes.unidade_medida)} → ${fmtEstoqueMinimo(metaDepois.estoque_minimo, metaDepois.unidade_medida)}`
+          : '';
 
         registrar({
           mercearia_id: estabelecimentoId,
@@ -1226,7 +1343,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
           usuario_nome: req.user.nome,
           usuario_email: req.user.email,
           modulo: 'estoque', acao: 'produto_editado',
-          descricao: `Produto "${nome}${marca ? ' · ' + marca : ''}" atualizado (estoque: ${fmtEstoque(estoque_atual, unidade_medida)})`,
+          descricao: `Produto "${nome}${marca ? ' · ' + marca : ''}" atualizado (estoque: ${fmtEstoque(data.estoque_atual, unidade_medida)})${textoMinimo}`,
           meta: { produto_id: produtoId, antes: metaAntes, depois: metaDepois },
         });
 
@@ -1245,7 +1362,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EDI
 // Recebe a imagem já comprimida pelo navegador (canvas, ~400x400px) como
 // data URL base64. Fica só nesse estabelecimento — nunca vai pro catálogo
 // global (diferente da imagem sugerida do Open Food Facts/catálogo).
-router.post('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+router.post('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId } = req.params;
     const { imagem_base64 } = req.body;
 
@@ -1311,7 +1428,7 @@ router.post('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.EST
 // --- Rota DELETE: /:id/produtos/:produtoId/imagem — remove a imagem atual ---
 // Volta pro estado "sem imagem" — o lojista pode buscar a sugestão de
 // novo depois, se quiser.
-router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId } = req.params;
     try {
         const { data, error } = await db
@@ -1344,7 +1461,7 @@ router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao(PERMISSOES.E
 // --- Rota POST: /:id/produtos/:produtoId/variacoes/:variacaoId/imagem ---
 // Foto própria de uma variação específica (ex: a mesma camiseta em cores
 // diferentes) — mesma lógica da imagem do produto, mas por variação.
-router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId, variacaoId } = req.params;
     const { imagem_base64 } = req.body;
 
@@ -1409,7 +1526,7 @@ router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPe
 });
 
 // --- Rota DELETE: /:id/produtos/:produtoId/variacoes/:variacaoId/imagem ---
-router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao(PERMISSOES.ESTOQUE_EDITAR), async (req, res) => {
+router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId, variacaoId } = req.params;
     try {
         const { data, error } = await db
@@ -1443,11 +1560,14 @@ router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificar
 
 
 // --- Rota DELETE /:id/produtos/:produtoId ---
-router.delete('/:id/produtos/:produtoId', verificarPermissao(PERMISSOES.ESTOQUE_EXCLUIR), async (req, res) => {
+router.delete('/:id/produtos/:produtoId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EXCLUIR], { mensagem: 'Sem permissão para excluir produtos.' }), async (req, res) => {
 
     const { id: estabelecimentoId, produtoId } = req.params;
 
     try {
+
+        // Produto em contagem de inventário não pode ser excluído
+        if (await negarSeEmContagem(req, res, [produtoId], 'excluir este produto')) return;
 
         const { data, error } = await db.rpc('deletar_produto', {
             p_produto_id: produtoId,
@@ -1599,13 +1719,83 @@ router.get('/dados/:id', async (req, res) => {
   }
 });
 
-// PUT /api/estabelecimentos/dados/:id — somente merchant pode editar
+// POST /api/estabelecimentos/dados/:id/logo  { imagem_base64 }
+// Envia a logo da loja pelo servidor. Antes a tela gravava direto no
+// armazenamento (qualquer usuário logado conseguia enviar arquivo); agora
+// quem confere a permissão é esta rota: o dono sempre pode, o operador só
+// com Configurações + "Alterar logo".
+router.post('/dados/:id/logo', async (req, res) => {
+  try {
+    const user = req.user;
+    const mercearia_id = user.mercearia_id;
+    if (user.role !== 'merchant' && user.role !== 'operator') {
+      return res.status(403).json({ error: 'Apenas o dono do estabelecimento pode trocar a logo.' });
+    }
+    if (user.role === 'operator' && !temPermissao(req, [PERMISSOES.CONFIGURACOES, PERMISSOES.CONFIG_EDITAR_LOGO])) {
+      return res.status(403).json({ error: 'Sem permissão para trocar a logo da loja.', codigo: 'SEM_PERMISSAO' });
+    }
+
+    const { imagem_base64 } = req.body || {};
+    const match = typeof imagem_base64 === 'string' && imagem_base64.match(/^data:image\/(png|jpe?g|webp);base64,(.+)$/i);
+    if (!match) return res.status(400).json({ error: 'Formato inválido. Use PNG, JPG ou WEBP.' });
+    const extensao = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 2 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Arquivo muito grande. Tamanho máximo: 2MB.' });
+    }
+
+    const { data: antes } = await db.from('mercearias').select('logo_url').eq('id', mercearia_id).single();
+
+    const nomeArquivo = `public/${mercearia_id}-${Date.now()}.${extensao}`;
+    const { error: uploadErr } = await db.storage
+      .from('logos')
+      .upload(nomeArquivo, buffer, { upsert: true, contentType: `image/${extensao === 'jpg' ? 'jpeg' : extensao}`, cacheControl: '3600' });
+    if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+
+    const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
+    const logo_url = urlData.publicUrl;
+
+    const { data, error } = await db.from('mercearias').update({ logo_url }).eq('id', mercearia_id).select().single();
+    if (error) return res.status(400).json({ error: error.message });
+
+    // Apaga o arquivo da logo anterior (só se for mesmo a logo desta loja)
+    const antigo = String(antes?.logo_url || '').match(/\/logos\/(public\/[^?]+)/);
+    if (antigo && antigo[1].startsWith(`public/${mercearia_id}`) && antigo[1] !== nomeArquivo) {
+      db.storage.from('logos').remove([antigo[1]]).catch(() => {});
+    }
+
+    registrar({
+      mercearia_id,
+      operador_id:  user.role === 'operator' ? user.id : null,
+      usuario_nome: user.nome,
+      usuario_email: user.email,
+      modulo: 'configuracoes', acao: 'config_atualizada',
+      descricao: 'Logo alterada',
+      meta: { campos: ['logo_url'], antes: { logo_url: antes?.logo_url ?? null }, depois: { logo_url } },
+    });
+
+    res.json({ success: true, logo_url, mercearia: data });
+  } catch (err) {
+    console.error('[ERRO] POST /api/estabelecimentos/dados/:id/logo', err);
+    res.status(500).json({ error: 'Erro ao enviar a logo.' });
+  }
+});
+
+// PUT /api/estabelecimentos/dados/:id
+// Dono (merchant): edita tudo, como sempre.
+// Operador com Configurações + "Alterar logo": pode enviar SOMENTE
+// `logo_url`. Chave/modo do Pix, Fiado, nome, telefone e endereço são só
+// do dono (a chave Pix decide para onde o dinheiro vai).
 router.put('/dados/:id', async (req, res) => {
   try {
     const user = req.user;
+    const ehOperador = user.role === 'operator';
 
-    if (user.role !== 'merchant') {
+    if (user.role !== 'merchant' && !ehOperador) {
       return res.status(403).json({ error: 'Apenas o dono do estabelecimento pode editar as configurações' });
+    }
+    if (ehOperador && !temPermissao(req, [PERMISSOES.CONFIGURACOES, PERMISSOES.CONFIG_EDITAR_LOGO])) {
+      return res.status(403).json({ error: 'Sem permissão para trocar a logo da loja.', codigo: 'SEM_PERMISSAO' });
     }
 
     const mercearia_id = user.mercearia_id;
@@ -1619,6 +1809,16 @@ router.put('/dados/:id', async (req, res) => {
       pix_chave, pix_tipo_chave, pix_cidade, pix_modo,
       fiado_ativo,
     } = req.body;
+
+    if (ehOperador) {
+      const soDoDono = [nome_fantasia, telefone, endereco_completo, pix_chave, pix_tipo_chave, pix_cidade, pix_modo, fiado_ativo];
+      if (soDoDono.some(v => v !== undefined)) {
+        return res.status(403).json({ error: 'Só o dono da loja pode alterar esses dados.', codigo: 'SOMENTE_DONO' });
+      }
+      if (logo_url !== null && (typeof logo_url !== 'string' || !logo_url.trim())) {
+        return res.status(400).json({ error: 'Envie a nova logo.' });
+      }
+    }
 
     const erroTamanho = validarTamanhos(
       { nome_fantasia, telefone, endereco_completo, pix_chave, pix_cidade },
@@ -1635,7 +1835,10 @@ router.put('/dados/:id', async (req, res) => {
       .eq('id', mercearia_id)
       .single();
 
-    const updateData = { nome_fantasia, telefone, endereco_completo, logo_url };
+    // Operador: o update leva só a logo — nada mais entra, venha o que vier.
+    const updateData = ehOperador
+      ? { logo_url }
+      : { nome_fantasia, telefone, endereco_completo, logo_url };
 
     // Campos de Pix só entram no update se vierem no corpo da requisição —
     // assim essa mesma rota continua funcionando pro upload de logo sem
@@ -1663,7 +1866,8 @@ router.put('/dados/:id', async (req, res) => {
     if (error) return res.status(400).json({ error: error.message });
 
     // Sincroniza profiles.nome com nome_fantasia para manter auditoria consistente
-    if (nome_fantasia) {
+    // (só para o dono — o nome do operador nunca é trocado por aqui)
+    if (nome_fantasia && !ehOperador) {
       await db
         .from('profiles')
         .update({ nome: nome_fantasia })
@@ -1701,12 +1905,14 @@ router.put('/dados/:id', async (req, res) => {
 
     registrar({
       mercearia_id,
-      operador_id:  null,
+      operador_id:  ehOperador ? user.id : null,
       usuario_nome: user.nome || user.email,
       usuario_email: user.email,
       modulo: 'configuracoes', acao: 'config_atualizada',
       descricao,
-      meta: { campos: Object.keys(req.body), antes, depois: updateData },
+      meta: ehOperador
+        ? { campos: ['logo_url'], antes: { logo_url: antes?.logo_url ?? null }, depois: updateData }
+        : { campos: Object.keys(req.body), antes, depois: updateData },
     });
 
     res.json({ success: true, mercearia: data });

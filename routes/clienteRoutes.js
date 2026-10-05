@@ -159,7 +159,13 @@ router.get('/dividas', async (req, res) => {
 // 4) CRIAR CLIENTE
 // ============================================================
 
-router.post('/criar', async (req, res) => {
+// Operador: "Adicionar clientes" (módulo Clientes) OU quem realiza vendas
+// no PDV — o caixa cadastra cliente no meio da venda.
+router.post('/criar', verificarPermissao(
+    [PERMISSOES.CLIENTES, PERMISSOES.CLIENTES_ADICIONAR],
+    [PERMISSOES.PDV, PERMISSOES.PDV_REALIZAR_VENDA],
+    { mensagem: 'Sem permissão para cadastrar clientes.' }
+), async (req, res) => {
 
     const { nome, telefone, cpf, permiteFiado, limiteCredito, dataVencimento } = req.body;
 
@@ -471,7 +477,7 @@ router.get('/:clienteId/itens-fiado', async (req, res) => {
 // 6b) PAGAR VENDA ESPECÍFICA DO FIADO
 // ============================================================
 
-router.post('/pagar-venda', verificarPermissao(PERMISSOES.CLIENTES_RECEBER), async (req, res) => {
+router.post('/pagar-venda', verificarPermissao(PERMISSOES.CLIENTES_RECEBER, { mensagem: 'Sem permissão para receber fiado.' }), async (req, res) => {
 
     const { vendaId, clienteId, meioPagamento, valorRecebido, troco, pixModo } = req.body;
 
@@ -539,7 +545,7 @@ router.post('/pagar-venda', verificarPermissao(PERMISSOES.CLIENTES_RECEBER), asy
 // 6) LIQUIDAR FIADO
 // ============================================================
 
-router.post('/liquidar', verificarPermissao(PERMISSOES.CLIENTES_RECEBER), async (req, res) => {
+router.post('/liquidar', verificarPermissao(PERMISSOES.CLIENTES_RECEBER, { mensagem: 'Sem permissão para receber fiado.' }), async (req, res) => {
 
     const { clienteId, valorPago, meioPagamento, valorRecebido, troco, pixModo } = req.body;
 
@@ -599,7 +605,7 @@ router.post('/liquidar', verificarPermissao(PERMISSOES.CLIENTES_RECEBER), async 
 // 7) ATUALIZAR CLIENTE
 // ============================================================
 
-router.put('/atualizar/:clienteId', async (req, res) => {
+router.put('/atualizar/:clienteId', verificarPermissao([PERMISSOES.CLIENTES, PERMISSOES.CLIENTES_EDITAR], { mensagem: 'Sem permissão para editar clientes.' }), async (req, res) => {
 
     const { clienteId } = req.params;
     const { nome, telefone, cpf, permiteFiado, limiteCredito, dataVencimento } = req.body;
@@ -657,7 +663,7 @@ router.put('/atualizar/:clienteId', async (req, res) => {
 // 8) EXCLUIR CLIENTE
 // ============================================================
 
-router.delete('/deletar/:clienteId', async (req, res) => {
+router.delete('/deletar/:clienteId', verificarPermissao([PERMISSOES.CLIENTES, PERMISSOES.CLIENTES_EXCLUIR], { mensagem: 'Sem permissão para excluir clientes.' }), async (req, res) => {
 
     const { clienteId } = req.params;
 

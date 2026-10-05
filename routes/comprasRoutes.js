@@ -9,6 +9,7 @@ const router   = express.Router();
 const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { negarSeEmContagem } = require('../utils/inventarioTrava');
 const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
@@ -17,6 +18,12 @@ const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 console.log('🔥 COMPRAS ROUTES ATUALIZADO 🔥');
 
 router.use(authUser);
+
+// ── Permissões do operador: módulo + ação marcada na tela ──────────
+// Ver compras/contas exige só o módulo "Fornecedores"; lançar e
+// cancelar exigem também a ação correspondente.
+const F = PERMISSOES;
+const exigeModulo = verificarPermissao(F.FORNECEDORES, { mensagem: 'Sem permissão para acessar Fornecedores.' });
 
 /* ── helpers ─────────────────────────────────────────────── */
 function mercearia(req) { return req.user.mercearia_id; }
@@ -40,7 +47,7 @@ function resumoItens(itensRegistrados) {
 /* ════════════════════════════════════════════════════════════
    1. LISTAR COMPRAS — GET /api/compras?fornecedor_id=&status=
 ════════════════════════════════════════════════════════════ */
-router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
+router.get('/', exigeModulo, async (req, res) => {
   const mid = mercearia(req);
   const { fornecedor_id, data_inicio, data_fim, limit = 50, offset = 0 } = req.query;
 
@@ -76,7 +83,7 @@ router.get('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req,
    ⚠️ Precisa vir ANTES de /:id, senão o Express trata
    "contas-a-pagar" como valor do parâmetro :id.
 ════════════════════════════════════════════════════════════ */
-router.get('/contas-a-pagar', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
+router.get('/contas-a-pagar', exigeModulo, async (req, res) => {
   const mid = mercearia(req);
   const { status } = req.query; // 'pendente' | 'paga' | 'atrasada' — sem isso, traz tudo
 
@@ -142,7 +149,7 @@ router.get('/contas-a-pagar', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR
 /* ════════════════════════════════════════════════════════════
    2. DETALHES DE UMA COMPRA (com itens) — GET /api/compras/:id
 ════════════════════════════════════════════════════════════ */
-router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
+router.get('/:id', exigeModulo, async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 
@@ -194,7 +201,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (r
               data_vencimento (se a_prazo), observacoes,
               itens: [{ produto_id, quantidade, preco_custo_unitario }] }
 ════════════════════════════════════════════════════════════ */
-router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req, res) => {
+router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { mensagem: 'Sem permissão para lançar compras.' }), async (req, res) => {
   const mid = mercearia(req);
   const {
     fornecedor_id, numero_nota, data_compra, forma_pagamento,
@@ -233,9 +240,13 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req
 
     // 2. Busca todos os produtos de uma vez, valida que existem e são do estabelecimento
     const produtoIds = itens.map(it => it.produto_id);
+
+    // Inventário em andamento: produto em contagem não recebe compra
+    if (await negarSeEmContagem(req, res, produtoIds, 'lançar esta compra')) return;
+
     const { data: produtos } = await db
       .from('produtos')
-      .select('id, nome, marca, unidade_medida, estoque_atual, categorias(nome)')
+      .select('id, nome, marca, unidade_medida, estoque_atual, preco_custo, categorias(nome)')
       .in('id', produtoIds)
       .eq('mercearia_id', mid);
 
@@ -281,7 +292,11 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req
       const qtdAntes  = parseFloat(produto.estoque_atual) || 0;
       const qtdDepois = qtdAntes + qtd;
 
-      await db.from('itens_compra').insert({
+      // Guarda o custo que o produto tinha ANTES desta compra, pra poder
+      // devolver se a compra for cancelada (coluna criada no SQL 22). Se a
+      // coluna ainda não existir no banco, grava o item sem ela — a compra
+      // não pode ficar sem itens por causa disso.
+      const itemCompra = {
         compra_id:             compra.id,
         produto_id:            produto.id,
         produto_nome:          produto.nome,
@@ -290,7 +305,18 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req
         quantidade:            qtd,
         preco_custo_unitario:  preco,
         subtotal:              qtd * preco,
+      };
+      const custoAnterior = parseFloat(produto.preco_custo);
+      const { error: errItem } = await db.from('itens_compra').insert({
+        ...itemCompra,
+        preco_custo_anterior: Number.isFinite(custoAnterior) ? custoAnterior : null,
       });
+      if (errItem) {
+        console.error('[COMPRAS] item sem custo anterior (rode o SQL 22):', errItem.message);
+        await db.from('itens_compra').insert(itemCompra);
+      }
+      // Dois itens do mesmo produto na mesma compra: o segundo já parte do custo novo
+      produto.preco_custo = preco;
 
       await db.from('produtos')
         .update({ estoque_atual: qtdDepois, preco_custo: preco })
@@ -391,7 +417,7 @@ router.post('/', verificarPermissao(PERMISSOES.FORNECEDORES_COMPRAR), async (req
       a conta a pagar vinculada (se ainda estiver pendente)
       DELETE /api/compras/:id
 ════════════════════════════════════════════════════════════ */
-router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_CANCELAR), async (req, res) => {
+router.delete('/:id', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_CANCELAR], { mensagem: 'Sem permissão para cancelar compras.' }), async (req, res) => {
   const mid = mercearia(req);
   const { id } = req.params;
 
@@ -423,6 +449,9 @@ router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_CANCELAR), asyn
 
     const { data: itens } = await db.from('itens_compra').select('*').eq('compra_id', id);
 
+    // Inventário em andamento: cancelar tiraria estoque de produto em contagem
+    if (await negarSeEmContagem(req, res, (itens || []).map(i => i.produto_id), 'cancelar esta compra')) return;
+
     // Estorna o estoque de cada item (some com a quantidade que entrou),
     // guardando o antes/depois de cada um pra auditoria
     const itensEstornados = [];
@@ -430,7 +459,7 @@ router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_CANCELAR), asyn
     for (const item of (itens || [])) {
       const { data: produto } = await db
         .from('produtos')
-        .select('id, nome, marca, unidade_medida, estoque_atual, categorias(nome)')
+        .select('id, nome, marca, unidade_medida, estoque_atual, preco_custo, categorias(nome)')
         .eq('id', item.produto_id)
         .eq('mercearia_id', mid)
         .single();
@@ -454,7 +483,21 @@ router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_CANCELAR), asyn
       const qtdAntes  = parseFloat(produto.estoque_atual) || 0;
       const qtdDepois = Math.max(0, qtdAntes - parseFloat(item.quantidade));
 
-      await db.from('produtos').update({ estoque_atual: qtdDepois }).eq('id', produto.id).eq('mercearia_id', mid);
+      // Preço de custo: esta compra tinha trocado o custo do produto. Se
+      // ele ainda é o desta compra (ninguém mudou depois, nem outra compra
+      // nem edição do cadastro), volta para o que era antes. Se já mudou,
+      // fica como está — o valor mais novo é de outra origem.
+      const estorno = { estoque_atual: qtdDepois };
+      const custoAntes   = item.preco_custo_anterior != null ? parseFloat(item.preco_custo_anterior) : null;
+      const custoDaCompra = parseFloat(item.preco_custo_unitario);
+      const custoAtual    = parseFloat(produto.preco_custo);
+      const custoVoltou = custoAntes != null && Number.isFinite(custoAntes)
+        && Math.abs(custoAtual - custoDaCompra) < 0.005
+        && Math.abs(custoAntes - custoAtual) >= 0.005;
+      if (custoVoltou) estorno.preco_custo = custoAntes;
+
+      await db.from('produtos').update(estorno).eq('id', produto.id).eq('mercearia_id', mid);
+      if (custoVoltou) produto.preco_custo = custoAntes;
 
       await db.from('movimentacoes_estoque').insert({
         mercearia_id: mid, produto_id: produto.id, produto_nome: produto.nome, produto_marca: produto.marca,
@@ -473,6 +516,7 @@ router.delete('/:id', verificarPermissao(PERMISSOES.FORNECEDORES_CANCELAR), asyn
         quantidade:     parseFloat(item.quantidade),
         estoque_antes:  qtdAntes,
         estoque_depois: qtdDepois,
+        ...(custoVoltou ? { custo_antes: custoAtual, custo_depois: custoAntes } : {}),
       });
     }
 

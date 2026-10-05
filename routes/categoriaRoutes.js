@@ -5,6 +5,14 @@ const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { verificarPermissao } = require('../middlewares/verificarPermissao');
+const { PERMISSOES } = require('../utils/permissoes');
+
+// Categorias são mexidas na tela de Estoque — o operador precisa do módulo
+// Estoque e da ação correspondente (adicionar / editar / excluir). Antes
+// estas rotas não conferiam nada. Listar continua livre (o PDV e os
+// relatórios usam).
+const exige = (acao, mensagem) => verificarPermissao([PERMISSOES.ESTOQUE, acao], { mensagem });
 
 router.use(authUser);
 
@@ -30,7 +38,7 @@ router.get('/', async (req, res) => {
 });
 
 // --- Rota POST: Criar categoria (ou subcategoria) ---
-router.post('/', async (req, res) => {
+router.post('/', exige(PERMISSOES.ESTOQUE_ADICIONAR, 'Sem permissão para criar categorias.'), async (req, res) => {
     const { nome, categoria_pai_id } = req.body;
 
     if (!nome) {
@@ -97,7 +105,7 @@ router.post('/', async (req, res) => {
 });
 
 // --- Rota PUT: Atualizar categoria (nome e/ou categoria-pai) ---
-router.put('/:id', async (req, res) => {
+router.put('/:id', exige(PERMISSOES.ESTOQUE_EDITAR, 'Sem permissão para renomear categorias.'), async (req, res) => {
     const { id } = req.params;
     const { nome, categoria_pai_id } = req.body;
 
@@ -189,7 +197,7 @@ router.put('/:id', async (req, res) => {
 // --- Rota DELETE: Excluir categoria ---
 // Se tiver subcategorias, elas não são apagadas — o banco promove elas
 // pra categoria principal sozinho (ON DELETE SET NULL na migration).
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', exige(PERMISSOES.ESTOQUE_EXCLUIR, 'Sem permissão para excluir categorias.'), async (req, res) => {
     const { id } = req.params;
 
     try {
