@@ -636,6 +636,9 @@ async function atender({ msg, de, variantes, ativos }) {
   if (!ctx.pessoa) {
     return avisoUnico(ctx, 'bloqueio_pessoa', 12, `Este número está ligado a um usuário que não está ativo em ${loja.nome_fantasia || 'na loja'}. Peça ao dono para conferir na tela *WhatsApp* do sistema.`);
   }
+  if (['inativa', 'excluida'].includes(loja.status_assinatura)) {
+    return avisoUnico(ctx, 'bloqueio_licenca', 12, `O acesso ao sistema de ${loja.nome_fantasia || 'sua loja'} está desativado. Fale com o suporte para saber mais.`);
+  }
   if (loja.status_assinatura === 'bloqueada') {
     return avisoUnico(ctx, 'bloqueio_licenca', 12, `O acesso ao sistema de ${loja.nome_fantasia || 'sua loja'} está bloqueado (assinatura vencida). As consultas pelo WhatsApp voltam assim que a assinatura for renovada.`);
   }

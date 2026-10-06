@@ -170,18 +170,31 @@ router.get('/resumo', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res)
   try {
     const timezone = await buscarTimezone(mercearia_id);
 
-    let query = db
-      .from('auditoria')
-      .select('operador_id, usuario_nome, modulo, acao')
-      .eq('mercearia_id', mercearia_id)
-      // Mesma regra da rota '/': personificação não entra no resumo do estabelecimento.
-      .neq('acao', 'personificar_usuario');
+    // 05/10/2026 — o banco devolve no máximo 1000 linhas por consulta e as
+    // contagens paravam aí. Lê em blocos até acabar (teto: 20 mil registros).
+    const BLOCO = 1000;
+    const MAX_BLOCOS = 20;
+    const data = [];
+    for (let bloco = 0; bloco < MAX_BLOCOS; bloco++) {
+      let query = db
+        .from('auditoria')
+        .select('operador_id, usuario_nome, modulo, acao')
+        .eq('mercearia_id', mercearia_id)
+        // Mesma regra da rota '/': personificação não entra no resumo do estabelecimento.
+        .neq('acao', 'personificar_usuario')
+        .order('criado_em', { ascending: false })
+        .order('id', { ascending: false })
+        .range(data.length, data.length + BLOCO - 1);
 
-    if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
-    if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
+      if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
+      if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
 
-    const { data, error } = await query;
-    if (error) throw error;
+      const { data: linhas, error } = await query;
+      if (error) throw error;
+      if (!linhas || linhas.length === 0) break;
+      data.push(...linhas);
+      if (linhas.length < BLOCO) break;
+    }
 
     // Agrupa por operador
     const por_operador = {};
@@ -305,18 +318,43 @@ router.get('/admin/filtros', async (req, res) => {
   const { mercearia_id, escopo } = req.query;
 
   try {
-    let queryAcao = db.from('auditoria').select('acao').limit(5000);
-    let queryUser = db.from('auditoria').select('usuario_nome').limit(5000);
+    // 05/10/2026 — o Supabase devolve no máximo 1000 linhas por consulta
+    // (o .limit(5000) antigo era cortado em 1000 e as listas vinham
+    // incompletas). Lê em blocos com .range() até acabar, do mais novo
+    // para o mais antigo, com ordenação estável (criado_em + id) e um teto
+    // de segurança de 20 blocos (20 mil registros mais recentes).
+    const BLOCO = 1000;
+    const MAX_BLOCOS = 20;
+    const acoesSet    = new Set();
+    const usuariosSet = new Set();
 
-    if (mercearia_id) { queryAcao = queryAcao.eq('mercearia_id', mercearia_id); queryUser = queryUser.eq('mercearia_id', mercearia_id); }
-    if (escopo)       { queryAcao = queryAcao.eq('escopo', escopo);             queryUser = queryUser.eq('escopo', escopo); }
+    let inicio = 0;
+    for (let bloco = 0; bloco < MAX_BLOCOS; bloco++) {
+      let query = db
+        .from('auditoria')
+        .select('acao, usuario_nome')
+        .order('criado_em', { ascending: false })
+        .order('id', { ascending: false })
+        .range(inicio, inicio + BLOCO - 1);
 
-    const [{ data: acaoRows, error: e1 }, { data: userRows, error: e2 }] = await Promise.all([queryAcao, queryUser]);
-    if (e1) throw e1;
-    if (e2) throw e2;
+      if (mercearia_id) query = query.eq('mercearia_id', mercearia_id);
+      if (escopo)       query = query.eq('escopo', escopo);
 
-    const acoes    = [...new Set((acaoRows || []).map(r => r.acao).filter(Boolean))].sort();
-    const usuarios = [...new Set((userRows || []).map(r => r.usuario_nome).filter(Boolean))].sort();
+      const { data: linhas, error } = await query;
+      if (error) throw error;
+      if (!linhas || linhas.length === 0) break;
+
+      for (const r of linhas) {
+        if (r.acao)         acoesSet.add(r.acao);
+        if (r.usuario_nome) usuariosSet.add(r.usuario_nome);
+      }
+
+      // Avança pelo que realmente veio (o servidor pode devolver menos que o bloco)
+      inicio += linhas.length;
+    }
+
+    const acoes    = [...acoesSet].sort();
+    const usuarios = [...usuariosSet].sort();
 
     res.json({ acoes, usuarios });
   } catch (err) {

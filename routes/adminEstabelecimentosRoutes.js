@@ -22,6 +22,14 @@ const { erroSenhaFraca } = require("../utils/senha");
 // não refaz o trabalho (authUser é idempotente por requisição).
 router.use(authUser, somenteSuperAdmin);
 
+// Limite de operadores: 0 é um valor válido (nenhum operador). Só cai no
+// padrão quando o campo vem vazio ou inválido — antes `parseInt(x) || 3`
+// transformava 0 em 3.
+function limiteOperadoresOuPadrao(valor, padrao = 3) {
+  const n = parseInt(valor, 10);
+  return Number.isInteger(n) && n >= 0 ? n : padrao;
+}
+
 // =======================================================
 // 🔴 FUNÇÃO: BLOQUEAR VENCIDOS AUTOMATICAMENTE
 // =======================================================
@@ -113,9 +121,23 @@ router.put("/:id/restaurar", authUser, async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Restaurar NÃO libera acesso de graça: volta como Ativa só se o
+    // vencimento ainda vale (hoje ou futuro, no fuso da loja). Vencida ou
+    // sem data volta Bloqueada — o SuperAdmin libera depois, se quiser.
+    const { data: atual, error: errAtual } = await db
+      .from("mercearias")
+      .select("data_vencimento, timezone")
+      .eq("id", id)
+      .single();
+
+    if (errAtual || !atual) return res.status(404).json({ error: "Estabelecimento não encontrado" });
+
+    const hojeLoja = hojeStrTZ(atual.timezone || TIMEZONE_PADRAO);
+    const novoStatus = atual.data_vencimento && atual.data_vencimento >= hojeLoja ? "ativa" : "bloqueada";
+
     const { data, error } = await db
       .from("mercearias")
-      .update({ status_assinatura: "ativa" })
+      .update({ status_assinatura: novoStatus })
       .eq("id", id)
       .select("nome_fantasia")
       .single();
@@ -128,11 +150,18 @@ router.put("/:id/restaurar", authUser, async (req, res) => {
       usuario_email: req.user.email,
       modulo:        "estabelecimentos",
       acao:          "restaurar_estabelecimento",
-      descricao:     `Restaurou o estabelecimento "${data.nome_fantasia}"`,
+      descricao:     `Restaurou o estabelecimento "${data.nome_fantasia}" — voltou como ${novoStatus === "ativa" ? "Ativa" : "Bloqueada (vencida ou sem data de vencimento)"}`,
+      meta:          { status_assinatura: novoStatus, data_vencimento: atual.data_vencimento || null },
       escopo:        "admin_global",
     });
 
-    res.json({ success: true });
+    res.json({
+      success: true,
+      status_assinatura: novoStatus,
+      mensagem: novoStatus === "ativa"
+        ? "Estabelecimento restaurado como Ativa."
+        : "Estabelecimento restaurado como Bloqueada, porque a assinatura está vencida ou sem data. Use Liberar acesso para ativar.",
+    });
   } catch (e) {
     console.error("Erro restaurar:", e);
     res.status(500).json({ error: "Erro ao restaurar estabelecimento" });
@@ -260,7 +289,7 @@ router.post("/:id/liberar-acesso", authUser, async (req, res) => {
     const dataInicio = hojeStr;
     const base = vencimentoAindaValido
       ? new Date(mercAtual.data_vencimento + "T12:00:00Z") // acumula a partir do vencimento atual — 'Z' explícito, não depende do fuso do servidor
-      : new Date();                                          // começa do zero
+      : new Date(hojeStr + "T12:00:00Z");                    // já venceu (ou sem data): começa de HOJE no fuso da loja, não no UTC do servidor
 
     base.setUTCDate(base.getUTCDate() + diasNum);
     const dataVencimento = base.toISOString().split("T")[0];
@@ -513,17 +542,30 @@ router.put("/:id", authUser, async (req, res) => {
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
+    const { data: lojaAtual, error: errLojaAtual } = await db
+      .from("mercearias")
+      .select("email_contato")
+      .eq("id", id)
+      .single();
+
+    if (errLojaAtual || !lojaAtual) return res.status(404).json({ error: "Estabelecimento não encontrado" });
+
     const updateData = {
       nome_fantasia,
       cnpj,
       telefone,
-      email_contato,
+      email_contato: typeof email_contato === "string" ? email_contato.trim() : email_contato,
       endereco_completo,
       status_assinatura,
-      data_vencimento,
+      // "" não é data válida — vira "sem data". Campo ausente não é alterado.
+      data_vencimento: data_vencimento === "" ? null : data_vencimento,
       logo_url,
-      tipo_estabelecimento,
     };
+
+    // Tipo: só altera se vier no corpo (e não vazio).
+    if (typeof tipo_estabelecimento === "string" && tipo_estabelecimento.trim()) {
+      updateData.tipo_estabelecimento = tipo_estabelecimento.trim();
+    }
 
     // Só grava se vier um array de verdade — evita salvar algo malformado
     // vindo direto da requisição.
@@ -540,12 +582,89 @@ router.put("/:id", authUser, async (req, res) => {
       updateData.timezone = timezone;
     }
 
-    // Atualiza limite apenas se enviado e válido
-    if (typeof limite_operadores === 'number' && limite_operadores >= 0 && limite_operadores <= 50) {
-      updateData.limite_operadores = limite_operadores;
+    // Limite de operadores: só altera se vier no corpo. 0 é válido.
+    if (limite_operadores !== undefined && limite_operadores !== null && limite_operadores !== "") {
+      const limiteNum = Number(limite_operadores);
+      if (!Number.isInteger(limiteNum) || limiteNum < 0 || limiteNum > 50) {
+        return res.status(400).json({ error: "Limite de operadores inválido (0 a 50)." });
+      }
+      updateData.limite_operadores = limiteNum;
     }
-    // Valor individual de mensalidade (null = usar padrão global)
-    updateData.valor_mensalidade = valor_mensalidade ? parseFloat(valor_mensalidade) : null;
+
+    // Mensalidade individual: só altera se o campo vier no corpo. Antes,
+    // qualquer edição que não mandasse o campo APAGAVA o valor individual.
+    // Vazio/null explícito (ou 0) = "usar o valor global" (grava null).
+    if (valor_mensalidade !== undefined) {
+      if (valor_mensalidade === null || String(valor_mensalidade).trim() === "") {
+        updateData.valor_mensalidade = null;
+      } else {
+        const valorNum = Number(String(valor_mensalidade).replace(",", "."));
+        if (!Number.isFinite(valorNum) || valorNum < 0) {
+          return res.status(400).json({ error: "Valor da mensalidade inválido." });
+        }
+        updateData.valor_mensalidade = valorNum > 0 ? Math.round(valorNum * 100) / 100 : null;
+      }
+    }
+
+    // ── E-mail de contato mudou → troca também o LOGIN do dono ──
+    // O e-mail do cadastro é o e-mail com que o dono entra. Antes só o
+    // contato mudava e o dono seguia entrando com o e-mail antigo.
+    // Feito ANTES de gravar o resto: se o e-mail já estiver em uso, nada
+    // é gravado.
+    let donoLogin = null; // { id, emailAntigo } — usado pra desfazer se a gravação falhar
+    const emailNovo  = typeof email_contato === "string" ? email_contato.trim() : null;
+    const emailAtual = (lojaAtual.email_contato || "").trim();
+    const emailMudou = emailNovo !== null && emailNovo.toLowerCase() !== emailAtual.toLowerCase();
+
+    if (emailMudou) {
+      const { data: donos, error: errDono } = await db
+        .from("profiles")
+        .select("id, email")
+        .eq("mercearia_id", id)
+        .eq("role", "merchant")
+        .limit(1);
+
+      if (errDono) return res.status(400).json({ error: "Não foi possível conferir o login do dono. Tente de novo." });
+
+      const dono = (donos || [])[0];
+      // Loja sem dono cadastrado → só grava o contato.
+      if (dono) {
+        const emailLogin = emailNovo.toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLogin)) {
+          return res.status(400).json({
+            error: emailLogin
+              ? "E-mail inválido. Ele é o login do dono — confira o endereço."
+              : "O e-mail não pode ficar em branco: ele é o login do dono do estabelecimento.",
+          });
+        }
+
+        if ((dono.email || "").trim().toLowerCase() !== emailLogin) {
+          const { error: errAuth } = await db.auth.admin.updateUserById(dono.id, {
+            email: emailLogin,
+            email_confirm: true,
+          });
+
+          if (errAuth) {
+            const msg = String(errAuth.message || "");
+            const emUso = errAuth.code === "email_exists" || /already|registered|exists|duplicate/i.test(msg);
+            return res.status(400).json({
+              error: emUso
+                ? "Este e-mail já está em uso por outro usuário do sistema. Escolha outro e-mail; nada foi alterado."
+                : `Não foi possível trocar o e-mail de login do dono (${msg || "erro desconhecido"}). Nada foi alterado.`,
+            });
+          }
+
+          donoLogin = { id: dono.id, emailAntigo: dono.email || null };
+
+          const { error: errProf } = await db
+            .from("profiles")
+            .update({ email: emailLogin })
+            .eq("id", dono.id)
+            .eq("role", "merchant");
+          if (errProf) console.error("PUT /:id — login trocado, mas falhou ao atualizar profiles.email:", errProf.message);
+        }
+      }
+    }
 
     const { data, error } = await db
       .from("mercearias")
@@ -554,7 +673,19 @@ router.put("/:id", authUser, async (req, res) => {
       .select()
       .single();
 
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      // Gravação do cadastro falhou depois de trocar o login → desfaz a
+      // troca, pra não ficar login novo com cadastro antigo.
+      if (donoLogin && donoLogin.emailAntigo) {
+        const { error: errVolta } = await db.auth.admin.updateUserById(donoLogin.id, {
+          email: donoLogin.emailAntigo,
+          email_confirm: true,
+        });
+        if (errVolta) console.error("PUT /:id — falhou ao desfazer a troca do login:", errVolta.message);
+        else await db.from("profiles").update({ email: donoLogin.emailAntigo }).eq("id", donoLogin.id).eq("role", "merchant");
+      }
+      return res.status(400).json({ error: error.message });
+    }
 
     await registrar({
       mercearia_id:  id,
@@ -562,12 +693,16 @@ router.put("/:id", authUser, async (req, res) => {
       usuario_email: req.user.email,
       modulo:        "estabelecimentos",
       acao:          "editar_estabelecimento",
-      descricao:     `Editou os dados de "${data.nome_fantasia}"`,
-      meta:          { campos: Object.keys(updateData) },
+      descricao:     `Editou os dados de "${data.nome_fantasia}"`
+                       + (donoLogin ? ` — e-mail de login do dono trocado de ${donoLogin.emailAntigo || "(vazio)"} para ${data.email_contato}` : ""),
+      meta:          {
+        campos: Object.keys(updateData).filter(k => updateData[k] !== undefined),
+        ...(donoLogin ? { login_dono_alterado: true, email_antigo: donoLogin.emailAntigo, email_novo: data.email_contato } : {}),
+      },
       escopo:        "admin_global",
     });
 
-    res.json({ success: true, mercearia: data });
+    res.json({ success: true, mercearia: data, login_atualizado: !!donoLogin });
 
   } catch (e) {
     console.error("PUT /:id error:", e);
@@ -658,7 +793,7 @@ router.post("/criar", authUser, async (req, res) => {
         logo_url: null,
         data_vencimento: data_vencimento || null,
         tipo_estabelecimento: tipo_estabelecimento || "loja",
-        limite_operadores:    parseInt(limite_operadores) || 3,
+        limite_operadores:    limiteOperadoresOuPadrao(limite_operadores, 3),
         valor_mensalidade:    valor_mensalidade ? parseFloat(valor_mensalidade) : null,
         timezone:             timezoneFinal,
         motivo_periodo_teste: motivo_periodo_teste || null,
@@ -861,6 +996,19 @@ router.delete("/:id/apagar-definitivo", authUser, async (req, res) => {
 
     if (backupErr) return res.status(400).json({ error: "Erro ao salvar backup" });
 
+    // Usuários de login da loja (dono + operadores) — coletados ANTES de
+    // apagar a loja. NUNCA inclui super_admin (filtro por role aqui e de
+    // novo na hora de remover).
+    const { data: perfisLoja, error: errPerfis } = await db
+      .from("profiles")
+      .select("id, role")
+      .eq("mercearia_id", id)
+      .in("role", ["merchant", "operator"]);
+    if (errPerfis) console.error("APAGAR DEFINITIVO — erro ao listar usuários da loja:", errPerfis.message);
+    const idsUsuarios = (perfisLoja || [])
+      .filter(p => p && p.id && (p.role === "merchant" || p.role === "operator"))
+      .map(p => p.id);
+
     if (merc.logo_url) {
       const baseUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/logos/`;
       const path = merc.logo_url.replace(baseUrl, "");
@@ -875,6 +1023,31 @@ router.delete("/:id/apagar-definitivo", authUser, async (req, res) => {
 
     if (delErr) return res.status(400).json({ error: "Erro ao apagar definitivamente" });
 
+    // Remove do Auth o dono e os operadores da loja apagada — antes os
+    // logins ficavam órfãos. Falha em um usuário não derruba a operação:
+    // só registra no console e conta na auditoria.
+    let usuariosRemovidos = 0;
+    let usuariosComFalha  = 0;
+    for (const uid of idsUsuarios) {
+      try {
+        const { error: errUser } = await db.auth.admin.deleteUser(uid);
+        if (errUser) throw errUser;
+        usuariosRemovidos++;
+        // Perfil normalmente some junto com o usuário; se sobrar, apaga —
+        // sempre restrito a dono/operador, jamais super_admin.
+        const { error: errPerfil } = await db
+          .from("profiles")
+          .delete()
+          .eq("id", uid)
+          .in("role", ["merchant", "operator"]);
+        if (errPerfil) console.error(`APAGAR DEFINITIVO — usuário ${uid} removido do login, mas o perfil ficou:`, errPerfil.message);
+      } catch (errUser) {
+        usuariosComFalha++;
+        console.error(`APAGAR DEFINITIVO — falha ao remover o usuário ${uid} do login:`, errUser?.message || errUser);
+      }
+    }
+    console.log(`🗑 Apagado definitivamente: ${merc.nome_fantasia} — ${usuariosRemovidos} usuário(s) de login removido(s), ${usuariosComFalha} falha(s)`);
+
     // mercearia_id: null porque a linha acabou de ser apagada (evita erro de FK)
     await registrar({
       mercearia_id:  null,
@@ -882,12 +1055,13 @@ router.delete("/:id/apagar-definitivo", authUser, async (req, res) => {
       usuario_email: req.user.email,
       modulo:        "estabelecimentos",
       acao:          "apagar_definitivo_estabelecimento",
-      descricao:     `Apagou definitivamente o estabelecimento "${merc.nome_fantasia}"`,
-      meta:          { mercearia_id_excluida: id },
+      descricao:     `Apagou definitivamente o estabelecimento "${merc.nome_fantasia}" — ${usuariosRemovidos} usuário(s) de login removido(s)`
+                       + (usuariosComFalha ? `, ${usuariosComFalha} não pôde(puderam) ser removido(s)` : ""),
+      meta:          { mercearia_id_excluida: id, usuarios_removidos: usuariosRemovidos, usuarios_com_falha: usuariosComFalha },
       escopo:        "admin_global",
     });
 
-    res.json({ success: true });
+    res.json({ success: true, usuarios_removidos: usuariosRemovidos, usuarios_com_falha: usuariosComFalha });
 
   } catch (err) {
     console.error("APAGAR DEFINITIVO error:", err);

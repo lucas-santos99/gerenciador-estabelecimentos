@@ -105,6 +105,14 @@ module.exports = async function authUser(req, res, next) {
       req.permissoes      = req.user.permissoes; // cache para verificarPermissao
     }
 
+    // ── Situação da loja (05/10/2026): consultada UMA vez por requisição,
+    // em qualquer método, para todo usuário de loja (dono ou operador).
+    //   • excluída (ou loja que não existe mais) → 403 em QUALQUER método:
+    //     antes a loja excluída continuava entrando e usando normalmente.
+    //   • inativa → tratada exatamente como bloqueada (regra abaixo).
+    // Rotas de renovação (req.permitirLicencaBloqueada) continuam passando
+    // pelo bloqueio/inatividade, mas NÃO por loja excluída.
+    //
     // ── Licença bloqueada: barra ações que ALTERAM algo (venda, editar
     // estoque, lançar compra, etc.) em qualquer rota do sistema, mesmo
     // que a pessoa já esteja com a aba aberta há dias sem dar F5. GET
@@ -116,14 +124,28 @@ module.exports = async function authUser(req, res, next) {
     // middlewares/acessoCobranca.js) — senão quem está bloqueado nunca
     // conseguiria pagar pra desbloquear.
     const metodosQueAlteramAlgo = ['POST', 'PUT', 'PATCH', 'DELETE'];
-    if (!req.user.is_superadmin && !req.permitirLicencaBloqueada && req.user.mercearia_id && metodosQueAlteramAlgo.includes(req.method)) {
-      const { data: merc } = await supabaseAdmin
+    const usuarioDeLoja = !!req.user.mercearia_id && !req.user.is_superadmin && profile.role !== 'super_admin';
+    if (usuarioDeLoja) {
+      const { data: merc, error: mercErr } = await supabaseAdmin
         .from('mercearias')
         .select('status_assinatura')
         .eq('id', req.user.mercearia_id)
-        .single();
+        .maybeSingle();
 
-      if (merc?.status_assinatura === 'bloqueada') {
+      if (mercErr) {
+        // Falha na consulta (rede/banco) NÃO é "loja excluída": segue como
+        // antes (deixa passar) em vez de derrubar todo mundo num soluço.
+        console.error('authUser: erro ao consultar situação da loja:', mercErr.message || mercErr);
+      } else if (!merc || merc.status_assinatura === 'excluida') {
+        return res.status(403).json({
+          error: 'Este estabelecimento foi desativado. Fale com o suporte.',
+          codigo: 'LOJA_EXCLUIDA',
+        });
+      } else if (
+        ['bloqueada', 'inativa'].includes(merc.status_assinatura) &&
+        !req.permitirLicencaBloqueada &&
+        metodosQueAlteramAlgo.includes(req.method)
+      ) {
         return res.status(402).json({
           error: 'Licença bloqueada. Renove a assinatura para continuar usando o sistema.',
           licenca_bloqueada: true,

@@ -189,15 +189,41 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
     const { mercearia_id } = req.user;
 
-    await garantirDono(id, mercearia_id);
+    const operadorAtual = await garantirDono(id, mercearia_id);
 
-    const { nome, telefone, email } = req.body;
+    const { nome, telefone } = req.body;
+    let { email } = req.body;
 
     const erroTamanho = validarTamanhos(
       { nome, telefone, email },
       { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, email: LIMITES.EMAIL }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    // O e-mail do operador é o e-mail com que ele ENTRA no sistema.
+    // 05/10/2026: antes só o cadastro mudava e ele seguia entrando com o
+    // e-mail antigo. Agora, se o e-mail foi trocado, o login é trocado
+    // ANTES de gravar; se o e-mail já estiver em uso, nada é gravado.
+    const emailAntigo = String(operadorAtual.email || "").trim().toLowerCase();
+    let loginAlterado = false;
+    if (email !== undefined && email !== null) {
+      email = String(email).trim().toLowerCase();
+      if (email !== emailAntigo) {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          return res.status(400).json({ error: "Informe um e-mail válido — é com ele que o operador entra no sistema." });
+        }
+        const MSG_EM_USO = "Este e-mail já está em uso por outro usuário. Escolha outro e-mail.";
+        const { data: perfilMesmoEmail } = await db.from("profiles").select("id").eq("email", email).neq("id", id).limit(1);
+        if ((perfilMesmoEmail || []).length > 0) return res.status(400).json({ error: MSG_EM_USO });
+
+        const { error: authErr } = await db.auth.admin.updateUserById(id, { email, email_confirm: true });
+        if (authErr) {
+          const emUso = authErr.code === "email_exists" || /already|registered|exists|duplicate/i.test(authErr.message || "");
+          return res.status(400).json({ error: emUso ? MSG_EM_USO : `Não foi possível trocar o e-mail de login: ${authErr.message}` });
+        }
+        loginAlterado = true;
+      }
+    }
 
     const { data, error } = await db
       .from("operadores")
@@ -206,7 +232,14 @@ router.put("/:id", async (req, res) => {
       .select()
       .single();
 
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      // Não deixa login e cadastro diferentes: desfaz a troca do login
+      if (loginAlterado && emailAntigo) {
+        const { error: desfazErr } = await db.auth.admin.updateUserById(id, { email: emailAntigo, email_confirm: true });
+        if (desfazErr) console.error("Erro ao desfazer troca de e-mail de login:", desfazErr.message);
+      }
+      return res.status(400).json({ error: error.message });
+    }
 
     await db.from("profiles").update({ nome, email }).eq("id", id);
 
@@ -216,11 +249,13 @@ router.put("/:id", async (req, res) => {
       usuario_nome:  req.user.nome,
       usuario_email: req.user.email,
       modulo: 'operadores', acao: 'editar_operador',
-      descricao: `Editou o operador "${nome}"`,
-      meta: { operador_id: id },
+      descricao: loginAlterado
+        ? `Editou o operador "${nome}" e trocou o e-mail de login de ${emailAntigo} para ${email}`
+        : `Editou o operador "${nome}"`,
+      meta: { operador_id: id, ...(loginAlterado ? { email_login_antigo: emailAntigo, email_login_novo: email } : {}) },
     });
 
-    res.json({ success: true, operador: data });
+    res.json({ success: true, operador: data, login_alterado: loginAlterado });
   } catch (err) {
     console.error("Erro editar operador:", err);
     res.status(500).json({ error: err.message || "Erro ao editar operador" });

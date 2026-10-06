@@ -90,10 +90,23 @@ function validarDatas({ data_inicio, data_fim }) {
 
 // Frequência de exibição pro comerciante/operador: 'uma_vez' (comportamento
 // de antes desta funcionalidade — some depois do primeiro "Ok, entendi"/
-// fechar), 'quantidade' (aparece até N vezes, contando por estabelecimento)
+// fechar), 'quantidade' (aparece até N vezes, contando por PESSOA)
 // ou 'sempre' (aparece em todo login, nunca some sozinho). Controlado via
 // contagem em `comunicados_vistos.vezes` (ver GET /ativos e /marcar-visto).
 const FREQUENCIA_TIPOS_VALIDOS = ['uma_vez', 'quantidade', 'sempre'];
+
+// O "visto" é por PESSOA (comunicados_vistos.usuario_id = req.user.id):
+// dono e cada operador têm a sua própria contagem — um operador fechar o
+// aviso não o esconde do dono. Linhas antigas (usuario_id null, de quando
+// o visto era por loja) não contam para ninguém individualmente.
+// A coluna vem do SQL nº 24; enquanto ele não tiver rodado o banco
+// responde "coluna não existe" e as rotas caem no comportamento antigo
+// (por loja), sem erro 500.
+function colunaUsuarioAusente(error) {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204') return true;
+  return /usuario_id/.test(error.message || '') && /does not exist|could not find/i.test(error.message || '');
+}
 
 function validarFrequencia({ frequencia_tipo, frequencia_quantidade }) {
   if (!FREQUENCIA_TIPOS_VALIDOS.includes(frequencia_tipo)) {
@@ -333,6 +346,7 @@ router.put('/admin/:id', async (req, res) => {
     titulo, titulo_html, mensagem, mensagem_html, formatos, ativo,
     alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids,
     data_inicio, data_fim, imagem_url, frequencia_tipo, frequencia_quantidade,
+    reexibir,
   } = req.body;
 
   if (!titulo?.trim())   return res.status(400).json({ error: 'Informe o título do comunicado.' });
@@ -386,17 +400,34 @@ router.put('/admin/:id', async (req, res) => {
 
     await sincronizarEstabelecimentosAlvo(id, alvo_tipo, estabelecimento_ids);
 
+    // "Mostrar de novo para quem já viu": editar NÃO zera os vistos por
+    // conta própria — só quando o admin marca a opção (reexibir: true).
+    // Aí apaga todos os registros de visto deste comunicado e ele volta a
+    // aparecer pra todo mundo, como se fosse novo. Se a limpeza falhar a
+    // edição em si já está salva: devolve `reexibido: false` pra tela
+    // avisar, em vez de responder erro e parecer que nada foi gravado.
+    const pediuReexibir = reexibir === true;
+    let reexibido = false;
+    if (pediuReexibir) {
+      const { error: errVistos } = await db
+        .from('comunicados_vistos')
+        .delete()
+        .eq('comunicado_id', id);
+      if (errVistos) console.error('[COMUNICADOS] Erro ao zerar vistos:', errVistos.message);
+      else reexibido = true;
+    }
+
     await registrar({
       usuario_nome:  req.user.nome,
       usuario_email: req.user.email,
       modulo:        'comunicados',
       acao:          'comunicado_editado',
-      descricao:     `Editou o comunicado "${data.titulo}"`,
-      meta:          { comunicado_id: id, formatos, alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids },
+      descricao:     `Editou o comunicado "${data.titulo}"${reexibido ? ' e mandou mostrar de novo para quem já tinha visto' : ''}`,
+      meta:          { comunicado_id: id, formatos, alvo_tipo, alvo_tipos_estabelecimento, estabelecimento_ids, reexibir: pediuReexibir, reexibido },
       escopo:        'admin_global',
     });
 
-    res.json(data);
+    res.json(pediuReexibir ? { ...data, reexibido } : data);
   } catch (err) {
     console.error('[COMUNICADOS] Erro editar:', err.message);
     res.status(500).json({ error: 'Erro ao editar comunicado.' });
@@ -604,17 +635,33 @@ router.get('/ativos', async (req, res) => {
     const comunicadosDoAlvo = comunicados.filter(alvejaEssaMercearia);
     if (!comunicadosDoAlvo.length) return res.json([]);
 
-    const { data: vistos } = await db
+    // Vistos DESTA PESSOA (dono ou operador logado). As linhas antigas,
+    // com usuario_id null, ficam de fora de propósito: não contam como
+    // visto para ninguém individualmente.
+    const idsDoAlvo = comunicadosDoAlvo.map(c => c.id);
+    let { data: vistos, error: errVistos } = await db
       .from('comunicados_vistos')
       .select('comunicado_id, formato, vezes')
       .eq('mercearia_id', mercearia_id)
-      .in('comunicado_id', comunicadosDoAlvo.map(c => c.id));
+      .eq('usuario_id', req.user.id)
+      .in('comunicado_id', idsDoAlvo);
+
+    // SQL nº 24 ainda não rodou → comportamento antigo (visto por loja).
+    if (colunaUsuarioAusente(errVistos)) {
+      ({ data: vistos, error: errVistos } = await db
+        .from('comunicados_vistos')
+        .select('comunicado_id, formato, vezes')
+        .eq('mercearia_id', mercearia_id)
+        .in('comunicado_id', idsDoAlvo));
+    }
+    if (errVistos) console.error('[COMUNICADOS] Erro ao ler vistos:', errVistos.message);
 
     // Guarda quantas vezes CADA formato já foi visto (não só se foi ou
     // não) — precisa da contagem pra frequência 'quantidade'.
     const vistosPorComunicado = {};
     (vistos || []).forEach(v => {
-      (vistosPorComunicado[v.comunicado_id] ||= {})[v.formato] = v.vezes;
+      const porFormato = (vistosPorComunicado[v.comunicado_id] ||= {});
+      porFormato[v.formato] = (porFormato[v.formato] || 0) + (v.vezes || 0);
     });
 
     // Frequência de exibição: 'sempre' ignora a contagem (sempre aparece);
@@ -666,25 +713,56 @@ router.post('/:id/marcar-visto', async (req, res) => {
     // Supabase não tem um "upsert com incremento" direto, então busca a
     // linha primeiro (baixo volume: no máximo 1 chamada por formato por
     // login de um comerciante/operador).
-    const { data: existente } = await db
+    //
+    // O visto é por PESSOA: a linha é a de (comunicado, loja, formato,
+    // usuario_id = quem está logado). A unicidade no banco é um índice
+    // por expressão (COALESCE no usuario_id), que o `onConflict` do
+    // supabase-js não alcança — por isso busca → atualiza/insere, e a
+    // corrida entre duas chamadas simultâneas é tratada pelo erro 23505.
+    const usuario_id = req.user.id;
+    let porPessoa = true; // false = SQL nº 24 ainda não rodou (visto por loja)
+
+    const buscarVisto = () => {
+      let q = db
+        .from('comunicados_vistos')
+        .select('id, vezes')
+        .eq('comunicado_id', id)
+        .eq('mercearia_id', mercearia_id)
+        .eq('formato', formato);
+      if (porPessoa) q = q.eq('usuario_id', usuario_id);
+      return q.limit(1).maybeSingle();
+    };
+    const somarVisto = (linha) => db
       .from('comunicados_vistos')
-      .select('id, vezes')
-      .eq('comunicado_id', id)
-      .eq('mercearia_id', mercearia_id)
-      .eq('formato', formato)
-      .maybeSingle();
+      .update({ vezes: (linha.vezes || 0) + 1, visto_em: new Date().toISOString() })
+      .eq('id', linha.id);
+
+    let { data: existente, error: errBusca } = await buscarVisto();
+    if (colunaUsuarioAusente(errBusca)) {
+      porPessoa = false;
+      ({ data: existente, error: errBusca } = await buscarVisto());
+    }
+    if (errBusca) throw errBusca;
 
     if (existente) {
-      const { error } = await db
-        .from('comunicados_vistos')
-        .update({ vezes: existente.vezes + 1, visto_em: new Date().toISOString() })
-        .eq('id', existente.id);
+      const { error } = await somarVisto(existente);
       if (error) throw error;
     } else {
-      const { error } = await db
-        .from('comunicados_vistos')
-        .insert({ comunicado_id: id, mercearia_id, formato, vezes: 1 });
-      if (error) throw error;
+      const nova = { comunicado_id: id, mercearia_id, formato, vezes: 1 };
+      if (porPessoa) nova.usuario_id = usuario_id;
+      const { error } = await db.from('comunicados_vistos').insert(nova);
+      if (error && error.code === '23505') {
+        // Outra chamada (duplo clique, duas abas) gravou a linha entre a
+        // busca e o insert — soma nela em vez de falhar.
+        const { data: jaGravada, error: errDeNovo } = await buscarVisto();
+        if (errDeNovo) throw errDeNovo;
+        if (jaGravada) {
+          const { error: errSoma } = await somarVisto(jaGravada);
+          if (errSoma) throw errSoma;
+        }
+      } else if (error) {
+        throw error;
+      }
     }
 
     res.json({ success: true });

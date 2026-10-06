@@ -479,6 +479,93 @@ router.get('/:id/produtos/marcas', async (req, res) => {
     }
 });
 
+// --- Rota GET: /:id/produtos/:produtoId/movimentacoes — "de onde veio
+// este estoque" (05/10/2026). Junta, do mais novo pro mais antigo:
+//   • movimentacoes_estoque do produto (compra de fornecedor, ajuste com
+//     motivo, inventário, estoque inicial do cadastro, estorno de compra);
+//   • as vendas recentes (itens_venda) — venda não gera linha em
+//     movimentacoes_estoque, então entra aqui pra história ficar completa.
+// Só leitura. Quem enxerga o Estoque (ou o Inventário) pode ver.
+router.get('/:id/produtos/:produtoId/movimentacoes', verificarPermissao(PERMISSOES.ESTOQUE, PERMISSOES.INVENTARIO, { mensagem: 'Sem permissão para ver o histórico de estoque.' }), async (req, res) => {
+    const mid = req.user.mercearia_id || req.params.id;
+    const { produtoId } = req.params;
+    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 30, 1), 100);
+
+    const ORIGENS = {
+        compra_fornecedor:   'compra',
+        cancelamento_compra: 'compra_cancelada',
+        inventario:          'inventario',
+        cadastro_produto:    'cadastro',
+        ajuste_manual:       'ajuste',
+    };
+
+    try {
+        const { data: movs, error: errMovs } = await db
+            .from('movimentacoes_estoque')
+            .select('id, tipo, quantidade_anterior, quantidade_movimentacao, quantidade_posterior, motivo, referencia_tipo, usuario_nome, created_at')
+            .eq('mercearia_id', mid)
+            .eq('produto_id', produtoId)
+            .order('created_at', { ascending: false })
+            .limit(limite);
+        if (errMovs) throw errMovs;
+
+        const itens = (movs || []).map(m => {
+            const antes  = parseFloat(m.quantidade_anterior)  || 0;
+            const depois = parseFloat(m.quantidade_posterior) || 0;
+            return {
+                id:         `m:${m.id}`,
+                quando:     m.created_at,
+                origem:     ORIGENS[m.referencia_tipo] || (m.tipo === 'inventario_ajuste' ? 'inventario' : 'ajuste'),
+                tipo:       m.tipo,
+                detalhe:    m.motivo || null,
+                quem:       m.usuario_nome || null,
+                quantidade: Math.round((depois - antes) * 1000) / 1000,
+                antes,
+                depois,
+            };
+        });
+
+        // Vendas: se a consulta falhar, o histórico segue só com as
+        // movimentações e a tela avisa (vendas_indisponiveis).
+        let vendasIndisponiveis = false;
+        const { data: vendidos, error: errVendas } = await db
+            .from('itens_venda')
+            .select('id, quantidade, vendas!inner ( id, data_venda, mercearia_id, cancelada_em )')
+            .eq('produto_id', produtoId)
+            .eq('vendas.mercearia_id', mid)
+            .order('vendas(data_venda)', { ascending: false })
+            .limit(limite);
+
+        if (errVendas) {
+            vendasIndisponiveis = true;
+            console.error('[ESTOQUE] histórico do produto — vendas não carregadas:', errVendas.message);
+        } else {
+            (vendidos || []).forEach(v => {
+                const venda = v.vendas || {};
+                const cancelada = !!venda.cancelada_em;
+                itens.push({
+                    id:         `v:${v.id}`,
+                    quando:     venda.data_venda || null,
+                    origem:     cancelada ? 'venda_cancelada' : 'venda',
+                    tipo:       'venda',
+                    detalhe:    cancelada ? 'Venda cancelada — o produto voltou para o estoque' : 'Venda no caixa',
+                    quem:       null,
+                    quantidade: cancelada ? 0 : -(parseFloat(v.quantidade) || 0),
+                    antes:      null,
+                    depois:     null,
+                });
+            });
+        }
+
+        itens.sort((a, b) => String(b.quando || '').localeCompare(String(a.quando || '')));
+
+        res.status(200).json({ itens: itens.slice(0, limite), vendas_indisponiveis: vendasIndisponiveis });
+    } catch (error) {
+        console.error('[ERRO] GET /:id/produtos/:produtoId/movimentacoes:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar o histórico de estoque.' });
+    }
+});
+
 // --- Rota GET: /:id/opcoes-variacao?tipo=tamanho|cor|genero — valores já
 // cadastrados nesse estabelecimento, pra alimentar o autocomplete do
 // tamanho/cor/gênero na hora de criar uma variação. Sem ?tipo, devolve os três. ---
