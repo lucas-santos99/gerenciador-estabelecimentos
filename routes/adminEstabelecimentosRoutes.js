@@ -10,6 +10,7 @@ const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
+const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
 // super_admin. Antes: listar, excluidas, /:id, /:id/liberacoes e
@@ -137,7 +138,7 @@ router.put("/:id/restaurar", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("mercearias")
-      .update({ status_assinatura: novoStatus })
+      .update({ status_assinatura: novoStatus, ...carimboAlteracao(req) })
       .eq("id", id)
       .select("nome_fantasia")
       .single();
@@ -191,7 +192,7 @@ router.post("/:id/bloquear-acesso", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("mercearias")
-      .update({ status_assinatura: "bloqueada" })
+      .update({ status_assinatura: "bloqueada", ...carimboAlteracao(req) })
       .eq("id", id)
       .select("nome_fantasia, data_vencimento, timezone")
       .single();
@@ -300,6 +301,7 @@ router.post("/:id/liberar-acesso", authUser, async (req, res) => {
       .update({
         status_assinatura: "ativa",
         data_vencimento:   dataVencimento,
+        ...carimboAlteracao(req),
       })
       .eq("id", id)
       .select("nome_fantasia")
@@ -430,7 +432,7 @@ router.put("/:id/limite-operadores", authUser, async (req, res) => {
 
     const { error } = await db
       .from("mercearias")
-      .update({ limite_operadores: limite_val })
+      .update({ limite_operadores: limite_val, ...carimboAlteracao(req) })
       .eq("id", id);
 
     if (error) return res.status(400).json({ error: error.message });
@@ -556,7 +558,9 @@ router.put("/:id", authUser, async (req, res) => {
       telefone,
       email_contato: typeof email_contato === "string" ? email_contato.trim() : email_contato,
       endereco_completo,
-      status_assinatura,
+      // "inativa" deixou de existir (fazia o mesmo papel de "bloqueada").
+      // Campo ausente continua sem ser alterado.
+      status_assinatura: status_assinatura === "inativa" ? "bloqueada" : status_assinatura,
       // "" não é data válida — vira "sem data". Campo ausente não é alterado.
       data_vencimento: data_vencimento === "" ? null : data_vencimento,
       logo_url,
@@ -668,7 +672,7 @@ router.put("/:id", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("mercearias")
-      .update(updateData)
+      .update({ ...updateData, ...carimboAlteracao(req) })
       .eq("id", id)
       .select()
       .single();
@@ -789,7 +793,8 @@ router.post("/criar", authUser, async (req, res) => {
         email_contato,
         endereco_completo: endereco_completo || null,
         enderecos_extras:     enderecosExtrasFinal,
-        status_assinatura: status_assinatura || "ativa",
+        // "inativa" deixou de existir (fazia o mesmo papel de "bloqueada")
+        status_assinatura: (status_assinatura === "inativa" ? "bloqueada" : status_assinatura) || "ativa",
         logo_url: null,
         data_vencimento: data_vencimento || null,
         tipo_estabelecimento: tipo_estabelecimento || "loja",
@@ -797,6 +802,7 @@ router.post("/criar", authUser, async (req, res) => {
         valor_mensalidade:    valor_mensalidade ? parseFloat(valor_mensalidade) : null,
         timezone:             timezoneFinal,
         motivo_periodo_teste: motivo_periodo_teste || null,
+        ...carimboCriacao(req),
       })
       .select()
       .single();
@@ -876,7 +882,7 @@ router.post("/:id/upload-logo", authUser, upload.single("logo"), async (req, res
 
     const url = urlData.publicUrl;
 
-    await db.from("mercearias").update({ logo_url: url }).eq("id", id);
+    await db.from("mercearias").update({ logo_url: url, ...carimboAlteracao(req) }).eq("id", id);
 
     await registrar({
       mercearia_id:  id,
@@ -917,7 +923,7 @@ router.delete("/:id/remover-logo", authUser, async (req, res) => {
 
     await db.storage.from("logos").remove([path]);
 
-    await db.from("mercearias").update({ logo_url: null }).eq("id", id);
+    await db.from("mercearias").update({ logo_url: null, ...carimboAlteracao(req) }).eq("id", id);
 
     await registrar({
       mercearia_id:  id,
@@ -946,7 +952,7 @@ router.delete("/:id", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("mercearias")
-      .update({ status_assinatura: "excluida" })
+      .update({ status_assinatura: "excluida", ...carimboAlteracao(req) })
       .eq("id", id)
       .select("nome_fantasia")
       .single();

@@ -8,6 +8,7 @@ const authUser = require('../middlewares/authUser');
 const onlyMaster = require('../middlewares/onlyMaster');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { rotuloPapel } = require('../utils/papeis');
 
 const {
@@ -431,7 +432,7 @@ router.post('/contatos-suporte', onlyMaster, async (req, res) => {
 
     const { data, error } = await db
       .from('contatos_suporte')
-      .insert({ tipo, valor: valorLimpo, label: label?.trim() || null, ordem: proximaOrdem })
+      .insert({ tipo, valor: valorLimpo, label: label?.trim() || null, ordem: proximaOrdem, ...carimboCriacao(req) })
       .select()
       .single();
 
@@ -462,7 +463,7 @@ router.put('/contatos-suporte/:id', onlyMaster, async (req, res) => {
 
     const { data, error } = await db
       .from('contatos_suporte')
-      .update({ tipo, valor: valorLimpo, label: label?.trim() || null })
+      .update({ tipo, valor: valorLimpo, label: label?.trim() || null, ...carimboAlteracao(req) })
       .eq('id', req.params.id)
       .select()
       .single();

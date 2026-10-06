@@ -9,6 +9,7 @@ const { PERMISSOES } = require("../utils/permissoes");
 const { registrar } = require("./auditoriaRoutes");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 const { erroSenhaFraca } = require("../utils/senha");
+const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
 
 // Todas as rotas deste arquivo exigem autenticação
 router.use(authUser);
@@ -144,6 +145,7 @@ router.post("/criar", async (req, res) => {
         telefone:    telefone || null,
         foto_url:    null,
         status:      "ativo",
+        ...carimboCriacao(req),
       })
       .select()
       .single();
@@ -227,7 +229,7 @@ router.put("/:id", async (req, res) => {
 
     const { data, error } = await db
       .from("operadores")
-      .update({ nome, telefone, email })
+      .update({ nome, telefone, email, ...carimboAlteracao(req) })
       .eq("id", id)
       .select()
       .single();
@@ -280,7 +282,7 @@ router.put("/:id/status", async (req, res) => {
 
     const { error } = await db
       .from("operadores")
-      .update({ status })
+      .update({ status, ...carimboAlteracao(req) })
       .eq("id", id);
 
     if (error) return res.status(400).json({ error: error.message });
@@ -315,7 +317,7 @@ router.delete("/:id", async (req, res) => {
 
     const { error } = await db
       .from("operadores")
-      .update({ status: "excluido" })
+      .update({ status: "excluido", ...carimboAlteracao(req) })
       .eq("id", id);
 
     if (error) return res.status(400).json({ error: error.message });
@@ -385,6 +387,19 @@ router.put("/:id/permissoes", async (req, res) => {
       await db.from("permissoes_operador").insert(
         permissoes.map(permissao_id => ({ operador_id: id, permissao_id }))
       );
+    }
+
+    // "Alterado por": as permissões ficam em outra tabela, então o carimbo
+    // vai num update só dele no cadastro do operador. Se falhar, não
+    // derruba a rota — as permissões já foram gravadas.
+    try {
+      const carimbo = carimboAlteracao(req);
+      if (Object.keys(carimbo).length > 0) {
+        const { error: errCarimbo } = await db.from("operadores").update(carimbo).eq("id", id).eq("mercearia_id", mercearia_id);
+        if (errCarimbo) console.error("Permissões salvas, mas falhou ao gravar o 'alterado por':", errCarimbo.message);
+      }
+    } catch (e) {
+      console.error("Permissões salvas, mas falhou ao gravar o 'alterado por':", e.message);
     }
 
     registrar({

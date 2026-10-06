@@ -5,6 +5,7 @@ const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 
@@ -73,7 +74,7 @@ router.post('/', exige(PERMISSOES.ESTOQUE_ADICIONAR, 'Sem permissão para criar 
 
         const { data, error } = await supabaseAdmin
             .from('categorias')
-            .insert({ nome, mercearia_id: req.user.mercearia_id, categoria_pai_id: paiIdFinal })
+            .insert({ nome, mercearia_id: req.user.mercearia_id, categoria_pai_id: paiIdFinal, ...carimboCriacao(req) })
             .select()
             .single();
 
@@ -157,7 +158,7 @@ router.put('/:id', exige(PERMISSOES.ESTOQUE_EDITAR, 'Sem permissão para renomea
 
         const { data, error } = await supabaseAdmin
             .from('categorias')
-            .update(updateData)
+            .update({ ...updateData, ...carimboAlteracao(req) })
             .eq('id', id)
             .eq('mercearia_id', req.user.mercearia_id)
             .select()

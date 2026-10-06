@@ -9,6 +9,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 const { contemPalavraProibida } = require('../utils/filtroPalavroes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 
 // Valida o tamanho dos campos de texto livre de cada variação enviada
 // (tamanho/cor/gênero/código de barras) antes de gravar no banco — mesma
@@ -497,6 +498,7 @@ router.get('/:id/produtos/:produtoId/movimentacoes', verificarPermissao(PERMISSO
         inventario:          'inventario',
         cadastro_produto:    'cadastro',
         ajuste_manual:       'ajuste',
+        entrada_fornecedor:  'entrada_fornecedor',
     };
 
     try {
@@ -563,6 +565,77 @@ router.get('/:id/produtos/:produtoId/movimentacoes', verificarPermissao(PERMISSO
     } catch (error) {
         console.error('[ERRO] GET /:id/produtos/:produtoId/movimentacoes:', error.message);
         res.status(500).json({ error: 'Erro ao buscar o histórico de estoque.' });
+    }
+});
+
+// --- Rota GET: /:id/produtos/:produtoId/origem-estoque — apoio à
+// "Entrada" do Ajustar estoque (05/10/2026): devolve a ÚLTIMA COMPRA
+// deste produto lançada em Fornecedores (fornecedor, data e hora, nota,
+// quantidade, custo) e a lista de fornecedores ativos da loja (só id e
+// nome), pra tela já vir com o fornecedor preenchido. Só leitura; quem
+// enxerga o Estoque ou o Inventário pode ver.
+router.get('/:id/produtos/:produtoId/origem-estoque', verificarPermissao(PERMISSOES.ESTOQUE, PERMISSOES.INVENTARIO, { mensagem: 'Sem permissão para ver a origem do estoque.' }), async (req, res) => {
+    const mid = req.user.mercearia_id || req.params.id;
+    const { produtoId } = req.params;
+    try {
+        const { data: fornecedores, error: errForn } = await db
+            .from('fornecedores')
+            .select('id, nome')
+            .eq('mercearia_id', mid)
+            .eq('ativo', true)
+            .order('nome');
+        if (errForn) throw errForn;
+
+        // Últimas entradas por compra deste produto (a mais nova primeiro).
+        // Compra cancelada não conta: procura a mais recente ainda ativa.
+        const { data: movs, error: errMovs } = await db
+            .from('movimentacoes_estoque')
+            .select('compra_id, quantidade_movimentacao, created_at')
+            .eq('mercearia_id', mid)
+            .eq('produto_id', produtoId)
+            .eq('referencia_tipo', 'compra_fornecedor')
+            .order('created_at', { ascending: false })
+            .limit(8);
+        if (errMovs) throw errMovs;
+
+        let ultimaCompra = null;
+        const idsCompra = [...new Set((movs || []).map(m => m.compra_id).filter(Boolean))];
+        if (idsCompra.length > 0) {
+            const { data: compras, error: errCompras } = await db
+                .from('compras')
+                .select('id, fornecedor_id, numero_nota, status, usuario_nome, criado_em, fornecedores(nome)')
+                .eq('mercearia_id', mid)
+                .in('id', idsCompra);
+            if (errCompras) throw errCompras;
+            const porId = new Map((compras || []).map(c => [c.id, c]));
+
+            const mov = (movs || []).find(m => porId.get(m.compra_id) && porId.get(m.compra_id).status !== 'cancelada');
+            if (mov) {
+                const compra = porId.get(mov.compra_id);
+                const { data: item } = await db
+                    .from('itens_compra')
+                    .select('quantidade, preco_custo_unitario')
+                    .eq('compra_id', compra.id)
+                    .eq('produto_id', produtoId)
+                    .limit(1)
+                    .maybeSingle();
+                ultimaCompra = {
+                    compra_id:       compra.id,
+                    fornecedor_id:   compra.fornecedor_id || null,
+                    fornecedor_nome: compra.fornecedores?.nome || null,
+                    quando:          mov.created_at || compra.criado_em || null,
+                    numero_nota:     compra.numero_nota || null,
+                    quantidade:      parseFloat(item?.quantidade ?? mov.quantidade_movimentacao) || 0,
+                    preco_custo:     item?.preco_custo_unitario != null ? parseFloat(item.preco_custo_unitario) : null,
+                    lancado_por:     compra.usuario_nome || null,
+                };
+            }
+        }
+
+        res.status(200).json({ ultima_compra: ultimaCompra, fornecedores: fornecedores || [] });
+    } catch (error) {
+        console.error('[ERRO] GET /:id/produtos/:produtoId/origem-estoque:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar a origem do estoque.' });
     }
 });
 
@@ -1185,6 +1258,7 @@ router.post('/:id/produtos', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.
         const { data, error } = await db
             .from('produtos')
             .insert({
+                ...carimboCriacao(req),
                 mercearia_id: estabelecimentoId,
                 nome: nome,
                 marca: marca || null,
@@ -1368,7 +1442,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao([PERMISSOES.ESTOQUE, P
 
         const { data, error } = await db
             .from('produtos')
-            .update(updateData)
+            .update({ ...updateData, ...carimboAlteracao(req) })
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
             .select()
@@ -1488,7 +1562,7 @@ router.post('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.ES
 
         const { data: atualizado, error } = await db
             .from('produtos')
-            .update({ imagem_url: url, imagem_origem: 'upload' })
+            .update({ imagem_url: url, imagem_origem: 'upload', ...carimboAlteracao(req) })
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
             .select()
@@ -1520,7 +1594,7 @@ router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.
     try {
         const { data, error } = await db
             .from('produtos')
-            .update({ imagem_url: null, imagem_origem: null })
+            .update({ imagem_url: null, imagem_origem: null, ...carimboAlteracao(req) })
             .eq('id', produtoId)
             .eq('mercearia_id', estabelecimentoId)
             .select()
@@ -1842,7 +1916,7 @@ router.post('/dados/:id/logo', async (req, res) => {
     const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
     const logo_url = urlData.publicUrl;
 
-    const { data, error } = await db.from('mercearias').update({ logo_url }).eq('id', mercearia_id).select().single();
+    const { data, error } = await db.from('mercearias').update({ logo_url, ...carimboAlteracao(req) }).eq('id', mercearia_id).select().single();
     if (error) return res.status(400).json({ error: error.message });
 
     // Apaga o arquivo da logo anterior (só se for mesmo a logo desta loja)
@@ -1945,7 +2019,7 @@ router.put('/dados/:id', async (req, res) => {
 
     const { data, error } = await db
       .from('mercearias')
-      .update(updateData)
+      .update({ ...updateData, ...carimboAlteracao(req) })
       .eq('id', mercearia_id)
       .select()
       .single();

@@ -508,14 +508,24 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
   const mid = mercearia(req);
   if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
-  const { produto_id, tipo, quantidade, motivo } = req.body;
+  const { produto_id, tipo, quantidade, fornecedor_id } = req.body;
+  let { motivo } = req.body;
 
   const tiposValidos = ['entrada', 'saida', 'perda', 'devolucao', 'correcao'];
   if (!produto_id)                    return res.status(400).json({ error: 'Produto obrigatório' });
   if (!tiposValidos.includes(tipo))   return res.status(400).json({ error: 'Tipo inválido' });
   if (!quantidade || parseFloat(quantidade) <= 0)
     return res.status(400).json({ error: 'Quantidade deve ser maior que zero' });
-  if (!motivo?.trim())                return res.status(400).json({ error: 'Motivo é obrigatório' });
+  // Entrada precisa dizer DE ONDE veio: um fornecedor cadastrado OU a
+  // explicação escrita. Com fornecedor, o motivo vira observação opcional.
+  const entradaDeFornecedor = tipo === 'entrada' && !!fornecedor_id;
+  if (!entradaDeFornecedor && !motivo?.trim()) {
+    return res.status(400).json({
+      error: tipo === 'entrada'
+        ? 'Informe de onde veio a mercadoria: escolha o fornecedor ou escreva a explicação.'
+        : 'Motivo é obrigatório',
+    });
+  }
 
   const erroTamanho = validarTamanhos({ motivo }, { motivo: LIMITES.OBSERVACAO_CURTA });
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
@@ -532,6 +542,22 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
       .single();
 
     if (!produto) return res.status(404).json({ error: 'Produto não encontrado' });
+
+    // Fornecedor informado tem de ser desta loja; o nome dele entra no
+    // motivo, que é o que o histórico do produto mostra como origem.
+    let fornecedor = null;
+    if (entradaDeFornecedor) {
+      const { data: forn } = await db
+        .from('fornecedores')
+        .select('id, nome')
+        .eq('id', fornecedor_id)
+        .eq('mercearia_id', mid)
+        .maybeSingle();
+      if (!forn) return res.status(400).json({ error: 'Fornecedor não encontrado neste estabelecimento.' });
+      fornecedor = forn;
+      const obs = (motivo || '').trim();
+      motivo = `Entrada de ${forn.nome}${obs ? ` — ${obs}` : ''}`.slice(0, 500);
+    }
 
     const qtdAntes = parseFloat(produto.estoque_atual) || 0;
     const qtd      = parseFloat(quantidade);
@@ -567,7 +593,8 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
       quantidade_movimentacao: qtd,
       quantidade_posterior:   qtdDepois,
       motivo:                 motivo.trim(),
-      referencia_tipo:        'ajuste_manual',
+      referencia_tipo:        fornecedor ? 'entrada_fornecedor' : 'ajuste_manual',
+      referencia_id:          fornecedor ? fornecedor.id : null,
       categoria_nome:         produto.categorias?.nome || null,
       operador_id:            operadorId(req),
       usuario_nome:           req.user.nome || req.user.email,
@@ -582,7 +609,7 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
       usuario_email: req.user.email,
       modulo: 'inventario', acao: 'ajuste_estoque',
       descricao: `${tipoLabel} manual: "${produto.nome}" — ${fmtQtd(qtdAntes, produto.unidade_medida)} → ${fmtQtd(qtdDepois, produto.unidade_medida)}`,
-      meta: { produto_id, tipo, quantidade: qtd, qtdAntes, qtdDepois, motivo },
+      meta: { produto_id, tipo, quantidade: qtd, qtdAntes, qtdDepois, motivo, ...(fornecedor ? { fornecedor_id: fornecedor.id, fornecedor_nome: fornecedor.nome } : {}) },
     });
 
     res.json({

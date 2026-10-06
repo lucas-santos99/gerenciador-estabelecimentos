@@ -14,6 +14,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboCriacao } = require('../utils/rastro');
 
 console.log('🔥 COMPRAS ROUTES ATUALIZADO 🔥');
 
@@ -366,6 +367,7 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
             valor:           valorTotal,
             data_vencimento: data_vencimento,
             status:          'pendente',
+            ...carimboCriacao(req),
           })
           .select()
           .single();

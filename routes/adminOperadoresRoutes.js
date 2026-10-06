@@ -11,6 +11,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
+const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
 // super_admin. Antes, listar operadores, detalhes, permissões (GET),
@@ -157,6 +158,7 @@ router.post("/criar", authUser, async (req, res) => {
         telefone,
         foto_url: null,
         status: "ativo",
+        ...carimboCriacao(req),
       })
       .select()
       .single();
@@ -290,7 +292,7 @@ router.put("/:id", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("operadores")
-      .update(updateData)
+      .update({ ...updateData, ...carimboAlteracao(req) })
       .eq("id", id)
       .select()
       .single();
@@ -347,7 +349,7 @@ router.delete("/:id", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("operadores")
-      .update({ status: "excluido" })
+      .update({ status: "excluido", ...carimboAlteracao(req) })
       .eq("id", id)
       .select("mercearia_id, nome")
       .single();
@@ -381,7 +383,7 @@ router.put("/:id/restaurar", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("operadores")
-      .update({ status: "ativo" })
+      .update({ status: "ativo", ...carimboAlteracao(req) })
       .eq("id", id)
       .select("mercearia_id, nome")
       .single();
@@ -432,7 +434,7 @@ router.post("/:id/upload-foto", upload.single("foto"), async (req, res) => {
 
     await db
       .from("operadores")
-      .update({ foto_url: data.publicUrl })
+      .update({ foto_url: data.publicUrl, ...carimboAlteracao(req) })
       .eq("id", id);
 
     res.json({ success: true, foto_url: data.publicUrl });
@@ -467,7 +469,7 @@ router.delete("/:id/remover-foto", async (req, res) => {
 
     await db
       .from("operadores")
-      .update({ foto_url: null })
+      .update({ foto_url: null, ...carimboAlteracao(req) })
       .eq("id", id);
 
     res.json({ success: true });
@@ -536,7 +538,7 @@ router.put("/:id/status", authUser, async (req, res) => {
 
     const { data, error } = await db
       .from("operadores")
-      .update({ status })
+      .update({ status, ...carimboAlteracao(req) })
       .eq("id", id)
       .select()
       .single();
@@ -619,6 +621,19 @@ router.put("/:id/permissoes", authUser, async (req, res) => {
         .insert(rows);
 
       if (insErr) return res.status(400).json({ error: insErr.message });
+    }
+
+    // "Alterado por": as permissões ficam em outra tabela, então o carimbo
+    // vai num update só dele no cadastro do operador. Se falhar, não
+    // derruba a rota — as permissões já foram gravadas.
+    try {
+      const carimbo = carimboAlteracao(req);
+      if (Object.keys(carimbo).length > 0) {
+        const { error: errCarimbo } = await db.from("operadores").update(carimbo).eq("id", id);
+        if (errCarimbo) console.error("Permissões salvas, mas falhou ao gravar o 'alterado por':", errCarimbo.message);
+      }
+    } catch (e) {
+      console.error("Permissões salvas, mas falhou ao gravar o 'alterado por':", e.message);
     }
 
     // Busca mercearia_id do operador só pra anexar na auditoria

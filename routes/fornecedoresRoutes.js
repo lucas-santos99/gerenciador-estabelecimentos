@@ -8,6 +8,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 
 console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
 
@@ -316,6 +317,7 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_ADICIONAR], 
         prazo_entrega_dias: prazo_entrega_dias ? parseInt(prazo_entrega_dias) : null,
         condicao_pagamento: condicao_pagamento || null,
         observacoes: observacoes?.trim() || null,
+        ...carimboCriacao(req),
       })
       .select()
       .single();
@@ -387,6 +389,7 @@ router.put('/:id', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_EDITAR], {
         prazo_entrega_dias: prazo_entrega_dias ? parseInt(prazo_entrega_dias) : null,
         condicao_pagamento: condicao_pagamento || null,
         observacoes: observacoes?.trim() || null,
+        ...carimboAlteracao(req),
       })
       .eq('id', id)
       .eq('mercearia_id', mid)
@@ -439,7 +442,7 @@ router.delete('/:id', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_EXCLUIR
 
     const { error } = await db
       .from('fornecedores')
-      .update({ ativo: false })
+      .update({ ativo: false, ...carimboAlteracao(req) })
       .eq('id', id)
       .eq('mercearia_id', mid);
 

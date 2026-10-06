@@ -14,6 +14,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, hojeStrTZ, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 
 // ── Permissões do operador (módulo + ação marcada na tela) ─────────
 // Dono e super_admin passam sempre.
@@ -261,7 +262,8 @@ router.post('/',
                 descricao,
                 valor: parseFloat(valor),
                 data_vencimento,
-                status: 'pendente'
+                status: 'pendente',
+                ...carimboCriacao(req),
             })
             .select()
             .single();
@@ -311,7 +313,8 @@ router.put('/:contaId/pagar',
             .from('contas_a_pagar')
             .update({
                 status: 'paga',
-                data_pagamento: new Date().toISOString()
+                data_pagamento: new Date().toISOString(),
+                ...carimboAlteracao(req),
             })
             .eq('id', contaId)
             .eq('mercearia_id', req.user.mercearia_id)
@@ -621,7 +624,8 @@ router.put('/:contaId',
             .update({
                 descricao,
                 valor: parseFloat(valor),
-                data_vencimento
+                data_vencimento,
+                ...carimboAlteracao(req),
             })
             .eq('id', contaId)
             .eq('mercearia_id', req.user.mercearia_id)

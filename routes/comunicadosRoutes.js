@@ -23,6 +23,7 @@ const db       = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboAlteracao } = require('../utils/rastro');
 
 // Upload de imagem do comunicado — mesmo padrão já usado pra logo de
 // estabelecimento (adminEstabelecimentosRoutes.js): multer em memória,
@@ -390,6 +391,7 @@ router.put('/admin/:id', async (req, res) => {
         // botão "Remover imagem" manda null) — enviar uma nova imagem
         // acontece pelo upload dedicado abaixo, que já grava direto.
         ...(imagem_url === null ? { imagem_url: null } : {}),
+        ...carimboAlteracao(req),
       })
       .eq('id', id)
       .select()
@@ -468,7 +470,7 @@ router.post('/admin/:id/upload-imagem', upload.single('imagem'), async (req, res
 
     const { data, error } = await db
       .from('comunicados')
-      .update({ imagem_url: url })
+      .update({ imagem_url: url, ...carimboAlteracao(req) })
       .eq('id', id)
       .select()
       .single();
@@ -498,7 +500,7 @@ router.patch('/admin/:id/ativo', async (req, res) => {
   try {
     const { data, error } = await db
       .from('comunicados')
-      .update({ ativo: !!ativo })
+      .update({ ativo: !!ativo, ...carimboAlteracao(req) })
       .eq('id', id)
       .select()
       .single();

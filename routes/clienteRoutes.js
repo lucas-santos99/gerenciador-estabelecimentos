@@ -10,6 +10,7 @@ const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
@@ -190,6 +191,7 @@ router.post('/criar', verificarPermissao(
                 mercearia_id:    req.user.mercearia_id,
                 limite_credito:  parseFloat(limiteCredito) || 0,
                 data_vencimento: dataVencimento || null,
+                ...carimboCriacao(req),
             })
             .select()
             .single();
@@ -629,7 +631,8 @@ router.put('/atualizar/:clienteId', verificarPermissao([PERMISSOES.CLIENTES, PER
                 cpf:             (cpf || '').replace(/\D/g, '') || null,
                 permite_fiado:   permiteFiado !== false,
                 limite_credito:  parseFloat(limiteCredito) || 0,
-                data_vencimento: dataVencimento || null
+                data_vencimento: dataVencimento || null,
+                ...carimboAlteracao(req),
             })
             .eq('id', clienteId)
             .eq('mercearia_id', req.user.mercearia_id)
