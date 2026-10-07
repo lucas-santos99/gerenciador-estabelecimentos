@@ -56,31 +56,56 @@ router.get("/cnpj/:cnpj", async (req, res) => {
       return res.status(429).json({ error: "Muitas consultas seguidas. Tente de novo daqui a pouco." });
     }
 
-    let resp;
-    try {
-      resp = await fetch(URL_BASE + cnpj, { signal: AbortSignal.timeout(6000) });
-    } catch (err) {
-      console.error("[CONSULTA] CNPJ — serviço fora do ar ou lento:", err.message);
-      return res.status(502).json({ error: "Não foi possível consultar o CNPJ agora." });
-    }
-
-    if (resp.status === 404) {
-      const dados = { encontrado: false };
-      cache.set(cnpj, { ate: Date.now() + CACHE_MS, dados });
-      return res.json(dados);
-    }
-    if (!resp.ok) {
-      console.error("[CONSULTA] CNPJ — resposta", resp.status);
-      return res.status(502).json({ error: "Não foi possível consultar o CNPJ agora." });
-    }
-
-    const j = await resp.json();
-    const dados = {
-      encontrado:    true,
-      razao_social:  (j.razao_social || "").trim() || null,
-      nome_fantasia: (j.nome_fantasia || "").trim() || null,
-      situacao:      (j.descricao_situacao_cadastral || "").trim() || null,
+    const UA = { "User-Agent": "Mozilla/5.0 (compatible; GerenciadorEstabelecimentos/1.0)", Accept: "application/json" };
+    const tentar = async (url) => {
+      try { return await fetch(url, { headers: UA, signal: AbortSignal.timeout(6000) }); }
+      catch (err) { console.error("[CONSULTA] CNPJ — serviço fora do ar ou lento:", err.message); return null; }
     };
+
+    let dados = null;
+    let naoEncontrado = false;
+
+    // Fonte 1: BrasilAPI
+    const r1 = await tentar(URL_BASE + cnpj);
+    if (r1 && r1.ok) {
+      const j = await r1.json();
+      dados = {
+        encontrado:    true,
+        razao_social:  (j.razao_social || "").trim() || null,
+        nome_fantasia: (j.nome_fantasia || "").trim() || null,
+        situacao:      (j.descricao_situacao_cadastral || "").trim() || null,
+      };
+    } else if (r1 && r1.status === 404) {
+      naoEncontrado = true;
+    } else if (r1) {
+      console.error("[CONSULTA] CNPJ — BrasilAPI resposta", r1.status);
+    }
+
+    // Fonte 2 (reserva): CNPJ.ws pública
+    if (!dados && !naoEncontrado) {
+      const r2 = await tentar("https://publica.cnpj.ws/cnpj/" + cnpj);
+      if (r2 && r2.ok) {
+        const j = await r2.json();
+        const est = j.estabelecimento || {};
+        dados = {
+          encontrado:    true,
+          razao_social:  (j.razao_social || "").trim() || null,
+          nome_fantasia: (est.nome_fantasia || "").trim() || null,
+          situacao:      (est.situacao_cadastral || "").trim() || null,
+        };
+      } else if (r2 && r2.status === 404) {
+        naoEncontrado = true;
+      } else if (r2) {
+        console.error("[CONSULTA] CNPJ — CNPJ.ws resposta", r2.status);
+      }
+    }
+
+    if (naoEncontrado) {
+      const d = { encontrado: false };
+      cache.set(cnpj, { ate: Date.now() + CACHE_MS, dados: d });
+      return res.json(d);
+    }
+    if (!dados) return res.status(502).json({ error: "Não foi possível consultar o CNPJ agora." });
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
     cache.set(cnpj, { ate: Date.now() + CACHE_MS, dados });
     res.json(dados);
