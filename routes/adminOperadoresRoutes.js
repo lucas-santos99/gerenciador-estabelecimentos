@@ -76,6 +76,7 @@ router.get("/detalhes/:id", async (req, res) => {
 ============================================================ */
 router.post("/criar", authUser, async (req, res) => {
   try {
+    if (typeof req.body?.nome === 'string') req.body.nome = req.body.nome.replace(/\s+/g, ' ').trim(); // sem espaço duplo/sobrando
     const { nome, email, telefone, senha, mercearia_id } = req.body;
 
     if (!email || !senha || !mercearia_id) {
@@ -206,6 +207,7 @@ router.post("/criar", authUser, async (req, res) => {
 router.put("/:id", authUser, async (req, res) => {
   try {
     const { id } = req.params;
+    if (typeof req.body?.nome === 'string') req.body.nome = req.body.nome.replace(/\s+/g, ' ').trim(); // sem espaço duplo/sobrando
     const { nome, telefone, email, status } = req.body;
 
     const erroTamanho = validarTamanhos(

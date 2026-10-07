@@ -78,6 +78,7 @@ router.post("/criar", async (req, res) => {
     const { mercearia_id } = req.user;
     if (!mercearia_id) return res.status(403).json({ error: "Sem estabelecimento vinculado" });
 
+    if (typeof req.body?.nome === 'string') req.body.nome = req.body.nome.replace(/\s+/g, ' ').trim(); // sem espaço duplo/sobrando
     const { nome, email, telefone, senha, permissoes } = req.body;
 
     if (!nome || !email || !senha) {
@@ -193,6 +194,7 @@ router.put("/:id", async (req, res) => {
 
     const operadorAtual = await garantirDono(id, mercearia_id);
 
+    if (typeof req.body?.nome === 'string') req.body.nome = req.body.nome.replace(/\s+/g, ' ').trim(); // sem espaço duplo/sobrando
     const { nome, telefone } = req.body;
     let { email } = req.body;
 
