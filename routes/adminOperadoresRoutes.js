@@ -11,6 +11,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
+const { erroEmail } = require("../utils/emailValido");
 const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
@@ -93,6 +94,9 @@ router.post("/criar", authUser, async (req, res) => {
       { nome: LIMITES.NOME, email: LIMITES.EMAIL, telefone: LIMITES.TELEFONE, senha: LIMITES.SENHA }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroDominio = await erroEmail(email);
+    if (erroDominio) return res.status(400).json({ error: erroDominio });
 
     /* ===============================
        VERIFICAR LIMITE
@@ -251,6 +255,9 @@ router.put("/:id", authUser, async (req, res) => {
       } catch { /* segue com o e-mail do cadastro */ }
 
       if (emailNovo !== emailLoginAtual) {
+        const erroDominio = await erroEmail(emailNovo);
+        if (erroDominio) return res.status(400).json({ error: erroDominio });
+
         const MSG_EM_USO = "Este e-mail já está em uso por outro usuário. Escolha outro e-mail.";
 
         const [{ data: opMesmoEmail }, { data: perfilMesmoEmail }] = await Promise.all([

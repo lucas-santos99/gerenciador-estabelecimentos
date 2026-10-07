@@ -9,6 +9,7 @@ const { PERMISSOES } = require("../utils/permissoes");
 const { registrar } = require("./auditoriaRoutes");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 const { erroSenhaFraca } = require("../utils/senha");
+const { erroEmail } = require("../utils/emailValido");
 const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
 
 // Todas as rotas deste arquivo exigem autenticação
@@ -92,6 +93,9 @@ router.post("/criar", async (req, res) => {
       { nome: LIMITES.NOME, email: LIMITES.EMAIL, telefone: LIMITES.TELEFONE, senha: LIMITES.SENHA }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroDominio = await erroEmail(email);
+    if (erroDominio) return res.status(400).json({ error: erroDominio });
 
     /* ── Verificar limite ── */
     const { data: merc } = await db
@@ -216,6 +220,8 @@ router.put("/:id", async (req, res) => {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
           return res.status(400).json({ error: "Informe um e-mail válido — é com ele que o operador entra no sistema." });
         }
+        const erroDominio = await erroEmail(email);
+        if (erroDominio) return res.status(400).json({ error: erroDominio });
         const MSG_EM_USO = "Este e-mail já está em uso por outro usuário. Escolha outro e-mail.";
         const { data: perfilMesmoEmail } = await db.from("profiles").select("id").eq("email", email).neq("id", id).limit(1);
         if ((perfilMesmoEmail || []).length > 0) return res.status(400).json({ error: MSG_EM_USO });

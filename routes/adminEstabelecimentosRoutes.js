@@ -10,6 +10,7 @@ const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
+const { erroEmail } = require("../utils/emailValido");
 const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
@@ -643,6 +644,9 @@ router.put("/:id", authUser, async (req, res) => {
         }
 
         if ((dono.email || "").trim().toLowerCase() !== emailLogin) {
+          const erroDominio = await erroEmail(emailLogin);
+          if (erroDominio) return res.status(400).json({ error: erroDominio });
+
           const { error: errAuth } = await db.auth.admin.updateUserById(dono.id, {
             email: emailLogin,
             email_confirm: true,
@@ -715,6 +719,59 @@ router.put("/:id", authUser, async (req, res) => {
 });
 
 // =======================================================
+// REDEFINIR A SENHA DO DONO (SuperAdmin) — sem pedir a senha antiga.
+// Vale na hora; o dono não é avisado (o SuperAdmin repassa a senha nova).
+// =======================================================
+router.post("/:id/reset-senha-dono", authUser, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { senha } = req.body || {};
+
+    const erroSenha = erroSenhaFraca(senha);
+    if (erroSenha) return res.status(400).json({ error: erroSenha });
+
+    const erroTamanho = validarTamanhos({ senha }, { senha: LIMITES.SENHA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const { data: loja } = await db
+      .from("mercearias")
+      .select("id, nome_fantasia")
+      .eq("id", id)
+      .maybeSingle();
+    if (!loja) return res.status(404).json({ error: "Estabelecimento não encontrado." });
+
+    const { data: donos, error: errDono } = await db
+      .from("profiles")
+      .select("id, email")
+      .eq("mercearia_id", id)
+      .eq("role", "merchant")
+      .limit(1);
+    if (errDono) return res.status(400).json({ error: "Não foi possível localizar o dono. Tente de novo." });
+
+    const dono = (donos || [])[0];
+    if (!dono) return res.status(404).json({ error: "Este estabelecimento não tem um dono cadastrado." });
+
+    const { error } = await db.auth.admin.updateUserById(dono.id, { password: senha });
+    if (error) return res.status(400).json({ error: error.message });
+
+    await registrar({
+      mercearia_id:  id,
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo:        "estabelecimentos",
+      acao:          "resetar_senha_dono",
+      descricao:     `Redefiniu a senha do dono de "${loja.nome_fantasia}" (${dono.email || "sem e-mail"})`,
+      escopo:        "admin_global",
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("POST /:id/reset-senha-dono error:", err);
+    res.status(500).json({ error: "Erro interno ao redefinir a senha." });
+  }
+});
+
+// =======================================================
 // CRIAR ESTABELECIMENTO + USER (🔥 CORRIGIDO)
 // =======================================================
 router.post("/criar", authUser, async (req, res) => {
@@ -767,6 +824,9 @@ router.post("/criar", authUser, async (req, res) => {
       }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroDominio = await erroEmail(email_contato);
+    if (erroDominio) return res.status(400).json({ error: erroDominio });
 
     // 1️⃣ Criar usuário no Auth
     const { data: userData, error: userErr } =
