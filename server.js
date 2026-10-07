@@ -25,6 +25,7 @@ const comunicadosRoutes  = require("./routes/comunicadosRoutes");
 const cobrancaNotifRoutes = require("./routes/cobrancaNotifRoutes");
 const notificacoesRoutes = require("./routes/notificacoesRoutes");
 const rastroRoutes = require("./routes/rastroRoutes");
+const consultaRoutes = require("./routes/consultaRoutes");
 const whatsappAdminRoutes = require("./routes/whatsappAdminRoutes");
 const whatsappLojaRoutes = require("./routes/whatsappLojaRoutes");
 const whatsappWebhookRoutes = require("./routes/whatsappWebhookRoutes");
@@ -96,6 +97,7 @@ app.use("/api/comunicados",  comunicadosRoutes);
 app.use("/api/cobranca-notif", cobrancaNotifRoutes);
 app.use("/api/notificacoes",  notificacoesRoutes);
 app.use("/api/rastro",        rastroRoutes); // "cadastrado por / alterado por" dos cadastros
+app.use("/api/consulta",       consultaRoutes); // consulta de CNPJ (BrasilAPI) para preencher o nome
 app.use("/api/whatsapp/admin", whatsappAdminRoutes);
 app.use("/api/whatsapp/loja", whatsappLojaRoutes);
 app.use("/api/whatsapp/webhook", whatsappWebhookRoutes); // chamado pela Meta, sem login (assinatura conferida)
