@@ -632,7 +632,41 @@ router.get('/:id/produtos/:produtoId/origem-estoque', verificarPermissao(PERMISS
             }
         }
 
-        res.status(200).json({ ultima_compra: ultimaCompra, fornecedores: fornecedores || [] });
+        // Última ENTRADA de estoque, de qualquer origem (compra lançada em
+        // Fornecedores, entrada com fornecedor, entrada manual com motivo ou
+        // estoque inicial do cadastro). Serve pra tela mostrar que a entrada
+        // que acabou de ser feita gravou, já que "ultima_compra" só enxerga
+        // compras lançadas em Fornecedores. Falha aqui não derruba a rota.
+        let ultimaEntrada = null;
+        try {
+            const { data: entradas, error: errEnt } = await db
+                .from('movimentacoes_estoque')
+                .select('quantidade_movimentacao, motivo, referencia_tipo, referencia_id, usuario_nome, created_at')
+                .eq('mercearia_id', mid)
+                .eq('produto_id', produtoId)
+                .eq('tipo', 'entrada')
+                .order('created_at', { ascending: false })
+                .limit(1);
+            if (errEnt) throw errEnt;
+            const ent = (entradas || [])[0];
+            if (ent) {
+                const forn = ent.referencia_tipo === 'entrada_fornecedor'
+                    ? (fornecedores || []).find(f => f.id === ent.referencia_id)
+                    : null;
+                ultimaEntrada = {
+                    quando:          ent.created_at || null,
+                    quantidade:      Math.abs(parseFloat(ent.quantidade_movimentacao) || 0),
+                    origem:          ({ compra_fornecedor: 'compra', entrada_fornecedor: 'entrada_fornecedor', cadastro_produto: 'cadastro' })[ent.referencia_tipo] || 'ajuste',
+                    fornecedor_nome: forn ? forn.nome : null,
+                    detalhe:         ent.motivo || null,
+                    quem:            ent.usuario_nome || null,
+                };
+            }
+        } catch (errEntrada) {
+            console.error('[ESTOQUE] origem-estoque — última entrada não carregada:', errEntrada.message);
+        }
+
+        res.status(200).json({ ultima_compra: ultimaCompra, ultima_entrada: ultimaEntrada, fornecedores: fornecedores || [] });
     } catch (error) {
         console.error('[ERRO] GET /:id/produtos/:produtoId/origem-estoque:', error.message);
         res.status(500).json({ error: 'Erro ao buscar a origem do estoque.' });
