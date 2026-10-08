@@ -217,6 +217,7 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
   if (!['a_vista', 'a_prazo'].includes(forma_pagamento)) return res.status(400).json({ error: 'Forma de pagamento inválida' });
   if (forma_pagamento === 'a_prazo' && !data_vencimento) return res.status(400).json({ error: 'Informe a data de vencimento' });
   if (!Array.isArray(itens) || itens.length === 0) return res.status(400).json({ error: 'Adicione pelo menos um produto' });
+  if (itens.length > 500) return res.status(400).json({ error: 'Itens demais na mesma compra (máximo 500). Divida em duas compras.' });
 
   const erroTamanho = validarTamanhos(
     { numero_nota, observacoes, recebido_por },

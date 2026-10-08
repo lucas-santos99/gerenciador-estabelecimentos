@@ -372,7 +372,7 @@ router.post("/webhook/:token/pix", async (req, res) => {
       return res.status(401).json({ error: "Token inválido." });
     }
 
-    const pixList = Array.isArray(req.body?.pix) ? req.body.pix : [];
+    const pixList = Array.isArray(req.body?.pix) ? req.body.pix.slice(0, 200) : [];
     if (pixList.length === 0) return res.status(200).json({ ok: true, ignorado: true });
 
     for (const pagamento of pixList) {

@@ -26,7 +26,7 @@ const cobrancaNotifRoutes = require("./routes/cobrancaNotifRoutes");
 const notificacoesRoutes = require("./routes/notificacoesRoutes");
 const rastroRoutes = require("./routes/rastroRoutes");
 const consultaRoutes = require("./routes/consultaRoutes");
-const { limiteGlobalIp, limiteWebhook } = require("./middlewares/limiteRequisicoes");
+const { limiteGlobalIp, limiteWebhook, limiteEscritaGeral } = require("./middlewares/limiteRequisicoes");
 const whatsappAdminRoutes = require("./routes/whatsappAdminRoutes");
 const whatsappLojaRoutes = require("./routes/whatsappLojaRoutes");
 const whatsappWebhookRoutes = require("./routes/whatsappWebhookRoutes");
@@ -84,6 +84,8 @@ app.use(
 // Limites por usuário (cobrança, ações sensíveis, WhatsApp) ficam nas próprias rotas.
 app.use((req, res, next) => (req.path === "/ping" ? next() : limiteGlobalIp(req, res, next)));
 app.use(["/api/whatsapp/webhook", "/api/efi/webhook", "/api/asaas/webhook"], limiteWebhook);
+// Escritas em geral por usuário (não conta os webhooks, que chegam sem login).
+app.use((req, res, next) => (req.path.includes("/webhook") ? next() : limiteEscritaGeral(req, res, next)));
 
 // --- ROTAS DO ASAAS (cobrança de licença) ---
 // Webhook deve ser registrado ANTES do express.json para receber raw body se necessário

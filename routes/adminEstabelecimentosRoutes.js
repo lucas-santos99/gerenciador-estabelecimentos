@@ -576,10 +576,10 @@ router.put("/:id", authUser, async (req, res) => {
     // Só grava se vier um array de verdade — evita salvar algo malformado
     // vindo direto da requisição.
     if (Array.isArray(telefones_extras)) {
-      updateData.telefones_extras = telefones_extras.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim());
+      updateData.telefones_extras = telefones_extras.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim().slice(0, 200)).slice(0, 20);
     }
     if (Array.isArray(enderecos_extras)) {
-      updateData.enderecos_extras = enderecos_extras.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim());
+      updateData.enderecos_extras = enderecos_extras.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim().slice(0, 300)).slice(0, 20);
     }
 
     // Só grava se vier um fuso válido — nunca deixa salvar algo fora dos
@@ -801,10 +801,10 @@ router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
     const timezoneFinal = TIMEZONES_VALIDAS.includes(timezone) ? timezone : TIMEZONE_PADRAO;
 
     const telefonesExtrasFinal = Array.isArray(telefones_extras)
-      ? telefones_extras.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim())
+      ? telefones_extras.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim().slice(0, 200)).slice(0, 20)
       : [];
     const enderecosExtrasFinal = Array.isArray(enderecos_extras)
-      ? enderecos_extras.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim())
+      ? enderecos_extras.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim().slice(0, 300)).slice(0, 20)
       : [];
 
     // validação da senha

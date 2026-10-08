@@ -607,8 +607,8 @@ router.put("/:id/permissoes", authUser, async (req, res) => {
     const { id } = req.params;
     const { permissoes } = req.body; // array de strings ex: ['pdv','estoque']
 
-    if (!Array.isArray(permissoes)) {
-      return res.status(400).json({ error: "permissoes deve ser um array" });
+    if (!Array.isArray(permissoes) || permissoes.length > 100) {
+      return res.status(400).json({ error: "permissoes deve ser uma lista de até 100 itens" });
     }
 
     // Remove todas as permissões atuais

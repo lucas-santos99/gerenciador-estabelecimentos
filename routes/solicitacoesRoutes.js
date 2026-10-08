@@ -51,6 +51,9 @@ router.post('/', async (req, res) => {
   if (!Array.isArray(campos) || campos.length === 0) {
     return res.status(400).json({ error: 'Selecione ao menos um campo pra alterar.' });
   }
+  if (campos.length > 30) {
+    return res.status(400).json({ error: 'Campos demais na mesma solicitação (máximo 30).' });
+  }
 
   const erroTamanho = validarTamanhos({ detalhes }, { detalhes: LIMITES.OBSERVACAO_LONGA });
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });

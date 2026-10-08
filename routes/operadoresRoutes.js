@@ -168,7 +168,7 @@ router.post("/criar", limiteAcaoSensivel, async (req, res) => {
     if (Array.isArray(permissoes) && permissoes.length > 0) {
       await db
         .from("permissoes_operador")
-        .insert(permissoes.map(permissao_id => ({ operador_id: userId, permissao_id })));
+        .insert(permissoes.slice(0, 100).map(permissao_id => ({ operador_id: userId, permissao_id })));
     }
 
     registrar({
@@ -383,8 +383,8 @@ router.put("/:id/permissoes", async (req, res) => {
     const { mercearia_id } = req.user;
     const { permissoes } = req.body;
 
-    if (!Array.isArray(permissoes)) {
-      return res.status(400).json({ error: "permissoes deve ser um array" });
+    if (!Array.isArray(permissoes) || permissoes.length > 100) {
+      return res.status(400).json({ error: "permissoes deve ser uma lista de até 100 itens" });
     }
 
     const operadorAtual = await garantirDono(id, mercearia_id);

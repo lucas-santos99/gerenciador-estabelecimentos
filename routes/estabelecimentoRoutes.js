@@ -15,6 +15,7 @@ const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 // (tamanho/cor/gênero/código de barras) antes de gravar no banco — mesma
 // defesa aplicada aos campos do produto "pai".
 function erroTamanhoVariacoes(variacoesEnviadas = []) {
+  if (variacoesEnviadas.length > 200) return 'Variações demais neste produto (máximo 200).';
   for (const v of variacoesEnviadas) {
     const erro = validarTamanhos(
       { tamanho: v.tamanho, cor: v.cor, genero: v.genero, codigo_barras: v.codigo_barras },

@@ -61,6 +61,15 @@ function criarLimite({ max, janelaMs = 60_000, mensagem = MSG_PADRAO, soEscrita 
 
 const ipDe = (req) => req.ip || req.socket?.remoteAddress || null;
 
+// Chave por "quem está logado" sem precisar do authUser (que roda dentro de
+// cada rota): usa o próprio token do cabeçalho. O token muda de tempos em
+// tempos, o que não atrapalha para o objetivo (contar uma rajada de escritas).
+const chaveToken = (req) => {
+  const h = req.headers?.authorization;
+  if (h && h.length > 20) return `t:${h.slice(-40)}`;
+  return ipDe(req);
+};
+
 function limiteIp(opcoes) {
   return criarLimite({ nome: 'ip', ...opcoes, chaveDe: (req) => ipDe(req) });
 }
@@ -90,6 +99,11 @@ module.exports = {
 
   // Criar usuário/estabelecimento, redefinir senha, apagar definitivo.
   limiteAcaoSensivel: limiteUsuario({ max: 20, janelaMs: 60_000, nome: 'acao-sensivel' }),
+
+  // Escritas em geral (criar/editar/excluir qualquer coisa), por usuário.
+  // 200/min é bem acima do uso humano (uma venda por vez no PDV, formulários).
+  limiteEscritaGeral: criarLimite({ max: 200, janelaMs: 60_000, soEscrita: true, nome: 'escrita-geral', chaveDe: chaveToken,
+    mensagem: 'Muitas alterações seguidas. Aguarde um instante e tente de novo.' }),
 
   // Qualquer escrita nas rotas de WhatsApp do dono (assinar, pacotes, vínculos…).
   limiteEscritaWhatsapp: limiteUsuario({ max: 30, janelaMs: 60_000, soEscrita: true, nome: 'whatsapp-escrita' }),

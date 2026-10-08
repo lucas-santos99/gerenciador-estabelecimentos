@@ -46,6 +46,17 @@ router.post('/finalizar', async (req, res) => {
   if (isNaN(totalVendaFloat) || totalVendaFloat <= 0 || !carrinho?.length) {
     return res.status(400).json({ error: 'Dados da venda incompletos ou valor total inválido.' });
   }
+  // Tetos de tamanho (a tela nunca chega perto disso): evita mandar uma lista
+  // gigante direto pela API e travar o servidor/banco.
+  if (!Array.isArray(carrinho) || carrinho.length > 500) {
+    return res.status(400).json({ error: 'Itens demais na mesma venda (máximo 500). Divida em duas vendas.' });
+  }
+  if (Array.isArray(pagamentos) && pagamentos.length > 20) {
+    return res.status(400).json({ error: 'Formas de pagamento demais na mesma venda (máximo 20).' });
+  }
+  if (cpfNota && String(cpfNota).length > 30) {
+    return res.status(400).json({ error: 'CPF/CNPJ da nota inválido.' });
+  }
   if (!dividida && !meio_pagamento) {
     return res.status(400).json({ error: 'Dados da venda incompletos ou valor total inválido.' });
   }
@@ -403,6 +414,9 @@ router.post('/finalizar', async (req, res) => {
 router.post('/:id/cancelar', async (req, res) => {
   const { id } = req.params;
   const { motivo } = req.body;
+  if (motivo && String(motivo).length > 300) {
+    return res.status(400).json({ error: 'O motivo do cancelamento pode ter no máximo 300 caracteres.' });
+  }
   const { id: userId, role, mercearia_id, permissoes = [] } = req.user;
 
   // Merchant sempre pode. Operador só com a permissão específica —
