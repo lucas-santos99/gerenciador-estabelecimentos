@@ -8,6 +8,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { erroTeto } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 
 console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
@@ -284,6 +285,9 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_ADICIONAR], 
   } = req.body;
 
   if (!nome?.trim()) return res.status(400).json({ error: 'Nome do fornecedor é obrigatório' });
+
+  const erroLimite = await erroTeto(db, 'fornecedores', mid);
+  if (erroLimite) return res.status(400).json({ error: erroLimite });
 
   const erroTamanho = validarTamanhos(
     { nome, razao_social, cnpj_cpf, telefone, whatsapp, email, endereco, contato_nome, observacoes },

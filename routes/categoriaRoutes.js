@@ -5,6 +5,7 @@ const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { erroTeto } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
@@ -48,6 +49,9 @@ router.post('/', exige(PERMISSOES.ESTOQUE_ADICIONAR, 'Sem permissão para criar 
 
     const erroTamanho = validarTamanhos({ nome }, { nome: LIMITES.CATEGORIA });
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroLimite = await erroTeto(supabaseAdmin, 'categorias', req.user.mercearia_id);
+    if (erroLimite) return res.status(400).json({ error: erroLimite });
 
     try {
         let paiIdFinal = null;

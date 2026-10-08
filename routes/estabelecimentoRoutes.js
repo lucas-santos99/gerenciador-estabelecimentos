@@ -9,6 +9,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 const { contemPalavraProibida } = require('../utils/filtroPalavroes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { erroTeto } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 
 // Valida o tamanho dos campos de texto livre de cada variação enviada
@@ -1259,6 +1260,9 @@ router.post('/:id/produtos', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.
         { nome: LIMITES.NOME_FANTASIA, marca: LIMITES.NOME, codigo_barras: LIMITES.CODIGO }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroLimite = await erroTeto(db, 'produtos', estabelecimentoId);
+    if (erroLimite) return res.status(400).json({ error: erroLimite });
 
     const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []);
     if (erroVariacoes) return res.status(400).json({ error: erroVariacoes });
