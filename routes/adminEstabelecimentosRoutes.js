@@ -4,6 +4,7 @@ const db = require("../db/supabaseAdmin"); // Cliente SUPABASE ADMIN (service_ro
 const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage() });
 const authUser = require("../middlewares/authUser");
+const { limiteAcaoSensivel } = require("../middlewares/limiteRequisicoes");
 const { registrar } = require("./auditoriaRoutes");
 const { TIMEZONE_PADRAO, TIMEZONES_VALIDAS, hojeStrTZ } = require("../utils/fusoHorario");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
@@ -722,7 +723,7 @@ router.put("/:id", authUser, async (req, res) => {
 // REDEFINIR A SENHA DO DONO (SuperAdmin) — sem pedir a senha antiga.
 // Vale na hora; o dono não é avisado (o SuperAdmin repassa a senha nova).
 // =======================================================
-router.post("/:id/reset-senha-dono", authUser, async (req, res) => {
+router.post("/:id/reset-senha-dono", authUser, limiteAcaoSensivel, async (req, res) => {
   try {
     const { id } = req.params;
     const { senha } = req.body || {};
@@ -774,7 +775,7 @@ router.post("/:id/reset-senha-dono", authUser, async (req, res) => {
 // =======================================================
 // CRIAR ESTABELECIMENTO + USER (🔥 CORRIGIDO)
 // =======================================================
-router.post("/criar", authUser, async (req, res) => {
+router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
   try {
 
     const {
@@ -1040,7 +1041,7 @@ router.delete("/:id", authUser, async (req, res) => {
 // =======================================================
 // EXCLUSÃO PERMANENTE
 // =======================================================
-router.delete("/:id/apagar-definitivo", authUser, async (req, res) => {
+router.delete("/:id/apagar-definitivo", authUser, limiteAcaoSensivel, async (req, res) => {
   try {
     const { id } = req.params;
 

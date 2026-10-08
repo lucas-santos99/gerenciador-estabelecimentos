@@ -4,6 +4,7 @@ const router  = express.Router();
 
 const db        = require("../db/supabaseAdmin");
 const authUser  = require("../middlewares/authUser");
+const { limiteAcaoSensivel } = require("../middlewares/limiteRequisicoes");
 const verificarPermissao = require("../middlewares/verificarPermissao");
 const { PERMISSOES } = require("../utils/permissoes");
 const { registrar } = require("./auditoriaRoutes");
@@ -74,7 +75,7 @@ router.get("/", async (req, res) => {
    2) CRIAR OPERADOR (MERCHANT)
    POST /api/operadores/criar
 ============================================================ */
-router.post("/criar", async (req, res) => {
+router.post("/criar", limiteAcaoSensivel, async (req, res) => {
   try {
     const { mercearia_id } = req.user;
     if (!mercearia_id) return res.status(403).json({ error: "Sem estabelecimento vinculado" });
@@ -479,7 +480,7 @@ router.get("/limite", async (req, res) => {
    RESET SENHA (MERCHANT reseta operador do próprio estabelecimento)
    POST /api/operadores/:id/reset-senha
 ============================================================ */
-router.post('/:id/reset-senha', async (req, res) => {
+router.post('/:id/reset-senha', limiteAcaoSensivel, async (req, res) => {
   try {
     const { id } = req.params;
     const { mercearia_id } = req.user;

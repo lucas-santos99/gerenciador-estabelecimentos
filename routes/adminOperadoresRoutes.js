@@ -4,6 +4,7 @@ const router = express.Router();
 const db = require("../db/supabaseAdmin"); // cliente SUPABASE ADMIN
 const multer = require("multer");
 const authUser = require("../middlewares/authUser");
+const { limiteAcaoSensivel } = require("../middlewares/limiteRequisicoes");
 const { registrar } = require("./auditoriaRoutes");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
@@ -75,7 +76,7 @@ router.get("/detalhes/:id", async (req, res) => {
    CRIAR OPERADOR
    POST /admin/operadores/criar
 ============================================================ */
-router.post("/criar", authUser, async (req, res) => {
+router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
   try {
     if (typeof req.body?.nome === 'string') req.body.nome = req.body.nome.replace(/\s+/g, ' ').trim(); // sem espaço duplo/sobrando
     const { nome, email, telefone, senha, mercearia_id } = req.body;
@@ -491,7 +492,7 @@ router.delete("/:id/remover-foto", async (req, res) => {
 /* ============================================================
    RESETAR SENHA
 ============================================================ */
-router.post("/:id/reset-senha", authUser, async (req, res) => {
+router.post("/:id/reset-senha", authUser, limiteAcaoSensivel, async (req, res) => {
   try {
     const { id } = req.params;
     const { senha } = req.body;

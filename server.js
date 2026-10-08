@@ -26,6 +26,7 @@ const cobrancaNotifRoutes = require("./routes/cobrancaNotifRoutes");
 const notificacoesRoutes = require("./routes/notificacoesRoutes");
 const rastroRoutes = require("./routes/rastroRoutes");
 const consultaRoutes = require("./routes/consultaRoutes");
+const { limiteGlobalIp, limiteWebhook } = require("./middlewares/limiteRequisicoes");
 const whatsappAdminRoutes = require("./routes/whatsappAdminRoutes");
 const whatsappLojaRoutes = require("./routes/whatsappLojaRoutes");
 const whatsappWebhookRoutes = require("./routes/whatsappWebhookRoutes");
@@ -45,11 +46,19 @@ const superAdminRoutes = require("./routes/superAdminRoutes");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Atrás do Railway há um proxy: sem isto, `req.ip` seria sempre o IP do proxy
+// (todo mundo pareceria o mesmo usuário) e o limite por IP não funcionaria.
+// `1` = confia só no primeiro proxy (o do Railway).
+app.set("trust proxy", 1);
+
 // --- MIDDLEWARES ---
 // verify: guarda o corpo cru só do webhook do WhatsApp — a Meta assina o
 // corpo exato (X-Hub-Signature-256) e a conferência precisa dele intacto.
+// Limite do corpo JSON: 5 MB (antes 20 MB em qualquer rota). A maior coisa que
+// vai em JSON é a foto de produto, que o navegador já comprime (~400x400 px).
+// Upload de logo/foto/imagem de comunicado usa multipart, que não passa aqui.
 app.use(express.json({
-  limit: "20mb",
+  limit: "5mb",
   verify: (req, res, buf) => {
     if (req.originalUrl && req.originalUrl.startsWith("/api/whatsapp/webhook")) req.rawBody = buf;
   },
@@ -69,6 +78,12 @@ app.use(
     credentials: true,
   })
 );
+
+// --- LIMITE DE REQUISIÇÕES (rate limit) ---
+// Geral por IP (folgado, só barra abuso) e mais apertado nos webhooks públicos.
+// Limites por usuário (cobrança, ações sensíveis, WhatsApp) ficam nas próprias rotas.
+app.use((req, res, next) => (req.path === "/ping" ? next() : limiteGlobalIp(req, res, next)));
+app.use(["/api/whatsapp/webhook", "/api/efi/webhook", "/api/asaas/webhook"], limiteWebhook);
 
 // --- ROTAS DO ASAAS (cobrança de licença) ---
 // Webhook deve ser registrado ANTES do express.json para receber raw body se necessário

@@ -9,6 +9,7 @@
 // https.Agent) — é o mesmo padrão que a documentação oficial do Efí usa.
 
 const express = require("express");
+const { limiteCobranca } = require("../middlewares/limiteRequisicoes");
 const router  = express.Router();
 const https   = require("https");
 const axios   = require("axios");
@@ -115,7 +116,7 @@ async function efiPixRequest(method, path, data, extraHeaders = {}) {
 // Gera a cobrança Pix da mensalidade (equivalente ao Pix do
 // gerar-cobranca do Asaas — o cartão continua vindo de lá, separado)
 // ═══════════════════════════════════════════════════════════
-router.post("/gerar-cobranca-pix/:mercearia_id", liberarComLicencaBloqueada, authUser, donoDaMerceariaOuSuperAdmin, async (req, res) => {
+router.post("/gerar-cobranca-pix/:mercearia_id", liberarComLicencaBloqueada, authUser, limiteCobranca, donoDaMerceariaOuSuperAdmin, async (req, res) => {
   try {
     const { mercearia_id } = req.params;
     const { plano = "mensal" } = req.body; // mensal | anual

@@ -7,6 +7,7 @@ const db      = require("../db/supabaseAdmin");
 const { TIMEZONE_PADRAO, hojeStrTZ } = require("../utils/fusoHorario");
 const { registrar } = require("./auditoriaRoutes");
 const authUser = require("../middlewares/authUser");
+const { limiteCobranca } = require("../middlewares/limiteRequisicoes");
 const { liberarComLicencaBloqueada, donoDaMerceariaOuSuperAdmin } = require("../middlewares/acessoCobranca");
 const {
   buscarValorPlano, valorDoPlano, diasDoPlano, registrarCobranca, marcarCobrancaCancelada,
@@ -92,7 +93,7 @@ async function obterOuCriarClienteAsaas(mercearia) {
 // ⚠️ O Pix saiu daqui — agora é gerado pelo Efí (efiRoutes.js),
 // que tem taxa bem menor. O frontend chama os dois em paralelo.
 // ═══════════════════════════════════════════════════════════
-router.post("/gerar-cobranca/:mercearia_id", liberarComLicencaBloqueada, authUser, donoDaMerceariaOuSuperAdmin, async (req, res) => {
+router.post("/gerar-cobranca/:mercearia_id", liberarComLicencaBloqueada, authUser, limiteCobranca, donoDaMerceariaOuSuperAdmin, async (req, res) => {
   try {
     const { mercearia_id } = req.params;
     const { plano = "mensal" } = req.body; // mensal | anual

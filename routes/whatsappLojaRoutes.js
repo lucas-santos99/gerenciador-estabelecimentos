@@ -34,6 +34,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/supabaseAdmin');
 const authUser = require('../middlewares/authUser');
+const { limiteEscritaWhatsapp } = require('../middlewares/limiteRequisicoes');
 const { registrar } = require('./auditoriaRoutes');
 const { hojeStrTZ } = require('../utils/fusoHorario');
 const W = require('../utils/whatsappCustos');
@@ -45,6 +46,7 @@ function somenteDono(req, res, next) {
   return res.status(403).json({ error: 'Só o dono do estabelecimento gerencia o WhatsApp.' });
 }
 router.use(authUser, somenteDono);
+router.use(limiteEscritaWhatsapp);
 
 const UUID = /^[0-9a-f-]{36}$/i;
 const CAMPOS_PLANO_PUBLICO = 'id, tipo, nome, descricao, preco, creditos, numeros, recursos, destaque, ordem';
