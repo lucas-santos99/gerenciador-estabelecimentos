@@ -208,6 +208,10 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
     fornecedor_id, numero_nota, data_compra, forma_pagamento,
     data_vencimento, observacoes, itens,
   } = req.body;
+  // Quem recebeu a mercadoria (opcional, diferente de quem lançou a compra).
+  const recebido_por = typeof req.body?.recebido_por === 'string'
+    ? req.body.recebido_por.replace(/\s+/g, ' ').trim()
+    : '';
 
   if (!fornecedor_id) return res.status(400).json({ error: 'Selecione um fornecedor' });
   if (!['a_vista', 'a_prazo'].includes(forma_pagamento)) return res.status(400).json({ error: 'Forma de pagamento inválida' });
@@ -215,8 +219,8 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
   if (!Array.isArray(itens) || itens.length === 0) return res.status(400).json({ error: 'Adicione pelo menos um produto' });
 
   const erroTamanho = validarTamanhos(
-    { numero_nota, observacoes },
-    { numero_nota: LIMITES.CODIGO, observacoes: LIMITES.OBSERVACAO_LONGA }
+    { numero_nota, observacoes, recebido_por },
+    { numero_nota: LIMITES.CODIGO, observacoes: LIMITES.OBSERVACAO_LONGA, recebido_por: LIMITES.NOME }
   );
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
@@ -263,21 +267,34 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
     const valorTotal = itens.reduce((acc, it) => acc + parseFloat(it.quantidade) * parseFloat(it.preco_custo_unitario), 0);
 
     // 3. Cria a compra
-    const { data: compra, error: errCompra } = await db
+    const dadosCompra = {
+      mercearia_id:     mid,
+      fornecedor_id,
+      numero_nota:      numero_nota?.trim() || null,
+      data_compra:      data_compra || hojeStrTZ(await buscarTimezone(mid)),
+      forma_pagamento,
+      valor_total:      valorTotal,
+      observacoes:       observacoes?.trim() || null,
+      operador_id:       operadorId(req),
+      usuario_nome:      req.user.nome || req.user.email,
+    };
+
+    // `recebido_por` é coluna nova (SQL 26). Se o SQL ainda não foi rodado,
+    // a compra é lançada normalmente, só sem esse campo.
+    let { data: compra, error: errCompra } = await db
       .from('compras')
-      .insert({
-        mercearia_id:     mid,
-        fornecedor_id,
-        numero_nota:      numero_nota?.trim() || null,
-        data_compra:      data_compra || hojeStrTZ(await buscarTimezone(mid)),
-        forma_pagamento,
-        valor_total:      valorTotal,
-        observacoes:       observacoes?.trim() || null,
-        operador_id:       operadorId(req),
-        usuario_nome:      req.user.nome || req.user.email,
-      })
+      .insert(recebido_por ? { ...dadosCompra, recebido_por } : dadosCompra)
       .select()
       .single();
+
+    if (errCompra && recebido_por && errCompra.code === '42703') {
+      console.error('[COMPRAS] coluna recebido_por não existe ainda (rodar o SQL 26) — lançando sem ela.');
+      ({ data: compra, error: errCompra } = await db
+        .from('compras')
+        .insert(dadosCompra)
+        .select()
+        .single());
+    }
 
     if (errCompra) throw errCompra;
 
@@ -386,8 +403,8 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
           usuario_nome:  req.user.nome,
           usuario_email: req.user.email,
           modulo: 'fornecedores', acao: 'lancar_compra',
-          descricao: `Lançou compra de ${fornecedor.nome} — ${fmtMoeda(valorTotal)} (${resumoItens(itensRegistrados)})`,
-          meta: { compra_id: compra.id, fornecedor_id, valor_total: valorTotal, forma_pagamento, itens: itensRegistrados },
+          descricao: `Lançou compra de ${fornecedor.nome} — ${fmtMoeda(valorTotal)} (${resumoItens(itensRegistrados)})${recebido_por ? ` — recebida por ${recebido_por}` : ''}`,
+          meta: { compra_id: compra.id, fornecedor_id, valor_total: valorTotal, forma_pagamento, recebido_por: recebido_por || null, itens: itensRegistrados },
         });
         return res.status(201).json({
           ...compra,
@@ -403,8 +420,8 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
       usuario_nome:  req.user.nome,
       usuario_email: req.user.email,
       modulo: 'fornecedores', acao: 'lancar_compra',
-      descricao: `Lançou compra de ${fornecedor.nome} — ${fmtMoeda(valorTotal)} (${resumoItens(itensRegistrados)})`,
-      meta: { compra_id: compra.id, fornecedor_id, valor_total: valorTotal, forma_pagamento, itens: itensRegistrados },
+      descricao: `Lançou compra de ${fornecedor.nome} — ${fmtMoeda(valorTotal)} (${resumoItens(itensRegistrados)})${recebido_por ? ` — recebida por ${recebido_por}` : ''}`,
+      meta: { compra_id: compra.id, fornecedor_id, valor_total: valorTotal, forma_pagamento, recebido_por: recebido_por || null, itens: itensRegistrados },
     });
 
     res.status(201).json({ ...compra, fornecedor_nome: fornecedor.nome, conta_a_pagar: contaAPagar });
