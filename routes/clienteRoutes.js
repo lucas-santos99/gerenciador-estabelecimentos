@@ -15,6 +15,18 @@ const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
+const { renovarVencimentos } = require('../utils/vencimentoRecorrente');
+
+// Colunas novas (SQL 27) — enquanto a migration não rodou, o Postgres devolve
+// 42703 (coluna inexistente) e as rotas caem pro comportamento antigo.
+const COLUNA_INEXISTENTE = '42703';
+
+// Recorrência do vencimento: liga/desliga + dia do mês de referência.
+function camposRecorrencia(body) {
+    const rec = body.vencimentoRecorrente === true && !!body.dataVencimento;
+    const dia = rec ? parseInt(String(body.dataVencimento).slice(8, 10), 10) : null;
+    return { vencimento_recorrente: rec, vencimento_dia: Number.isFinite(dia) ? dia : null };
+}
 
 console.log('🔥 CLIENTES ROUTES ATUALIZADO 🔥');
 
@@ -72,21 +84,25 @@ router.get('/buscar', async (req, res) => {
         // Busca por nome, telefone, CPF (com ou sem pontuação) ou pelo
         // código curto do cliente (ex: digitou "42" → acha o #42)
         const termoLimpo = termo.replace(/\D/g, '');
-        let query = supabaseAdmin
-            .from('clientes')
-            .select('id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito')
-            .eq('mercearia_id', req.user.mercearia_id);
-
         const filtros = [`nome.ilike.${termo}%`, `telefone.ilike.${termo}%`];
         if (termoLimpo) {
             filtros.push(`cpf.ilike.%${termoLimpo}%`);
             if (/^\d+$/.test(termoLimpo)) filtros.push(`codigo_cliente.eq.${termoLimpo}`);
         }
-        query = query.or(filtros.join(',')).limit(10);
+        const buscar = (colunas) => supabaseAdmin
+            .from('clientes')
+            .select(colunas)
+            .eq('mercearia_id', req.user.mercearia_id)
+            .or(filtros.join(','))
+            .limit(10);
 
-        const { data, error } = await query;
+        const base = 'id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento';
+        let { data, error } = await buscar(base + ', vencimento_recorrente, vencimento_dia');
+        if (error && error.code === COLUNA_INEXISTENTE) ({ data, error } = await buscar(base));
 
         if (error) throw error;
+
+        await renovarVencimentos(data, req.user.mercearia_id);
 
         res.status(200).json(data);
 
@@ -108,13 +124,19 @@ router.get('/', async (req, res) => {
 
     try {
 
-        const { data, error } = await supabaseAdmin
+        const listar = (colunas) => supabaseAdmin
             .from('clientes')
-            .select('id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento, criado_em')
+            .select(colunas)
             .eq('mercearia_id', req.user.mercearia_id)
             .order('nome', { ascending: true });
 
+        const baseCols = 'id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento, criado_em';
+        let { data, error } = await listar(baseCols + ', vencimento_recorrente, vencimento_dia');
+        if (error && error.code === COLUNA_INEXISTENTE) ({ data, error } = await listar(baseCols));
+
         if (error) throw error;
+
+        await renovarVencimentos(data, req.user.mercearia_id);
 
         // Resumo de compras por cliente (nº de compras, total e última compra)
         // pro card da tela de Clientes. Só vendas ligadas direto ao cliente
@@ -219,20 +241,19 @@ router.post('/criar', verificarPermissao(
 
     try {
 
-        const { data, error } = await supabaseAdmin
-            .from('clientes')
-            .insert({
-                nome,
-                telefone:        telefone || null,
-                cpf:             (cpf || '').replace(/\D/g, '') || null,
-                permite_fiado:   permiteFiado !== false,
-                mercearia_id:    req.user.mercearia_id,
-                limite_credito:  parseFloat(limiteCredito) || 0,
-                data_vencimento: dataVencimento || null,
-                ...carimboCriacao(req),
-            })
-            .select()
-            .single();
+        const registro = {
+            nome,
+            telefone:        telefone || null,
+            cpf:             (cpf || '').replace(/\D/g, '') || null,
+            permite_fiado:   permiteFiado !== false,
+            mercearia_id:    req.user.mercearia_id,
+            limite_credito:  parseFloat(limiteCredito) || 0,
+            data_vencimento: dataVencimento || null,
+            ...carimboCriacao(req),
+        };
+        const inserir = (r) => supabaseAdmin.from('clientes').insert(r).select().single();
+        let { data, error } = await inserir({ ...registro, ...camposRecorrencia(req.body) });
+        if (error && error.code === COLUNA_INEXISTENTE) ({ data, error } = await inserir(registro));
 
         if (error) throw error;
 
@@ -661,21 +682,19 @@ router.put('/atualizar/:clienteId', verificarPermissao([PERMISSOES.CLIENTES, PER
 
     try {
 
-        const { data, error } = await supabaseAdmin
-            .from('clientes')
-            .update({
-                nome,
-                telefone:        telefone || null,
-                cpf:             (cpf || '').replace(/\D/g, '') || null,
-                permite_fiado:   permiteFiado !== false,
-                limite_credito:  parseFloat(limiteCredito) || 0,
-                data_vencimento: dataVencimento || null,
-                ...carimboAlteracao(req),
-            })
-            .eq('id', clienteId)
-            .eq('mercearia_id', req.user.mercearia_id)
-            .select()
-            .single();
+        const mudancas = {
+            nome,
+            telefone:        telefone || null,
+            cpf:             (cpf || '').replace(/\D/g, '') || null,
+            permite_fiado:   permiteFiado !== false,
+            limite_credito:  parseFloat(limiteCredito) || 0,
+            data_vencimento: dataVencimento || null,
+            ...carimboAlteracao(req),
+        };
+        const atualizar = (m) => supabaseAdmin.from('clientes').update(m)
+            .eq('id', clienteId).eq('mercearia_id', req.user.mercearia_id).select().single();
+        let { data, error } = await atualizar({ ...mudancas, ...camposRecorrencia(req.body) });
+        if (error && error.code === COLUNA_INEXISTENTE) ({ data, error } = await atualizar(mudancas));
 
         if (error) throw error;
 
