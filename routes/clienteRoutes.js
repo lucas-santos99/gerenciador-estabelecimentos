@@ -110,13 +110,47 @@ router.get('/', async (req, res) => {
 
         const { data, error } = await supabaseAdmin
             .from('clientes')
-            .select('id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento')
+            .select('id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento, criado_em')
             .eq('mercearia_id', req.user.mercearia_id)
             .order('nome', { ascending: true });
 
         if (error) throw error;
 
-        res.status(200).json(data);
+        // Resumo de compras por cliente (nº de compras, total e última compra)
+        // pro card da tela de Clientes. Só vendas ligadas direto ao cliente
+        // (nas vendas "Dividido" o vínculo é por fatia e não entra aqui).
+        // Se falhar, a lista continua funcionando, só sem o resumo.
+        const resumo = {};
+        try {
+            const TAM = 1000, MAX_PAGINAS = 20;
+            for (let pg = 0; pg < MAX_PAGINAS; pg++) {
+                const { data: vs, error: ev } = await supabaseAdmin
+                    .from('vendas')
+                    .select('cliente_id, valor_total, data_venda, status')
+                    .eq('mercearia_id', req.user.mercearia_id)
+                    .not('cliente_id', 'is', null)
+                    .neq('status', 'cancelada')
+                    .order('data_venda', { ascending: false })
+                    .range(pg * TAM, pg * TAM + TAM - 1);
+                if (ev) throw ev;
+                for (const v of vs || []) {
+                    const r = resumo[v.cliente_id] || (resumo[v.cliente_id] = { qtd: 0, total: 0, ultima: null });
+                    r.qtd += 1;
+                    r.total += parseFloat(v.valor_total) || 0;
+                    if (!r.ultima || v.data_venda > r.ultima) r.ultima = v.data_venda;
+                }
+                if (!vs || vs.length < TAM) break;
+            }
+        } catch (e) {
+            console.error('[AVISO] Resumo de compras dos clientes:', e.message);
+        }
+
+        res.status(200).json((data || []).map(c => ({
+            ...c,
+            compras_qtd: resumo[c.id]?.qtd || 0,
+            compras_total: Math.round((resumo[c.id]?.total || 0) * 100) / 100,
+            ultima_compra: resumo[c.id]?.ultima || null,
+        })));
 
     } catch (error) {
 
