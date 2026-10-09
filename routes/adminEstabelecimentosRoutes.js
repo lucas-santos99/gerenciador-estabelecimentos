@@ -8,6 +8,7 @@ const { limiteAcaoSensivel } = require("../middlewares/limiteRequisicoes");
 const { registrar } = require("./auditoriaRoutes");
 const { TIMEZONE_PADRAO, TIMEZONES_VALIDAS, hojeStrTZ } = require("../utils/fusoHorario");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
+const { listarHistoricoLicenca } = require("../utils/historicoLicenca");
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
@@ -412,6 +413,19 @@ router.get("/:id/liberacoes", async (req, res) => {
     res.json(data || []);
   } catch (err) {
     console.error("LIBERACOES error:", err);
+    res.status(500).json({ error: "Erro ao buscar histórico." });
+  }
+});
+
+// =======================================================
+// HISTÓRICO DE RENOVAÇÕES (pagamentos Pix/cartão + liberações manuais)
+// GET /admin/estabelecimentos/:id/historico-licenca
+// =======================================================
+router.get("/:id/historico-licenca", async (req, res) => {
+  try {
+    res.json(await listarHistoricoLicenca(req.params.id, { completo: true }));
+  } catch (err) {
+    console.error("HISTORICO-LICENCA error:", err);
     res.status(500).json({ error: "Erro ao buscar histórico." });
   }
 });

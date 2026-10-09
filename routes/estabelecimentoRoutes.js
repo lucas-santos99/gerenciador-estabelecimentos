@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db/supabaseAdmin');
 const router = express.Router();
 const authUser = require('../middlewares/authUser');
+const { listarHistoricoLicenca } = require('../utils/historicoLicenca');
 const { registrar } = require('./auditoriaRoutes');
 const { verificarPermissao, temPermissao } = require('../middlewares/verificarPermissao');
 const { negarSeEmContagem } = require('../utils/inventarioTrava');
@@ -260,6 +261,18 @@ router.use(authUser);
 router.param('id', (req, res, next, id) => {
   if (req.user?.mercearia_id && String(id) === String(req.user.mercearia_id)) return next();
   return res.status(403).json({ error: 'Acesso negado a este estabelecimento.' });
+});
+
+// Histórico de renovações da assinatura — só o dono da loja vê (operador não).
+// Sem motivo interno nem quem liberou; pagamentos pendentes não aparecem.
+router.get('/:id/assinatura/historico', async (req, res) => {
+  if (req.user.role === 'operator') return res.status(403).json({ error: 'Só o dono da loja vê o histórico da assinatura.' });
+  try {
+    res.json(await listarHistoricoLicenca(req.params.id, { completo: false }));
+  } catch (e) {
+    console.error('[ERRO] Histórico da assinatura:', e.message);
+    res.status(500).json({ error: 'Erro ao carregar o histórico da assinatura.' });
+  }
 });
 
 /* Estoque mínimo é OPCIONAL: vazio, ausente, 0, negativo ou inválido
