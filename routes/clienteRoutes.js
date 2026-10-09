@@ -21,11 +21,13 @@ const { renovarVencimentos } = require('../utils/vencimentoRecorrente');
 // 42703 (coluna inexistente) e as rotas caem pro comportamento antigo.
 const COLUNA_INEXISTENTE = '42703';
 
-// Recorrência do vencimento: liga/desliga + dia do mês de referência.
+// Recorrência do vencimento: ciclo (semanal | quinzenal | mensal) + dia do
+// mês de referência (usado só no mensal).
 function camposRecorrencia(body) {
-    const rec = body.vencimentoRecorrente === true && !!body.dataVencimento;
-    const dia = rec ? parseInt(String(body.dataVencimento).slice(8, 10), 10) : null;
-    return { vencimento_recorrente: rec, vencimento_dia: Number.isFinite(dia) ? dia : null };
+    const ciclo = ['semanal', 'quinzenal', 'mensal'].includes(body.vencimentoCiclo) && body.dataVencimento
+        ? body.vencimentoCiclo : null;
+    const dia = ciclo === 'mensal' ? parseInt(String(body.dataVencimento).slice(8, 10), 10) : null;
+    return { vencimento_recorrente: !!ciclo, vencimento_ciclo: ciclo, vencimento_dia: Number.isFinite(dia) ? dia : null };
 }
 
 console.log('🔥 CLIENTES ROUTES ATUALIZADO 🔥');
@@ -97,7 +99,7 @@ router.get('/buscar', async (req, res) => {
             .limit(10);
 
         const base = 'id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento';
-        let { data, error } = await buscar(base + ', vencimento_recorrente, vencimento_dia');
+        let { data, error } = await buscar(base + ', vencimento_recorrente, vencimento_dia, vencimento_ciclo');
         if (error && error.code === COLUNA_INEXISTENTE) ({ data, error } = await buscar(base));
 
         if (error) throw error;
@@ -131,7 +133,7 @@ router.get('/', async (req, res) => {
             .order('nome', { ascending: true });
 
         const baseCols = 'id, nome, telefone, cpf, codigo_cliente, permite_fiado, saldo_devedor, limite_credito, data_vencimento, criado_em';
-        let { data, error } = await listar(baseCols + ', vencimento_recorrente, vencimento_dia');
+        let { data, error } = await listar(baseCols + ', vencimento_recorrente, vencimento_dia, vencimento_ciclo');
         if (error && error.code === COLUNA_INEXISTENTE) ({ data, error } = await listar(baseCols));
 
         if (error) throw error;

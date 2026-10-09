@@ -1,6 +1,6 @@
 // ============================================================
 // vencimentoRecorrente.js
-// Vencimento de fiado que se renova sozinho todo mês.
+// Vencimento de fiado que se renova sozinho (semanal, quinzenal ou mensal).
 // Regra: só renova quando o cliente NÃO tem dívida pendente e a data
 // já passou. A renovação é feita na hora em que a lista de clientes é
 // carregada (sem agendador), sempre a partir do dia do vencimento
@@ -28,18 +28,39 @@ function proximoVencimento(dataStr, dia, hojeStr) {
     return null;
 }
 
+function somarDias(dataStr, dias) {
+    const [a, m, d] = String(dataStr).slice(0, 10).split('-').map(Number);
+    return new Date(Date.UTC(a, m - 1, d + dias)).toISOString().slice(0, 10);
+}
+
+// Próximo vencimento de um ciclo fixo em dias (semanal = 7, quinzenal = 14),
+// sempre estritamente depois de "hoje".
+function proximoVencimentoDias(dataStr, passo, hojeStr) {
+    let s = String(dataStr).slice(0, 10);
+    for (let i = 0; i < 3000 && s <= hojeStr; i++) s = somarDias(s, passo);
+    return s > hojeStr ? s : null;
+}
+
+const CICLOS = { semanal: 7, quinzenal: 14, mensal: 'mensal' };
+function cicloDoCliente(c) {
+    return c.vencimento_ciclo || (c.vencimento_recorrente ? 'mensal' : null);
+}
+
 // Renova (no banco e na lista recebida) os clientes com recorrência ligada,
 // sem dívida e com vencimento já passado. Nunca derruba a requisição.
 async function renovarVencimentos(clientes, merceariaId) {
     try {
         const candidatos = (clientes || []).filter(c =>
-            c && c.vencimento_recorrente && c.data_vencimento
+            c && cicloDoCliente(c) && CICLOS[cicloDoCliente(c)] && c.data_vencimento
             && (parseFloat(c.saldo_devedor) || 0) <= 0.01);
         if (!candidatos.length) return;
         const hojeStr = hojeStrTZ(await buscarTimezone(merceariaId));
         for (const c of candidatos) {
             if (String(c.data_vencimento).slice(0, 10) > hojeStr) continue; // ainda não passou
-            const novo = proximoVencimento(c.data_vencimento, c.vencimento_dia, hojeStr);
+            const ciclo = CICLOS[cicloDoCliente(c)];
+            const novo = ciclo === 'mensal'
+                ? proximoVencimento(c.data_vencimento, c.vencimento_dia, hojeStr)
+                : proximoVencimentoDias(c.data_vencimento, ciclo, hojeStr);
             if (!novo) continue;
             const { error } = await supabaseAdmin.from('clientes')
                 .update({ data_vencimento: novo })
@@ -51,4 +72,4 @@ async function renovarVencimentos(clientes, merceariaId) {
     }
 }
 
-module.exports = { proximoVencimento, renovarVencimentos };
+module.exports = { proximoVencimento, proximoVencimentoDias, renovarVencimentos, CICLOS };
