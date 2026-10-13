@@ -108,6 +108,29 @@ function montarAtributos(tipoEstabelecimento, linhas = []) {
 // Quantos atributos contam para o teto da loja: os ligados + os que a loja mexeu.
 const contarParaTeto = (lista) => lista.filter(a => a.ativo || a.personalizado).length;
 
+// Valores EXTRAS de uma variação (os atributos que não são tamanho/cor/gênero), já limpos:
+// só chaves válidas, só texto não vazio, ordenados pela chave. Nunca lança.
+function extrasDaVariacao(v) {
+  const bruto = v && v.atributos && typeof v.atributos === 'object' && !Array.isArray(v.atributos) ? v.atributos : {};
+  const out = {};
+  for (const k of Object.keys(bruto).sort()) {
+    if (!chaveValida(k) || ehLegado(k)) continue;
+    const val = typeof bruto[k] === 'string' || typeof bruto[k] === 'number' ? String(bruto[k]).trim() : '';
+    if (val) out[k] = val;
+  }
+  return out;
+}
+
+// Chaves de atributo preenchidas em ao menos uma variação (legados + extras).
+function chavesUsadas(variacoes) {
+  const usadas = new Set();
+  for (const v of variacoes || []) {
+    for (const k of LEGADOS) if (String(v?.[k] ?? '').trim()) usadas.add(k);
+    for (const k of Object.keys(extrasDaVariacao(v))) usadas.add(k);
+  }
+  return usadas;
+}
+
 // Erro de teto levantado pelos gatilhos do SQL 31 ('TETO:<qual>:<numero>') → mensagem em português.
 function mensagemTeto(error) {
   const m = /TETO:([a-z_]+):(\d+)/.exec(error?.message || '');
@@ -125,5 +148,5 @@ function mensagemTeto(error) {
 module.exports = {
   TETOS_ATRIBUTOS, LEGADOS, NOME_LEGADO, PADRAO_POR_TIPO, MODELOS_PRONTOS,
   normalizarTipoEstabelecimento, chaveDoNome, chaveValida, nomeIgual, ehLegado,
-  montarAtributos, contarParaTeto, mensagemTeto,
+  montarAtributos, contarParaTeto, mensagemTeto, extrasDaVariacao, chavesUsadas,
 };

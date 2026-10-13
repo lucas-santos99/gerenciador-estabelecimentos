@@ -36,11 +36,66 @@ function erroTamanhoVariacoes(variacoesEnviadas = []) {
 // estabelecimentos diferentes o mesmo número pode existir (cada loja só
 // enxerga os próprios produtos e o código interno nunca vai pro catálogo
 // global), então a checagem é sempre por loja.
+// A variação é identificada pela COMBINAÇÃO de todos os atributos preenchidos
+// (tamanho, cor, gênero e os extras da loja).
 function chaveVariacao(v) {
-  return ['tamanho', 'cor', 'genero'].map(k => String(v?.[k] || '').trim().toLowerCase()).join('|');
+  const legados = ['tamanho', 'cor', 'genero'].map(k => String(v?.[k] || '').trim().toLowerCase());
+  const extras = AV.extrasDaVariacao(v);
+  return [...legados, ...Object.keys(extras).map(k => `${k}=${extras[k].toLowerCase()}`)].join('|');
+}
+function variacaoVazia(v) {
+  return ['tamanho', 'cor', 'genero'].every(k => !String(v?.[k] || '').trim()) && Object.keys(AV.extrasDaVariacao(v)).length === 0;
 }
 function rotuloVariacao(v) {
-  return ['tamanho', 'cor', 'genero'].map(k => String(v?.[k] || '').trim()).filter(Boolean).join(' · ') || 'sem nome';
+  const legados = ['tamanho', 'cor', 'genero'].map(k => String(v?.[k] || '').trim());
+  return [...legados, ...Object.values(AV.extrasDaVariacao(v))].filter(Boolean).join(' · ') || 'sem nome';
+}
+
+// Consulta que pede a coluna `atributos`; se ela ainda não existir (42703), repete sem ela.
+async function consultarComAtributos(montar) {
+  let r = await montar(true);
+  if (r.error && r.error.code === '42703') r = await montar(false);
+  return r;
+}
+
+// Confere os atributos EXTRAS enviados nas variações: só atributos que a loja conhece,
+// valores curtos, JSON pequeno e no máximo N atributos diferentes por produto.
+// Só consulta o banco quando alguma variação traz atributo extra.
+async function erroAtributosVariacoes(mercearia_id, variacoes) {
+  const lista = Array.isArray(variacoes) ? variacoes : [];
+  let temExtra = false;
+  for (const v of lista) {
+    if (v && v.atributos !== undefined && v.atributos !== null) {
+      if (typeof v.atributos !== 'object' || Array.isArray(v.atributos)) return 'Atributos da variação em formato inválido.';
+      if (Object.keys(v.atributos).length) temExtra = true;
+    }
+  }
+  if (temExtra) {
+    let conhecidos;
+    try {
+      const r = await carregarAtributosLoja(mercearia_id);
+      conhecidos = new Set(r.atributos.map(a => a.chave));
+    } catch (e) {
+      console.error('[ERRO] atributos da loja (validação de variações):', e.message);
+      return 'Não foi possível conferir os atributos agora. Tente de novo.';
+    }
+    for (const v of lista) {
+      for (const [k, bruto] of Object.entries(v?.atributos || {})) {
+        if (!AV.chaveValida(k) || AV.ehLegado(k)) return 'Atributo inválido na variação.';
+        if (typeof bruto !== 'string' && typeof bruto !== 'number' && bruto !== null && bruto !== '') return 'Valor de atributo inválido na variação.';
+        if (!conhecidos.has(k)) return 'Há um atributo que não existe mais na loja. Reabra o produto e tente de novo.';
+        if (String(bruto ?? '').trim().length > LIMITES.VARIACAO) return `Cada valor de atributo pode ter no máximo ${LIMITES.VARIACAO} caracteres.`;
+      }
+      if (Buffer.byteLength(JSON.stringify(AV.extrasDaVariacao(v)), 'utf8') > AV.TETOS_ATRIBUTOS.JSON_BYTES) {
+        return 'Os atributos de uma variação ficaram grandes demais.';
+      }
+    }
+  }
+  const usadas = AV.chavesUsadas(lista);
+  if (usadas.size > AV.TETOS_ATRIBUTOS.ATRIBUTOS_PRODUTO) {
+    return `Este produto usa ${usadas.size} atributos nas variações, mas o máximo é ${AV.TETOS_ATRIBUTOS.ATRIBUTOS_PRODUTO}. Deixe em branco algum atributo que não precisa.`;
+  }
+  return null;
 }
 
 async function erroCodigosEVariacoes(mercearia_id, produtoIdAtual, codigo_barras, tem_variacoes, variacoes) {
@@ -51,8 +106,8 @@ async function erroCodigosEVariacoes(mercearia_id, produtoIdAtual, codigo_barras
   const vistas = new Map();
   for (const v of lista) {
     const k = chaveVariacao(v);
-    if (k === '||') continue; // variação vazia já é barrada pelo formulário
-    if (vistas.has(k)) return `Há duas variações iguais (${rotuloVariacao(v)}). Mude o tamanho, a cor ou o gênero de uma delas.`;
+    if (variacaoVazia(v)) continue; // variação vazia já é barrada pelo formulário
+    if (vistas.has(k)) return `Há duas variações iguais (${rotuloVariacao(v)}). Mude algum atributo de uma delas.`;
     vistas.set(k, true);
   }
 
@@ -79,10 +134,12 @@ async function erroCodigosEVariacoes(mercearia_id, produtoIdAtual, codigo_barras
   if (emProduto && emProduto.length) {
     return `O código de barras ${emProduto[0].codigo_barras} já está cadastrado no produto "${emProduto[0].nome}".`;
   }
-  let qVar = db.from('produto_variacoes').select('codigo_barras, tamanho, cor, genero, produtos!inner(nome)')
-    .eq('mercearia_id', mercearia_id).eq('ativo', true).in('codigo_barras', valores).limit(1);
-  if (produtoIdAtual) qVar = qVar.neq('produto_id', produtoIdAtual);
-  const { data: emVariacao } = await qVar;
+  const { data: emVariacao } = await consultarComAtributos((comAtr) => {
+    let qVar = db.from('produto_variacoes').select(`codigo_barras, tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}produtos!inner(nome)`)
+      .eq('mercearia_id', mercearia_id).eq('ativo', true).in('codigo_barras', valores).limit(1);
+    if (produtoIdAtual) qVar = qVar.neq('produto_id', produtoIdAtual);
+    return qVar;
+  });
   if (emVariacao && emVariacao.length) {
     const v = emVariacao[0];
     return `O código de barras ${v.codigo_barras} já está cadastrado na variação ${rotuloVariacao(v)} do produto "${v.produtos?.nome || ''}".`;
@@ -139,6 +196,20 @@ async function variacoesComEstoqueAlterado(produtoId, variacoesEnviadas = []) {
   });
 }
 
+// Grava (id = atualiza, sem id = cria) uma variação. Se a coluna `atributos` ainda não existir
+// no banco (42703), repete sem ela — as colunas tamanho/cor/gênero continuam funcionando.
+async function gravarVariacao(payload, id) {
+  const executar = (p) => (id
+    ? db.from('produto_variacoes').update(p).eq('id', id).select().single()
+    : db.from('produto_variacoes').insert(p).select().single());
+  let r = await executar(payload);
+  if (r.error && r.error.code === '42703') {
+    const { atributos, ...semAtributos } = payload; // eslint-disable-line no-unused-vars
+    r = await executar(semAtributos);
+  }
+  return r;
+}
+
 async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas = [], ctx = null) {
   const { data: existentes } = await db
     .from('produto_variacoes')
@@ -176,6 +247,7 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
       tamanho:        v.tamanho?.trim() || null,
       cor:            v.cor?.trim() || null,
       genero:         v.genero?.trim() || null,
+      atributos:      AV.extrasDaVariacao(v),
       codigo_barras:  v.codigo_barras?.trim() || null,
       preco_custo:    v.preco_custo !== '' && v.preco_custo != null ? parseFloat(v.preco_custo) : null,
       preco_venda:    v.preco_venda !== '' && v.preco_venda != null ? parseFloat(v.preco_venda) : null,
@@ -186,7 +258,7 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
       ativo: true,
     };
     if (v.id && idsExistentes.has(v.id)) {
-      const { data: linha, error: errUpd } = await db.from('produto_variacoes').update(payload).eq('id', v.id).select().single();
+      const { data: linha, error: errUpd } = await gravarVariacao(payload, v.id);
       if (errUpd) console.error(`[ERRO] variação ${v.id} (produto ${produtoId}) não atualizada:`, errUpd.message);
       if (linha) resultado.push(linha);
       // Estoque de variação alterado no cadastro → fica no histórico, com o motivo informado
@@ -199,7 +271,7 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
         });
       }
     } else {
-      const { data: linha, error: errIns } = await db.from('produto_variacoes').insert(payload).select().single();
+      const { data: linha, error: errIns } = await gravarVariacao(payload, null);
       if (errIns) console.error(`[ERRO] variação nova (produto ${produtoId}) não criada:`, errIns.message);
       if (linha) resultado.push(linha);
       // Variação nova que já nasce com estoque → entrada de estoque inicial
@@ -220,6 +292,7 @@ async function sincronizarVariacoes(produtoId, mercearia_id, variacoesEnviadas =
     if (v.tamanho?.trim()) novosPresets.push({ tipo: 'tamanho', valor: v.tamanho.trim() });
     if (v.cor?.trim())     novosPresets.push({ tipo: 'cor',     valor: v.cor.trim() });
     if (v.genero?.trim())  novosPresets.push({ tipo: 'genero',  valor: v.genero.trim() });
+    for (const [k, val] of Object.entries(AV.extrasDaVariacao(v))) novosPresets.push({ tipo: k, valor: val });
   });
   for (const p of novosPresets) {
     await db.from('opcoes_variacao')
@@ -1213,7 +1286,7 @@ router.get('/:id/produtos', async (req, res) => {
 
     try {
 
-        const { data, error } = await db
+        const { data, error } = await consultarComAtributos((comAtr) => db
             .from('produtos')
             .select(`
                 id,
@@ -1231,10 +1304,10 @@ router.get('/:id/produtos', async (req, res) => {
                 tem_variacoes,
                 imagem_url,
                 categorias ( nome ),
-                produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, imagem_url, imagem_origem, ativo )
+                produto_variacoes ( id, tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, imagem_url, imagem_origem, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
-            .order('nome', { ascending: true });
+            .order('nome', { ascending: true }));
 
         if (error) throw error;
 
@@ -1664,7 +1737,7 @@ router.post('/:id/produtos', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.
     const erroLimite = await erroTeto(db, 'produtos', estabelecimentoId);
     if (erroLimite) return res.status(400).json({ error: erroLimite });
 
-    const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []);
+    const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []) || (tem_variacoes === true || tem_variacoes === 'true' ? await erroAtributosVariacoes(estabelecimentoId, variacoes) : null);
     if (erroVariacoes) return res.status(400).json({ error: erroVariacoes });
 
     try {
@@ -1806,7 +1879,7 @@ router.put('/:id/produtos/:produtoId', verificarPermissao([PERMISSOES.ESTOQUE, P
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
-    const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []);
+    const erroVariacoes = erroTamanhoVariacoes(Array.isArray(variacoes) ? variacoes : []) || (tem_variacoes === true || tem_variacoes === 'true' ? await erroAtributosVariacoes(estabelecimentoId, variacoes) : null);
     if (erroVariacoes) return res.status(400).json({ error: erroVariacoes });
 
     try {
