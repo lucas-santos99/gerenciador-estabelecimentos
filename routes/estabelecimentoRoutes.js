@@ -835,11 +835,18 @@ function limparTamanhos(lista) {
 
 router.get('/:id/modelos-variacao', async (req, res) => {
     try {
-        const { data, error } = await db.from('modelos_variacao')
-            .select('id, nome, tamanhos')
+        let { data, error } = await db.from('modelos_variacao')
+            .select('id, nome, tamanhos, modelo_base')
             .eq('mercearia_id', req.params.id)
             .order('criado_em', { ascending: true })
             .limit(100);
+        if (error && error.code === '42703') { // antes do SQL 29 (sem a coluna modelo_base)
+            ({ data, error } = await db.from('modelos_variacao')
+                .select('id, nome, tamanhos')
+                .eq('mercearia_id', req.params.id)
+                .order('criado_em', { ascending: true })
+                .limit(100));
+        }
         if (error) {
             if (tabelaAusente(error)) return res.json([]); // antes do SQL 28
             throw error;
@@ -881,6 +888,79 @@ router.post('/:id/modelos-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PER
     } catch (error) {
         console.error('[ERRO] POST /:id/modelos-variacao:', error.message);
         res.status(500).json({ error: 'Erro ao salvar o tipo de produto.' });
+    }
+});
+
+// Tamanhos extras de um tipo pronto (ex.: 56 em Calçados). Guarda a lista completa de
+// extras; lista vazia remove o registro. (SQL 29)
+router.put('/:id/modelos-variacao/base/:baseId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const baseId = String(req.params.baseId || '');
+    const nome = String(req.body?.nome ?? '').trim();
+    const tamanhos = limparTamanhos(req.body?.tamanhos);
+    if (!/^[a-z][a-z-]{0,19}$/.test(baseId)) return res.status(400).json({ error: 'Tipo inválido.' });
+    if (!nome || nome.length > 40) return res.status(400).json({ error: 'Nome do tipo inválido.' });
+    try {
+        const { data: atual, error: eBusca } = await db.from('modelos_variacao').select('id')
+            .eq('mercearia_id', estabelecimentoId).eq('modelo_base', baseId).maybeSingle();
+        if (eBusca) {
+            if (tabelaAusente(eBusca) || eBusca.code === '42703') return res.status(503).json({ error: 'Recurso ainda não liberado no banco. Fale com o suporte.' });
+            throw eBusca;
+        }
+        let resultado = { id: atual?.id || null, nome, tamanhos, modelo_base: baseId };
+        if (!tamanhos.length) {
+            if (atual) await db.from('modelos_variacao').delete().eq('id', atual.id).eq('mercearia_id', estabelecimentoId);
+            resultado.id = null;
+        } else if (atual) {
+            const { error } = await db.from('modelos_variacao').update({ tamanhos }).eq('id', atual.id).eq('mercearia_id', estabelecimentoId);
+            if (error) throw error;
+        } else {
+            const { data, error } = await db.from('modelos_variacao')
+                .insert({ mercearia_id: estabelecimentoId, nome, tamanhos, modelo_base: baseId, criado_por_nome: req.user.nome || null })
+                .select('id').single();
+            if (error) {
+                if (error.code === '23505') return res.status(409).json({ error: 'Já existe um tipo com esse nome.' });
+                throw error;
+            }
+            resultado.id = data.id;
+        }
+        registrar({
+            mercearia_id: estabelecimentoId,
+            operador_id:  req.user.role === 'operator' ? req.user.id : null,
+            usuario_nome: req.user.nome, usuario_email: req.user.email,
+            modulo: 'estoque', acao: 'modelo_variacao_criado',
+            descricao: `Tamanhos extras do tipo "${nome}": ${tamanhos.length ? tamanhos.join(', ') : 'nenhum'}`,
+            meta: { modelo_base: baseId, tamanhos },
+        });
+        res.json(resultado);
+    } catch (error) {
+        console.error('[ERRO] PUT /:id/modelos-variacao/base:', error.message);
+        res.status(500).json({ error: 'Erro ao salvar o tamanho no tipo.' });
+    }
+});
+
+// Troca a lista de tamanhos de um tipo criado pelo comerciante.
+router.put('/:id/modelos-variacao/:modeloId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+    const { id: estabelecimentoId, modeloId } = req.params;
+    const tamanhos = limparTamanhos(req.body?.tamanhos);
+    if (!tamanhos.length) return res.status(400).json({ error: 'O tipo precisa ter pelo menos um tamanho.' });
+    try {
+        const { data, error } = await db.from('modelos_variacao').update({ tamanhos })
+            .eq('id', modeloId).eq('mercearia_id', estabelecimentoId).select('id, nome, tamanhos').maybeSingle();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Tipo não encontrado.' });
+        registrar({
+            mercearia_id: estabelecimentoId,
+            operador_id:  req.user.role === 'operator' ? req.user.id : null,
+            usuario_nome: req.user.nome, usuario_email: req.user.email,
+            modulo: 'estoque', acao: 'modelo_variacao_criado',
+            descricao: `Tamanhos do tipo "${data.nome}" alterados: ${tamanhos.join(', ')}`,
+            meta: { modelo_id: modeloId, tamanhos },
+        });
+        res.json(data);
+    } catch (error) {
+        console.error('[ERRO] PUT /:id/modelos-variacao/:modeloId:', error.message);
+        res.status(500).json({ error: 'Erro ao salvar os tamanhos do tipo.' });
     }
 });
 
