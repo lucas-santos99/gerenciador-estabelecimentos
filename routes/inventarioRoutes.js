@@ -595,7 +595,7 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
   const mid = mercearia(req);
   if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
-  const { produto_id, tipo, quantidade, fornecedor_id } = req.body;
+  const { produto_id, produto_variacao_id, tipo, quantidade, fornecedor_id } = req.body;
   let { motivo } = req.body;
 
   const tiposValidos = ['entrada', 'saida', 'perda', 'devolucao', 'correcao'];
@@ -627,14 +627,31 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
 
     const { data: produto } = await db
       .from('produtos')
-      .select('id, nome, marca, unidade_medida, estoque_atual, categoria_id, categorias(nome)')
+      .select('id, nome, marca, unidade_medida, estoque_atual, categoria_id, tem_variacoes, categorias(nome)')
       .eq('id', produto_id)
       .eq('mercearia_id', mid)
       .single();
 
     if (!produto) return res.status(404).json({ error: 'Produto não encontrado' });
 
-    const qtdAntes = parseFloat(produto.estoque_atual) || 0;
+    // Produto com variações: o estoque está em cada variação, então o ajuste precisa dizer qual (13/10/2026)
+    let variacao = null;
+    let rotulo = '';
+    if (produto.tem_variacoes && !produto_variacao_id) {
+      return res.status(400).json({ error: 'Este produto tem variações. Escolha qual variação ajustar.' });
+    }
+    if (produto_variacao_id) {
+      const { data: vs } = await RV.selecionarVariacoes((comAtr) => db.from('produto_variacoes')
+        .select(`id, produto_id, estoque_atual, ativo, tamanho, cor, genero${comAtr ? ', atributos' : ''}`)
+        .eq('id', produto_variacao_id).eq('produto_id', produto_id).eq('mercearia_id', mid).limit(1));
+      variacao = vs && vs[0];
+      if (!variacao) return res.status(404).json({ error: 'Variação não encontrada' });
+      if (variacao.ativo === false) return res.status(400).json({ error: 'Esta variação está inativa.' });
+      rotulo = AV.rotuloDaVariacao(variacao, await RV.atributosDaLoja(mid));
+    }
+    const nomeAjuste = RV.nomeComVariacao(produto.nome, rotulo);
+
+    const qtdAntes = parseFloat(variacao ? variacao.estoque_atual : produto.estoque_atual) || 0;
     const qtd      = parseFloat(quantidade);
     let   qtdDepois;
 
@@ -647,12 +664,10 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
       qtdDepois = qtd; // correção define o valor absoluto
     }
 
-    // Atualizar estoque
-    const { error: updErr } = await db
-      .from('produtos')
-      .update({ estoque_atual: qtdDepois })
-      .eq('id', produto_id)
-      .eq('mercearia_id', mid);
+    // Atualizar estoque (da variação, quando for o caso)
+    const { error: updErr } = variacao
+      ? await db.from('produto_variacoes').update({ estoque_atual: qtdDepois }).eq('id', variacao.id).eq('mercearia_id', mid)
+      : await db.from('produtos').update({ estoque_atual: qtdDepois }).eq('id', produto_id).eq('mercearia_id', mid);
 
     if (updErr) throw updErr;
 
@@ -660,6 +675,7 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
     await db.from('movimentacoes_estoque').insert({
       mercearia_id:           mid,
       produto_id:             produto.id,
+      produto_variacao_id:    variacao ? variacao.id : null,
       produto_nome:           produto.nome,
       produto_marca:          produto.marca,
       unidade_medida:         produto.unidade_medida,
@@ -683,13 +699,13 @@ router.post('/ajuste-rapido', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
       usuario_nome:  req.user.nome,
       usuario_email: req.user.email,
       modulo: 'inventario', acao: 'ajuste_estoque',
-      descricao: `${tipoLabel} manual: "${produto.nome}" — ${fmtQtd(qtdAntes, produto.unidade_medida)} → ${fmtQtd(qtdDepois, produto.unidade_medida)}`,
-      meta: { produto_id, tipo, quantidade: qtd, qtdAntes, qtdDepois, motivo },
+      descricao: `${tipoLabel} manual: "${nomeAjuste}" — ${fmtQtd(qtdAntes, produto.unidade_medida)} → ${fmtQtd(qtdDepois, produto.unidade_medida)}`,
+      meta: { produto_id, produto_variacao_id: variacao ? variacao.id : undefined, tipo, quantidade: qtd, qtdAntes, qtdDepois, motivo },
     });
 
     res.json({
       success: true,
-      produto_nome:       produto.nome,
+      produto_nome:       nomeAjuste,
       quantidade_anterior: qtdAntes,
       quantidade_posterior: qtdDepois,
       diferenca:          qtdDepois - qtdAntes,
