@@ -835,21 +835,18 @@ function limparTamanhos(lista) {
 
 router.get('/:id/modelos-variacao', async (req, res) => {
     try {
-        let { data, error } = await db.from('modelos_variacao')
-            .select('id, nome, tamanhos, modelo_base')
-            .eq('mercearia_id', req.params.id)
-            .order('criado_em', { ascending: true })
-            .limit(100);
-        if (error && error.code === '42703') { // antes do SQL 29 (sem a coluna modelo_base)
-            ({ data, error } = await db.from('modelos_variacao')
-                .select('id, nome, tamanhos')
-                .eq('mercearia_id', req.params.id)
-                .order('criado_em', { ascending: true })
-                .limit(100));
-        }
+        const consulta = (cols) => db.from('modelos_variacao').select(cols)
+            .eq('mercearia_id', req.params.id).order('criado_em', { ascending: true }).limit(100);
+        let { data, error } = await consulta('id, nome, tamanhos, modelo_base, visivel');
+        if (error && error.code === '42703') ({ data, error } = await consulta('id, nome, tamanhos, modelo_base')); // antes do SQL 30
+        if (error && error.code === '42703') ({ data, error } = await consulta('id, nome, tamanhos'));              // antes do SQL 29
         if (error) {
-            if (tabelaAusente(error)) return res.json([]); // antes do SQL 28
-            throw error;
+            if (tabelaAusente(error)) data = []; // antes do SQL 28
+            else throw error;
+        }
+        if (req.query.completo) {
+            const { data: loja } = await db.from('mercearias').select('tipo_estabelecimento').eq('id', req.params.id).maybeSingle();
+            return res.json({ tipo_estabelecimento: loja?.tipo_estabelecimento || null, modelos: data || [] });
         }
         res.json(data || []);
     } catch (error) {
@@ -891,32 +888,41 @@ router.post('/:id/modelos-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PER
     }
 });
 
-// Tamanhos extras de um tipo pronto (ex.: 56 em Calçados). Guarda a lista completa de
-// extras; lista vazia remove o registro. (SQL 29)
+// Ajustes de um tipo pronto para esta loja: tamanhos extras (ex.: 56 em Calçados) e se o
+// tipo aparece ou não (visivel: true/false/null = padrão do tipo de estabelecimento). (SQL 29/30)
 router.put('/:id/modelos-variacao/base/:baseId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const estabelecimentoId = req.params.id;
     const baseId = String(req.params.baseId || '');
     const nome = String(req.body?.nome ?? '').trim();
-    const tamanhos = limparTamanhos(req.body?.tamanhos);
     if (!/^[a-z][a-z-]{0,19}$/.test(baseId)) return res.status(400).json({ error: 'Tipo inválido.' });
     if (!nome || nome.length > 40) return res.status(400).json({ error: 'Nome do tipo inválido.' });
+    const mexeuTamanhos = req.body?.tamanhos !== undefined;
+    const mexeuVisivel = req.body?.visivel !== undefined;
+    if (mexeuVisivel && ![true, false, null].includes(req.body.visivel)) return res.status(400).json({ error: 'Valor inválido.' });
     try {
-        const { data: atual, error: eBusca } = await db.from('modelos_variacao').select('id')
+        let { data: atual, error: eBusca } = await db.from('modelos_variacao').select('id, tamanhos, visivel')
             .eq('mercearia_id', estabelecimentoId).eq('modelo_base', baseId).maybeSingle();
+        if (eBusca && eBusca.code === '42703') { // sem a coluna visivel (antes do SQL 30)
+            if (mexeuVisivel) return res.status(503).json({ error: 'Recurso ainda não liberado no banco. Fale com o suporte.' });
+            ({ data: atual, error: eBusca } = await db.from('modelos_variacao').select('id, tamanhos')
+                .eq('mercearia_id', estabelecimentoId).eq('modelo_base', baseId).maybeSingle());
+        }
         if (eBusca) {
             if (tabelaAusente(eBusca) || eBusca.code === '42703') return res.status(503).json({ error: 'Recurso ainda não liberado no banco. Fale com o suporte.' });
             throw eBusca;
         }
-        let resultado = { id: atual?.id || null, nome, tamanhos, modelo_base: baseId };
-        if (!tamanhos.length) {
+        const tamanhos = mexeuTamanhos ? limparTamanhos(req.body.tamanhos) : (atual?.tamanhos || []);
+        const visivel = mexeuVisivel ? req.body.visivel : (atual?.visivel ?? null);
+        const resultado = { id: atual?.id || null, nome, tamanhos, visivel, modelo_base: baseId };
+        if (!tamanhos.length && visivel === null) {
             if (atual) await db.from('modelos_variacao').delete().eq('id', atual.id).eq('mercearia_id', estabelecimentoId);
             resultado.id = null;
         } else if (atual) {
-            const { error } = await db.from('modelos_variacao').update({ tamanhos }).eq('id', atual.id).eq('mercearia_id', estabelecimentoId);
+            const { error } = await db.from('modelos_variacao').update({ tamanhos, ...(mexeuVisivel ? { visivel } : {}) }).eq('id', atual.id).eq('mercearia_id', estabelecimentoId);
             if (error) throw error;
         } else {
             const { data, error } = await db.from('modelos_variacao')
-                .insert({ mercearia_id: estabelecimentoId, nome, tamanhos, modelo_base: baseId, criado_por_nome: req.user.nome || null })
+                .insert({ mercearia_id: estabelecimentoId, nome, tamanhos, modelo_base: baseId, ...(mexeuVisivel ? { visivel } : {}), criado_por_nome: req.user.nome || null })
                 .select('id').single();
             if (error) {
                 if (error.code === '23505') return res.status(409).json({ error: 'Já existe um tipo com esse nome.' });
@@ -929,13 +935,15 @@ router.put('/:id/modelos-variacao/base/:baseId', verificarPermissao([PERMISSOES.
             operador_id:  req.user.role === 'operator' ? req.user.id : null,
             usuario_nome: req.user.nome, usuario_email: req.user.email,
             modulo: 'estoque', acao: 'modelo_variacao_criado',
-            descricao: `Tamanhos extras do tipo "${nome}": ${tamanhos.length ? tamanhos.join(', ') : 'nenhum'}`,
-            meta: { modelo_base: baseId, tamanhos },
+            descricao: mexeuVisivel
+                ? `Tipo de produto "${nome}" ${visivel === false ? 'tirado da lista' : visivel === true ? 'adicionado à lista' : 'voltou ao padrão'}`
+                : `Tamanhos extras do tipo "${nome}": ${tamanhos.length ? tamanhos.join(', ') : 'nenhum'}`,
+            meta: { modelo_base: baseId, tamanhos, visivel },
         });
         res.json(resultado);
     } catch (error) {
         console.error('[ERRO] PUT /:id/modelos-variacao/base:', error.message);
-        res.status(500).json({ error: 'Erro ao salvar o tamanho no tipo.' });
+        res.status(500).json({ error: 'Erro ao salvar o tipo.' });
     }
 });
 
