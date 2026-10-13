@@ -12,12 +12,14 @@ const { contemPalavraProibida } = require('../utils/filtroPalavroes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const { erroTeto } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
+const AV = require('../utils/atributosVariacao');
+const { limitarFrequencia } = require('../utils/limiteFrequencia');
 
 // Valida o tamanho dos campos de texto livre de cada variação enviada
 // (tamanho/cor/gênero/código de barras) antes de gravar no banco — mesma
 // defesa aplicada aos campos do produto "pai".
 function erroTamanhoVariacoes(variacoesEnviadas = []) {
-  if (variacoesEnviadas.length > 200) return 'Variações demais neste produto (máximo 200).';
+  if (variacoesEnviadas.length > AV.TETOS_ATRIBUTOS.VARIACOES_PRODUTO) return `Variações demais neste produto (máximo ${AV.TETOS_ATRIBUTOS.VARIACOES_PRODUTO}).`;
   for (const v of variacoesEnviadas) {
     const erro = validarTamanhos(
       { tamanho: v.tamanho, cor: v.cor, genero: v.genero, codigo_barras: v.codigo_barras },
@@ -710,19 +712,15 @@ router.get('/:id/opcoes-variacao', async (req, res) => {
 
         // Modo com id — usado pela tela de gerenciar (precisa do id pra
         // poder apagar um valor específico)
-        if (comId) {
-            return res.status(200).json({
-                tamanho: (data || []).filter(o => o.tipo === 'tamanho').map(o => ({ id: o.id, valor: o.valor })),
-                cor:     (data || []).filter(o => o.tipo === 'cor').map(o => ({ id: o.id, valor: o.valor })),
-                genero:  (data || []).filter(o => o.tipo === 'genero').map(o => ({ id: o.id, valor: o.valor })),
-            });
-        }
-
-        res.status(200).json({
-            tamanho: (data || []).filter(o => o.tipo === 'tamanho').map(o => o.valor),
-            cor:     (data || []).filter(o => o.tipo === 'cor').map(o => o.valor),
-            genero:  (data || []).filter(o => o.tipo === 'genero').map(o => o.valor),
-        });
+        // Sempre devolve tamanho/cor/genero (mesmo vazios, como antes) + uma lista
+        // por cada atributo personalizado que a loja tiver (SQL 31).
+        const agrupar = (mapear) => {
+            const out = { tamanho: [], cor: [], genero: [] };
+            for (const o of data || []) (out[o.tipo] = out[o.tipo] || []).push(mapear(o));
+            return out;
+        };
+        if (comId) return res.status(200).json(agrupar(o => ({ id: o.id, valor: o.valor })));
+        res.status(200).json(agrupar(o => o.valor));
     } catch (error) {
         console.error(`[ERRO] GET /:id/opcoes-variacao:`, error.message);
         res.status(500).json({ error: 'Erro ao buscar opções de variação.' });
@@ -732,14 +730,16 @@ router.get('/:id/opcoes-variacao', async (req, res) => {
 // --- Rota POST: /:id/opcoes-variacao — adiciona um preset manualmente
 // (a tela de gerenciar usa essa; a criação "automática" ao digitar um
 // valor novo numa variação usa upsert direto, dentro de sincronizarVariacoes) ---
-router.post('/:id/opcoes-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+router.post('/:id/opcoes-variacao', limitarFrequencia('opcoes-variacao', 150), verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const estabelecimentoId = req.params.id;
-    const { tipo, valor } = req.body;
+    const { tipo } = req.body;
+    const valor = typeof req.body.valor === 'string' ? req.body.valor : '';
 
-    if (!['tamanho', 'cor', 'genero'].includes(tipo)) {
-        return res.status(400).json({ error: "Tipo inválido (use 'tamanho', 'cor' ou 'genero')." });
+    // tamanho/cor/genero sempre valem; os outros precisam ser um atributo da loja (SQL 31)
+    if (!AV.chaveValida(tipo)) {
+        return res.status(400).json({ error: 'Atributo inválido.' });
     }
-    if (!valor || !valor.trim()) {
+    if (!valor.trim()) {
         return res.status(400).json({ error: 'Informe um valor.' });
     }
 
@@ -747,6 +747,13 @@ router.post('/:id/opcoes-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PERM
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
 
     try {
+        if (!AV.ehLegado(tipo)) {
+            const { atributos } = await carregarAtributosLoja(estabelecimentoId);
+            if (!atributos.some(a => a.chave === tipo)) return res.status(400).json({ error: 'Esse atributo não existe nesta loja.' });
+        }
+        const erroLimite = await erroTetoValores(estabelecimentoId, tipo);
+        if (erroLimite) return res.status(409).json({ error: erroLimite });
+
         const { data, error } = await db
             .from('opcoes_variacao')
             .insert({ mercearia_id: estabelecimentoId, tipo, valor: valor.trim() })
@@ -755,6 +762,9 @@ router.post('/:id/opcoes-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PERM
 
         if (error) {
             if (error.code === '23505') return res.status(409).json({ error: 'Esse valor já está cadastrado.' });
+            const teto = AV.mensagemTeto(error);
+            if (teto) return res.status(409).json({ error: teto });
+            if (error.code === '23514') return res.status(503).json({ error: 'Esta função ainda será liberada: falta atualizar o banco de dados. Avise o suporte.' }); // antes do SQL 31
             throw error;
         }
 
@@ -779,7 +789,7 @@ router.post('/:id/opcoes-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PERM
 // Remove um preset da lista de sugestões. Não afeta produtos que já
 // usam esse valor — tamanho/cor ficam gravados como texto simples em
 // cada variação, não como referência a essa tabela.
-router.delete('/:id/opcoes-variacao/:optId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+router.delete('/:id/opcoes-variacao/:optId', limitarFrequencia('opcoes-variacao', 150), verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const { id: estabelecimentoId, optId } = req.params;
     try {
         // Busca antes de apagar só pra descrever direito na auditoria
@@ -813,6 +823,206 @@ router.delete('/:id/opcoes-variacao/:optId', verificarPermissao([PERMISSOES.ESTO
     } catch (error) {
         console.error(`[ERRO] DELETE /:id/opcoes-variacao/:optId:`, error.message);
         res.status(500).json({ error: 'Erro ao remover opção.' });
+    }
+});
+
+// ── Atributos de variação por loja (SQL 31, 13/10/2026) ─────────────────────
+// Cada loja define os atributos que seus produtos variam (tamanho, cor, personagem,
+// nº de peças…). Regras e padrões por tipo de estabelecimento: utils/atributosVariacao.js.
+// "Apagar" um atributo = ocultar (ativo=false): o que já foi gravado nas variações fica.
+// Antes do SQL 31 a tabela não existe: o GET devolve só os padrões e o resto responde 503.
+async function carregarAtributosLoja(estabelecimentoId) {
+    const { data: loja } = await db.from('mercearias').select('tipo_estabelecimento').eq('id', estabelecimentoId).maybeSingle();
+    let linhas = [];
+    let tabelaPronta = true;
+    const { data, error } = await db.from('atributos_variacao')
+        .select('chave, nome, ordem, ativo').eq('mercearia_id', estabelecimentoId).limit(100);
+    if (error) {
+        if (tabelaAusente(error)) tabelaPronta = false;
+        else throw error;
+    } else {
+        linhas = data || [];
+    }
+    return {
+        tipo_estabelecimento: loja?.tipo_estabelecimento || null,
+        atributos: AV.montarAtributos(loja?.tipo_estabelecimento, linhas),
+        tabelaPronta,
+    };
+}
+
+// Teto de valores sugeridos (por atributo e na loja). Se a contagem falhar, não trava (como erroTeto).
+async function erroTetoValores(estabelecimentoId, tipo) {
+    try {
+        const { count: noTipo, error: e1 } = await db.from('opcoes_variacao')
+            .select('id', { count: 'exact', head: true }).eq('mercearia_id', estabelecimentoId).eq('tipo', tipo);
+        if (!e1 && (noTipo || 0) >= AV.TETOS_ATRIBUTOS.VALORES_ATRIBUTO) {
+            return AV.mensagemTeto({ message: `TETO:valores_atributo:${AV.TETOS_ATRIBUTOS.VALORES_ATRIBUTO}` });
+        }
+        const { count: naLoja, error: e2 } = await db.from('opcoes_variacao')
+            .select('id', { count: 'exact', head: true }).eq('mercearia_id', estabelecimentoId);
+        if (!e2 && (naLoja || 0) >= AV.TETOS_ATRIBUTOS.VALORES_LOJA) {
+            return AV.mensagemTeto({ message: `TETO:valores_loja:${AV.TETOS_ATRIBUTOS.VALORES_LOJA}` });
+        }
+    } catch (e) {
+        console.error('[TETO] contagem de opcoes_variacao falhou:', e.message);
+    }
+    return null;
+}
+
+const PERMISSAO_ATRIBUTOS = [[PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nos atributos de variação.' }];
+const MSG_SQL31_PENDENTE = 'Esta função ainda será liberada: falta atualizar o banco de dados. Avise o suporte.';
+
+function auditarAtributo(req, acao, descricao, meta) {
+    registrar({
+        mercearia_id: req.params.id,
+        operador_id: req.user.role === 'operator' ? req.user.id : null,
+        usuario_nome: req.user.nome,
+        usuario_email: req.user.email,
+        modulo: 'estoque', acao, descricao, meta,
+    });
+}
+
+// Valida o nome digitado; devolve { nome } ou { erro }.
+function nomeAtributoValido(bruto) {
+    const nome = typeof bruto === 'string' ? bruto.trim().replace(/\s+/g, ' ') : '';
+    if (!nome) return { erro: 'Informe o nome do atributo.' };
+    if (nome.length > AV.TETOS_ATRIBUTOS.NOME_ATRIBUTO) return { erro: `O nome do atributo pode ter no máximo ${AV.TETOS_ATRIBUTOS.NOME_ATRIBUTO} caracteres.` };
+    if (contemPalavraProibida(nome)) return { erro: 'Esse nome não é permitido.' };
+    return { nome };
+}
+
+router.get('/:id/atributos-variacao', async (req, res) => {
+    try {
+        const r = await carregarAtributosLoja(req.params.id);
+        res.json({
+            tipo_estabelecimento: r.tipo_estabelecimento,
+            pronto: r.tabelaPronta, // false = SQL 31 ainda não rodou (só leitura dos padrões)
+            atributos: r.atributos,
+            modelos_prontos: AV.MODELOS_PRONTOS,
+            limites: {
+                atributos_loja: AV.TETOS_ATRIBUTOS.ATRIBUTOS_LOJA,
+                atributos_produto: AV.TETOS_ATRIBUTOS.ATRIBUTOS_PRODUTO,
+                valores_atributo: AV.TETOS_ATRIBUTOS.VALORES_ATRIBUTO,
+                variacoes_produto: AV.TETOS_ATRIBUTOS.VARIACOES_PRODUTO,
+                nome_atributo: AV.TETOS_ATRIBUTOS.NOME_ATRIBUTO,
+            },
+        });
+    } catch (error) {
+        console.error('[ERRO] GET /:id/atributos-variacao:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar os atributos de variação.' });
+    }
+});
+
+// Cria um atributo da loja (ex.: "Personagem/tema"). A chave é gerada do nome e nunca muda.
+router.post('/:id/atributos-variacao', limitarFrequencia('atributos-variacao', 30), verificarPermissao(...PERMISSAO_ATRIBUTOS), async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const v = nomeAtributoValido(req.body?.nome);
+    if (v.erro) return res.status(400).json({ error: v.erro });
+
+    try {
+        const r = await carregarAtributosLoja(estabelecimentoId);
+        if (!r.tabelaPronta) return res.status(503).json({ error: MSG_SQL31_PENDENTE });
+
+        const igual = r.atributos.find(a => AV.nomeIgual(a.nome, v.nome));
+        if (igual) {
+            return res.status(409).json({ error: igual.ativo
+                ? 'Já existe um atributo com esse nome.'
+                : 'Já existe um atributo com esse nome, mas ele está oculto. Reative-o em vez de criar outro.' });
+        }
+        if (AV.contarParaTeto(r.atributos) >= AV.TETOS_ATRIBUTOS.ATRIBUTOS_LOJA) {
+            return res.status(409).json({ error: AV.mensagemTeto({ message: `TETO:atributos_loja:${AV.TETOS_ATRIBUTOS.ATRIBUTOS_LOJA}` }) });
+        }
+
+        const usadas = new Set(r.atributos.map(a => a.chave));
+        const base = AV.chaveDoNome(v.nome);
+        let chave = base;
+        for (let i = 2; usadas.has(chave); i++) chave = `${base.slice(0, 30 - String(i).length - 1)}_${i}`;
+
+        const ordem = Math.min(1000, Math.max(...r.atributos.map(a => a.ordem), 30) + 10);
+        const { data, error } = await db.from('atributos_variacao')
+            .insert({ mercearia_id: estabelecimentoId, chave, nome: v.nome, ordem, ativo: true, ...carimboCriacao(req) })
+            .select('chave, nome, ordem, ativo').single();
+        if (error) {
+            const teto = AV.mensagemTeto(error);
+            if (teto) return res.status(409).json({ error: teto });
+            if (error.code === '23505') return res.status(409).json({ error: 'Já existe um atributo com esse nome.' });
+            throw error;
+        }
+
+        auditarAtributo(req, 'atributo_variacao_criado', `Atributo de variação criado: "${v.nome}"`, { chave, nome: v.nome });
+        res.status(201).json({ ...data, legado: false, personalizado: true });
+    } catch (error) {
+        console.error('[ERRO] POST /:id/atributos-variacao:', error.message);
+        res.status(500).json({ error: 'Erro ao criar o atributo.' });
+    }
+});
+
+// Renomeia, oculta/reativa ou muda a ordem de um atributo (inclusive tamanho/cor/gênero).
+router.put('/:id/atributos-variacao/:chave', limitarFrequencia('atributos-variacao', 30), verificarPermissao(...PERMISSAO_ATRIBUTOS), async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const chave = req.params.chave;
+    if (!AV.chaveValida(chave)) return res.status(400).json({ error: 'Atributo inválido.' });
+
+    const body = req.body || {};
+    const mexeNome = body.nome !== undefined;
+    const mexeAtivo = body.ativo !== undefined;
+    const mexeOrdem = body.ordem !== undefined;
+    if (!mexeNome && !mexeAtivo && !mexeOrdem) return res.status(400).json({ error: 'Nada para alterar.' });
+    if (mexeAtivo && typeof body.ativo !== 'boolean') return res.status(400).json({ error: 'Valor inválido para ativo.' });
+    let ordem;
+    if (mexeOrdem) {
+        ordem = Number(body.ordem);
+        if (!Number.isInteger(ordem) || ordem < 0 || ordem > 1000) return res.status(400).json({ error: 'Ordem inválida.' });
+    }
+    let novoNome;
+    if (mexeNome) {
+        const v = nomeAtributoValido(body.nome);
+        if (v.erro) return res.status(400).json({ error: v.erro });
+        novoNome = v.nome;
+    }
+
+    try {
+        const r = await carregarAtributosLoja(estabelecimentoId);
+        if (!r.tabelaPronta) return res.status(503).json({ error: MSG_SQL31_PENDENTE });
+
+        const atual = r.atributos.find(a => a.chave === chave);
+        if (!atual) return res.status(404).json({ error: 'Atributo não encontrado.' });
+
+        const nome = mexeNome ? novoNome : atual.nome;
+        const ativo = mexeAtivo ? body.ativo : atual.ativo;
+        const novaOrdem = mexeOrdem ? ordem : atual.ordem;
+
+        // Nome não pode repetir o de outro atributo ativo (ocultos não contam, a não ser que este vá ficar ativo)
+        if (ativo && r.atributos.some(a => a.chave !== chave && a.ativo && AV.nomeIgual(a.nome, nome))) {
+            return res.status(409).json({ error: 'Já existe outro atributo com esse nome.' });
+        }
+        // A loja precisa de pelo menos um atributo ligado, senão não dá para criar variações
+        if (!ativo && atual.ativo && !r.atributos.some(a => a.chave !== chave && a.ativo)) {
+            return res.status(409).json({ error: 'A loja precisa manter pelo menos um atributo ligado.' });
+        }
+
+        const { error } = await db.from('atributos_variacao').upsert({
+            mercearia_id: estabelecimentoId, chave, nome, ordem: novaOrdem, ativo,
+            ...(atual.personalizado ? {} : carimboCriacao(req)),
+            ...carimboAlteracao(req),
+        }, { onConflict: 'mercearia_id,chave' });
+        if (error) {
+            const teto = AV.mensagemTeto(error);
+            if (teto) return res.status(409).json({ error: teto });
+            if (error.code === '23505') return res.status(409).json({ error: 'Já existe outro atributo com esse nome.' });
+            throw error;
+        }
+
+        const partes = [];
+        if (mexeNome && nome !== atual.nome) partes.push(`renomeado de "${atual.nome}" para "${nome}"`);
+        if (mexeAtivo && ativo !== atual.ativo) partes.push(ativo ? 'reativado' : 'ocultado');
+        if (mexeOrdem && novaOrdem !== atual.ordem) partes.push('ordem alterada');
+        auditarAtributo(req, 'atributo_variacao_alterado', `Atributo de variação "${atual.nome}": ${partes.join(', ') || 'sem mudanças'}`,
+            { chave, nome, ativo, ordem: novaOrdem });
+        res.json({ chave, nome, ordem: novaOrdem, ativo, legado: AV.ehLegado(chave), personalizado: true });
+    } catch (error) {
+        console.error('[ERRO] PUT /:id/atributos-variacao/:chave:', error.message);
+        res.status(500).json({ error: 'Erro ao salvar o atributo.' });
     }
 });
 
@@ -855,7 +1065,7 @@ router.get('/:id/modelos-variacao', async (req, res) => {
     }
 });
 
-router.post('/:id/modelos-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+router.post('/:id/modelos-variacao', limitarFrequencia('modelos-variacao', 40), verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const estabelecimentoId = req.params.id;
     const nome = String(req.body?.nome ?? '').trim();
     const tamanhos = limparTamanhos(req.body?.tamanhos);
@@ -890,7 +1100,7 @@ router.post('/:id/modelos-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PER
 
 // Ajustes de um tipo pronto para esta loja: tamanhos extras (ex.: 56 em Calçados) e se o
 // tipo aparece ou não (visivel: true/false/null = padrão do tipo de estabelecimento). (SQL 29/30)
-router.put('/:id/modelos-variacao/base/:baseId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+router.put('/:id/modelos-variacao/base/:baseId', limitarFrequencia('modelos-variacao', 40), verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const estabelecimentoId = req.params.id;
     const baseId = String(req.params.baseId || '');
     const nome = String(req.body?.nome ?? '').trim();
@@ -948,7 +1158,7 @@ router.put('/:id/modelos-variacao/base/:baseId', verificarPermissao([PERMISSOES.
 });
 
 // Troca a lista de tamanhos de um tipo criado pelo comerciante.
-router.put('/:id/modelos-variacao/:modeloId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+router.put('/:id/modelos-variacao/:modeloId', limitarFrequencia('modelos-variacao', 40), verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const { id: estabelecimentoId, modeloId } = req.params;
     const tamanhos = limparTamanhos(req.body?.tamanhos);
     if (!tamanhos.length) return res.status(400).json({ error: 'O tipo precisa ter pelo menos um tamanho.' });
@@ -972,7 +1182,7 @@ router.put('/:id/modelos-variacao/:modeloId', verificarPermissao([PERMISSOES.EST
     }
 });
 
-router.delete('/:id/modelos-variacao/:modeloId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+router.delete('/:id/modelos-variacao/:modeloId', limitarFrequencia('modelos-variacao', 40), verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
     const { id: estabelecimentoId, modeloId } = req.params;
     try {
         const { data: antigo } = await db.from('modelos_variacao').select('nome').eq('id', modeloId).eq('mercearia_id', estabelecimentoId).maybeSingle();
