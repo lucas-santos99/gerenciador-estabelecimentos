@@ -11,6 +11,8 @@ const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario'
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { limitarFrequencia } = require('../utils/limiteFrequencia');
+const AV = require('../utils/atributosVariacao');
+const RV = require('../utils/rotulosVariacao');
 
 router.use(authUser);
 
@@ -90,7 +92,7 @@ router.post('/', limitarFrequencia('inventario-criar', 10), verificarPermissao([
     // Buscar produtos para snapshot
     let prodQ = db
       .from('produtos')
-      .select('id, nome, marca, unidade_medida, estoque_atual, preco_custo, preco_venda, categoria_id')
+      .select('id, nome, marca, unidade_medida, estoque_atual, preco_custo, preco_venda, categoria_id, tem_variacoes')
       .eq('mercearia_id', mid)
       .order('nome');
 
@@ -121,22 +123,89 @@ router.post('/', limitarFrequencia('inventario-criar', 10), verificarPermissao([
       .single();
     if (invErr) throw invErr;
 
-    // Criar itens (snapshot do estoque atual)
-    const itens = produtos.map(p => ({
-      inventario_id:   inv.id,
-      produto_id:      p.id,
-      produto_nome:    p.nome,
-      produto_marca:   p.marca || null,
-      unidade_medida:  p.unidade_medida || 'un',
-      preco_custo:     parseFloat(p.preco_custo) || 0,
-      preco_venda:     parseFloat(p.preco_venda) || 0,
-      estoque_sistema: parseFloat(p.estoque_atual) || 0,
-      estoque_contado: null,
-      diferenca:       null,
-    }));
+    // Criar itens (snapshot do estoque atual). Produto com variações vira um item POR VARIAÇÃO ATIVA
+    // (SQL 37); se as colunas novas ainda não existem, mantém o comportamento antigo (um item por produto).
+    const montarItens = (comVariacoes, variacoesPorProduto, atributosLoja) => {
+      const itens = [];
+      for (const p of produtos) {
+        const base = {
+          inventario_id:   inv.id,
+          produto_id:      p.id,
+          produto_nome:    p.nome,
+          produto_marca:   p.marca || null,
+          unidade_medida:  p.unidade_medida || 'un',
+          estoque_contado: null,
+          diferenca:       null,
+        };
+        const vars = comVariacoes && p.tem_variacoes ? (variacoesPorProduto.get(p.id) || []) : null;
+        if (vars) {
+          for (const v of vars) {
+            itens.push({
+              ...base,
+              produto_variacao_id: v.id,
+              variacao_rotulo:     AV.rotuloDaVariacao(v, atributosLoja) || null,
+              preco_custo:         parseFloat(v.preco_custo ?? p.preco_custo) || 0,
+              preco_venda:         parseFloat(v.preco_venda ?? p.preco_venda) || 0,
+              estoque_sistema:     parseFloat(v.estoque_atual) || 0,
+            });
+          }
+        } else {
+          itens.push({
+            ...base,
+            ...(comVariacoes ? { produto_variacao_id: null, variacao_rotulo: null } : {}),
+            preco_custo:     parseFloat(p.preco_custo) || 0,
+            preco_venda:     parseFloat(p.preco_venda) || 0,
+            estoque_sistema: parseFloat(p.estoque_atual) || 0,
+          });
+        }
+      }
+      return itens;
+    };
 
-    const { error: itensErr } = await db.from('itens_inventario').insert(itens);
-    if (itensErr) throw itensErr;
+    // Variações ativas dos produtos que têm variação (em blocos, para listas grandes)
+    const idsComVariacao = produtos.filter(p => p.tem_variacoes).map(p => p.id);
+    const variacoesPorProduto = new Map();
+    let atributosLoja = [];
+    if (idsComVariacao.length) {
+      atributosLoja = await RV.atributosDaLoja(mid);
+      for (let i = 0; i < idsComVariacao.length; i += 200) {
+        const { data: vs, error: vErr } = await RV.selecionarVariacoes((comAtr) => db.from('produto_variacoes')
+          .select(`id, produto_id, tamanho, cor, genero${comAtr ? ', atributos' : ''}, preco_custo, preco_venda, estoque_atual`)
+          .eq('mercearia_id', mid).eq('ativo', true).in('produto_id', idsComVariacao.slice(i, i + 200))
+          .order('criado_em').limit(5000));
+        if (vErr) throw vErr;
+        for (const v of vs || []) {
+          if (!variacoesPorProduto.has(v.produto_id)) variacoesPorProduto.set(v.produto_id, []);
+          variacoesPorProduto.get(v.produto_id).push(v);
+        }
+      }
+    }
+
+    // Insere em blocos de 1.000 (listas grandes não cabem numa chamada só)
+    const inserirItens = async (itens) => {
+      for (let i = 0; i < itens.length; i += 1000) {
+        const { error } = await db.from('itens_inventario').insert(itens.slice(i, i + 1000));
+        if (error) return error;
+      }
+      return null;
+    };
+    let itens = montarItens(true, variacoesPorProduto, atributosLoja);
+    let itensErr = await inserirItens(itens);
+    if (itensErr && itensErr.code === '42703') {
+      // SQL 37 ainda não aplicado: refaz como antes (um item por produto) — apaga o que entrou
+      await db.from('itens_inventario').delete().eq('inventario_id', inv.id);
+      itens = montarItens(false, variacoesPorProduto, atributosLoja);
+      itensErr = await inserirItens(itens);
+    }
+    if (itensErr || itens.length === 0) {
+      await db.from('inventarios').delete().eq('id', inv.id);
+      if (itensErr) throw itensErr;
+      return res.status(400).json({ error: 'Nenhum item para contar: os produtos deste filtro não têm variação ativa.' });
+    }
+    if (itens.length !== produtos.length) {
+      await db.from('inventarios').update({ total_produtos: itens.length }).eq('id', inv.id);
+      inv.total_produtos = itens.length;
+    }
 
     registrar({
       mercearia_id:  mid,
@@ -144,11 +213,11 @@ router.post('/', limitarFrequencia('inventario-criar', 10), verificarPermissao([
       usuario_nome:  req.user.nome,
       usuario_email: req.user.email,
       modulo: 'inventario', acao: 'inventario_iniciado',
-      descricao: `Inventário "${nome}" iniciado (${produtos.length} produtos)`,
-      meta: { inventario_id: inv.id, tipo, total_produtos: produtos.length },
+      descricao: `Inventário "${nome}" iniciado (${itens.length} itens)`,
+      meta: { inventario_id: inv.id, tipo, total_produtos: itens.length },
     });
 
-    res.status(201).json({ ...inv, total_produtos: produtos.length });
+    res.status(201).json({ ...inv, total_produtos: itens.length });
   } catch (err) {
     console.error('[INVENTÁRIO] Criar:', err.message);
     const erroLimiteBanco = erroTetoDoBanco(err);
@@ -210,6 +279,7 @@ router.get('/:id', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) =
       const b = busca.toLowerCase();
       itensFiltrados = itensFiltrados.filter(i =>
         i.produto_nome.toLowerCase().includes(b) ||
+        (i.variacao_rotulo || '').toLowerCase().includes(b) ||
         (i.produto_marca || '').toLowerCase().includes(b)
       );
     }
@@ -364,19 +434,22 @@ router.post('/:id/finalizar', verificarPermissao([PERMISSOES.INVENTARIO, PERMISS
       const qtdDepois = parseFloat(item.estoque_contado);
       const diff      = qtdDepois - qtdAntes;
 
-      // Atualizar estoque do produto
-      const { error: updErr } = await db
-        .from('produtos')
-        .update({ estoque_atual: qtdDepois })
-        .eq('id', item.produto_id)
-        .eq('mercearia_id', mid);
+      // Atualizar estoque: da variação contada (SQL 37) ou do produto
+      if (item.variacao_rotulo && !item.produto_variacao_id) {
+        // variação apagada depois da contagem: não há onde aplicar, não mexe no produto
+        continue;
+      }
+      const { error: updErr } = item.produto_variacao_id
+        ? await db.from('produto_variacoes').update({ estoque_atual: qtdDepois }).eq('id', item.produto_variacao_id).eq('mercearia_id', mid)
+        : await db.from('produtos').update({ estoque_atual: qtdDepois }).eq('id', item.produto_id).eq('mercearia_id', mid);
 
-      if (updErr) console.error(`[INVENTÁRIO] Erro ao atualizar produto ${item.produto_id}:`, updErr.message);
+      if (updErr) console.error(`[INVENTÁRIO] Erro ao atualizar ${item.produto_variacao_id ? 'variação ' + item.produto_variacao_id : 'produto ' + item.produto_id}:`, updErr.message);
 
       // Registrar movimentação
       movimentacoes.push({
         mercearia_id:           mid,
         produto_id:             item.produto_id,
+        produto_variacao_id:    item.produto_variacao_id || null,
         produto_nome:           item.produto_nome,
         produto_marca:          item.produto_marca,
         unidade_medida:         item.unidade_medida,

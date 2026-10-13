@@ -37,7 +37,10 @@ async function produtosEmContagem(merceariaId, produtoIds) {
     .in('produto_id', ids);
   if (error) throw new Error(`itens_inventario: ${error.message}`);
   if (!data || data.length === 0) return null;
-  return { inventario: inv, produtos: data };
+  // produto com variações tem vários itens na contagem: lista cada produto uma vez
+  const vistos = new Set();
+  const produtos = data.filter(p => !vistos.has(p.produto_id) && vistos.add(p.produto_id));
+  return { inventario: inv, produtos };
 }
 
 // Para usar dentro das rotas. `acao` completa a frase "…para <acao>."
