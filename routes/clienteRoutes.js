@@ -11,7 +11,7 @@ const supabaseAdmin = require('../db/supabaseAdmin');
 const { rotulosDosItens, nomeComVariacao, selecionarItensVenda } = require('../utils/rotulosVariacao');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
-const { erroTeto } = require('../utils/tetoCadastros');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
@@ -277,6 +277,8 @@ router.post('/criar', verificarPermissao(
 
         console.error('[ERRO] Criar cliente:', error.message);
 
+        const erroLimiteBanco = erroTetoDoBanco(error);
+        if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
         res.status(500).json({ error: 'Erro ao criar cliente.' });
 
     }

@@ -8,7 +8,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
-const { erroTeto } = require('../utils/tetoCadastros');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 
 console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
@@ -344,6 +344,8 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_ADICIONAR], 
     res.status(201).json({ ...data, categorias: categoriasPorFornecedor[data.id] || [] });
   } catch (err) {
     console.error('[FORNECEDORES] Erro criar:', err.message);
+    const erroLimiteBanco = erroTetoDoBanco(err);
+    if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
     res.status(500).json({ error: 'Erro ao criar fornecedor' });
   }
 });

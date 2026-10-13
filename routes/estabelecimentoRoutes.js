@@ -11,7 +11,7 @@ const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 const { contemPalavraProibida } = require('../utils/filtroPalavroes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const rotulosVariacao = require('../utils/rotulosVariacao');
-const { erroTeto } = require('../utils/tetoCadastros');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const AV = require('../utils/atributosVariacao');
 const { limitarFrequencia } = require('../utils/limiteFrequencia');
@@ -1856,6 +1856,8 @@ router.post('/:id/produtos', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.
     } catch (error) {
 
         console.error(`[ERRO] POST /api/estabelecimentos/${estabelecimentoId}/produtos:`, error.message);
+        const erroLimiteBanco = erroTetoDoBanco(error);
+        if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
         res.status(500).json({ error: 'Erro ao adicionar produto.' });
 
     }

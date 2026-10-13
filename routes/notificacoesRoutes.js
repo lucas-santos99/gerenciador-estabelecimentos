@@ -40,6 +40,8 @@ const authUser = require('../middlewares/authUser');
 const { registrar } = require('./auditoriaRoutes');
 const { TIMEZONE_PADRAO, buscarTimezone, hojeStrTZ, inicioDiaTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
+const { limitarFrequencia } = require('../utils/limiteFrequencia');
 
 router.use(authUser);
 
@@ -914,7 +916,7 @@ router.put('/preferencias', async (req, res) => {
 const CHAVE_REGEX = /^[a-z_]{2,20}:[A-Za-z0-9:._\-]{1,180}$/;
 const ACOES_ESTADO = ['lida', 'nao_lida', 'adiar', 'dispensar', 'restaurar'];
 
-router.post('/estado', async (req, res) => {
+router.post('/estado', limitarFrequencia('notif-estado', 120), async (req, res) => {
   const { chaves, acao, minutos } = req.body || {};
   if (!ACOES_ESTADO.includes(acao)) return res.status(400).json({ error: 'Ação inválida.' });
   if (!Array.isArray(chaves) || !chaves.length || chaves.length > 500 || chaves.some(c => typeof c !== 'string' || !CHAVE_REGEX.test(c))) {
@@ -941,6 +943,8 @@ router.post('/estado', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[ERRO] POST /api/notificacoes/estado:', err.message);
+    const erroLimiteBanco = erroTetoDoBanco(err);
+    if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
     res.status(500).json({ error: 'Erro ao atualizar notificações.' });
   }
 });
@@ -1018,11 +1022,15 @@ router.get('/lembretes', async (req, res) => {
   }
 });
 
-router.post('/lembretes', async (req, res) => {
+router.post('/lembretes', limitarFrequencia('lembrete-criar', 30), async (req, res) => {
   const user = req.user;
   if (!ehAdmin(user) && !user.mercearia_id) return res.status(403).json({ error: 'Sem estabelecimento vinculado.' });
   const { erro, dados } = validarLembrete(req.body);
   if (erro) return res.status(400).json({ error: erro });
+  if (!ehAdmin(user)) {
+    const erroLimite = await erroTeto(db, 'lembretes', user.mercearia_id);
+    if (erroLimite) return res.status(400).json({ error: erroLimite });
+  }
   try {
     const { data, error } = await db.from('lembretes').insert({
       ...dados,
@@ -1036,6 +1044,8 @@ router.post('/lembretes', async (req, res) => {
     res.status(201).json({ ...data, pode_editar: true });
   } catch (err) {
     console.error('[ERRO] POST /api/notificacoes/lembretes:', err.message);
+    const erroLimiteBanco = erroTetoDoBanco(err);
+    if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
     res.status(500).json({ error: 'Erro ao criar lembrete.' });
   }
 });

@@ -2,7 +2,8 @@ const express = require("express");
 const router = express.Router();
 const db = require("../db/supabaseAdmin"); // Cliente SUPABASE ADMIN (service_role)
 const multer = require("multer");
-const upload = multer({ storage: multer.memoryStorage() });
+// Teto de 5 MB por arquivo (sem isso um envio gigante enche a memória do servidor).
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 const authUser = require("../middlewares/authUser");
 const { limiteAcaoSensivel } = require("../middlewares/limiteRequisicoes");
 const { registrar } = require("./auditoriaRoutes");

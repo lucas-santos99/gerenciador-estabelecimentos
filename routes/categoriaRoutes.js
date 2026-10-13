@@ -5,7 +5,7 @@ const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
-const { erroTeto } = require('../utils/tetoCadastros');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
@@ -98,6 +98,9 @@ router.post('/', exige(PERMISSOES.ESTOQUE_ADICIONAR, 'Sem permissão para criar 
 
     } catch (error) {
         console.error('[ERRO] POST /api/categorias:', error.message);
+
+        const erroLimiteBanco = erroTetoDoBanco(error);
+        if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
 
         if (error.code === '23505') {
             return res.status(409).json({

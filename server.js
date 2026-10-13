@@ -132,6 +132,13 @@ app.head("/ping", (req, res) => res.status(200).end());
 // --- GET para teste ---
 app.get("/ping", (req, res) => res.status(200).send("pong"));
 
+// --- ERROS DE ENVIO (arquivo/corpo grande demais): mensagem clara em vez de erro cru ---
+app.use((err, req, res, next) => {
+  if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Arquivo muito grande (máximo 5 MB).' });
+  if (err && err.type === 'entity.too.large') return res.status(413).json({ error: 'Envio grande demais. Reduza o tamanho e tente de novo.' });
+  return next(err);
+});
+
 // --- INICIAR SERVIDOR ---
 app.listen(PORT, () => {
   console.log(`\n[INFO] Servidor rodando na porta ${PORT}`);

@@ -16,6 +16,8 @@ const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const { rotulosDosItens, nomeComVariacao, selecionarItensVenda } = require('../utils/rotulosVariacao');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
+const { limitarFrequencia } = require('../utils/limiteFrequencia');
 
 // ── Permissões do operador (módulo + ação marcada na tela) ─────────
 // Dono e super_admin passam sempre.
@@ -239,6 +241,7 @@ router.get('/resumo',
 // ============================================================
 
 router.post('/',
+    limitarFrequencia('contas-criar', 60),
     exigeContas('Sem permissão para lançar contas a pagar.'),
     async (req, res) => {
 
@@ -253,6 +256,9 @@ router.post('/',
 
     const erroTamanho = validarTamanhos({ descricao }, { descricao: LIMITES.NOME_FANTASIA });
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    const erroLimite = await erroTeto(supabaseAdmin, 'contas_a_pagar', req.user.mercearia_id);
+    if (erroLimite) return res.status(400).json({ error: erroLimite });
 
     try {
 
@@ -287,6 +293,8 @@ router.post('/',
     } catch (error) {
 
         console.error('[ERRO] POST /api/financeiro:', error.message);
+        const erroLimiteBanco = erroTetoDoBanco(error);
+        if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
         res.status(500).json({ error: error.message, detalhe: error });
 
     }

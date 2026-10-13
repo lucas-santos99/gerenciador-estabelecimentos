@@ -7,6 +7,8 @@ const { temPermissao } = require('../middlewares/verificarPermissao');
 const { registrar } = require('./auditoriaRoutes');
 const { TIMEZONE_PADRAO, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
+const { limitarFrequencia } = require('../utils/limiteFrequencia');
 
 console.log('🔥 SOLICITAÇÕES ROUTES ATUALIZADO 🔥');
 
@@ -33,7 +35,7 @@ const CAMPOS_LISTA = ['telefones_extras', 'enderecos_extras'];
       POST /api/solicitacoes
       body: { campos: [{ campo, label, valor_atual, valor_novo }], detalhes }
 ════════════════════════════════════════════════════════════ */
-router.post('/', async (req, res) => {
+router.post('/', limitarFrequencia('solicitacao-criar', 5), async (req, res) => {
   const { mercearia_id, role, nome, email } = req.user;
 
   if (!mercearia_id) {
@@ -57,6 +59,9 @@ router.post('/', async (req, res) => {
 
   const erroTamanho = validarTamanhos({ detalhes }, { detalhes: LIMITES.OBSERVACAO_LONGA });
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+  const erroLimite = await erroTeto(db, 'solicitacoes_alteracao', mercearia_id);
+  if (erroLimite) return res.status(400).json({ error: erroLimite });
 
   try {
     const { data: merc } = await db
@@ -98,6 +103,8 @@ router.post('/', async (req, res) => {
     res.status(201).json(data);
   } catch (err) {
     console.error('[SOLICITAÇÕES] Erro criar:', err.message);
+    const erroLimiteBanco = erroTetoDoBanco(err);
+    if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
     res.status(500).json({ error: 'Erro ao enviar solicitação.' });
   }
 });

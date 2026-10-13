@@ -9,6 +9,8 @@ const { inventarioEmAndamento, negarSeEmContagem } = require('../utils/inventari
 const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
+const { limitarFrequencia } = require('../utils/limiteFrequencia');
 
 router.use(authUser);
 
@@ -57,7 +59,7 @@ router.get('/', verificarPermissao(PERMISSOES.INVENTARIO), async (req, res) => {
    POST /api/inventario
    body: { nome, tipo, categoria_id?, observacoes? }
 ════════════════════════════════════════════════════════════ */
-router.post('/', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARIO_CONTAR], { mensagem: 'Sem permissão para fazer contagens de inventário.' }), async (req, res) => {
+router.post('/', limitarFrequencia('inventario-criar', 10), verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARIO_CONTAR], { mensagem: 'Sem permissão para fazer contagens de inventário.' }), async (req, res) => {
   const mid = mercearia(req);
   if (!mid) return res.status(403).json({ error: 'Sem estabelecimento vinculado' });
 
@@ -66,6 +68,9 @@ router.post('/', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARI
 
   const erroTamanho = validarTamanhos({ nome }, { nome: LIMITES.NOME });
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+  const erroLimite = await erroTeto(db, 'inventarios', mid);
+  if (erroLimite) return res.status(400).json({ error: erroLimite });
 
   // Verificar se já existe um inventário em andamento
   const { data: emAndamento } = await db
@@ -146,6 +151,8 @@ router.post('/', verificarPermissao([PERMISSOES.INVENTARIO, PERMISSOES.INVENTARI
     res.status(201).json({ ...inv, total_produtos: produtos.length });
   } catch (err) {
     console.error('[INVENTÁRIO] Criar:', err.message);
+    const erroLimiteBanco = erroTetoDoBanco(err);
+    if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
     res.status(500).json({ error: 'Erro ao criar inventário' });
   }
 });

@@ -29,7 +29,8 @@ const { carimboAlteracao } = require('../utils/rastro');
 // estabelecimento (adminEstabelecimentosRoutes.js): multer em memória,
 // bucket "logos" (bucket genérico de imagens do projeto, com prefixo de
 // pasta por finalidade), URL pública salva direto na linha.
-const upload = multer({ storage: multer.memoryStorage() });
+// Teto de 5 MB por arquivo (sem isso um envio gigante enche a memória do servidor).
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 
 router.use(authUser);
 

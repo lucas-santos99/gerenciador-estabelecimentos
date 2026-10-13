@@ -15,6 +15,8 @@ const { registrar } = require('./auditoriaRoutes');
 const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const { carimboCriacao } = require('../utils/rastro');
+const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
+const { limitarFrequencia } = require('../utils/limiteFrequencia');
 
 console.log('🔥 COMPRAS ROUTES ATUALIZADO 🔥');
 
@@ -202,7 +204,7 @@ router.get('/:id', exigeModulo, async (req, res) => {
               data_vencimento (se a_prazo), observacoes,
               itens: [{ produto_id, quantidade, preco_custo_unitario }] }
 ════════════════════════════════════════════════════════════ */
-router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { mensagem: 'Sem permissão para lançar compras.' }), async (req, res) => {
+router.post('/', limitarFrequencia('compras', 30), verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { mensagem: 'Sem permissão para lançar compras.' }), async (req, res) => {
   const mid = mercearia(req);
   const {
     fornecedor_id, numero_nota, data_compra, forma_pagamento,
@@ -218,6 +220,8 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
   if (forma_pagamento === 'a_prazo' && !data_vencimento) return res.status(400).json({ error: 'Informe a data de vencimento' });
   if (!Array.isArray(itens) || itens.length === 0) return res.status(400).json({ error: 'Adicione pelo menos um produto' });
   if (itens.length > 500) return res.status(400).json({ error: 'Itens demais na mesma compra (máximo 500). Divida em duas compras.' });
+  const erroLimite = await erroTeto(db, 'compras', mid);
+  if (erroLimite) return res.status(400).json({ error: erroLimite });
 
   const erroTamanho = validarTamanhos(
     { numero_nota, observacoes, recebido_por },
@@ -428,6 +432,8 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_COMPRAR], { 
     res.status(201).json({ ...compra, fornecedor_nome: fornecedor.nome, conta_a_pagar: contaAPagar });
   } catch (err) {
     console.error('[COMPRAS] Erro lançar:', err.message);
+    const erroLimiteBanco = erroTetoDoBanco(err);
+    if (erroLimiteBanco) return res.status(400).json({ error: erroLimiteBanco });
     res.status(500).json({ error: 'Erro ao lançar compra' });
   }
 });

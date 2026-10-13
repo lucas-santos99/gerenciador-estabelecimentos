@@ -8,7 +8,8 @@ const { limiteAcaoSensivel } = require("../middlewares/limiteRequisicoes");
 const { registrar } = require("./auditoriaRoutes");
 const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 
-const upload = multer({ storage: multer.memoryStorage() });
+// Teto de 5 MB por arquivo (sem isso um envio gigante enche a memória do servidor).
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 
 const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
