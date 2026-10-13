@@ -816,6 +816,94 @@ router.delete('/:id/opcoes-variacao/:optId', verificarPermissao([PERMISSOES.ESTO
     }
 });
 
+// --- Tipos de produto (modelos de tamanho) — salvos na conta da loja, valem em
+// qualquer computador. Ex.: "Boné" com tamanhos 56, 58, 60. (SQL 28) ---
+const TABELA_AUSENTE = '42P01';
+function limparTamanhos(lista) {
+    const vistos = new Set();
+    const out = [];
+    for (const t of Array.isArray(lista) ? lista : []) {
+        const v = String(t ?? '').trim().slice(0, 50);
+        if (!v || vistos.has(v.toLowerCase())) continue;
+        vistos.add(v.toLowerCase());
+        out.push(v);
+        if (out.length >= 60) break;
+    }
+    return out;
+}
+
+router.get('/:id/modelos-variacao', async (req, res) => {
+    try {
+        const { data, error } = await db.from('modelos_variacao')
+            .select('id, nome, tamanhos')
+            .eq('mercearia_id', req.params.id)
+            .order('criado_em', { ascending: true })
+            .limit(100);
+        if (error) {
+            if (error.code === TABELA_AUSENTE) return res.json([]); // antes do SQL 28
+            throw error;
+        }
+        res.json(data || []);
+    } catch (error) {
+        console.error('[ERRO] GET /:id/modelos-variacao:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar os tipos de produto.' });
+    }
+});
+
+router.post('/:id/modelos-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const nome = String(req.body?.nome ?? '').trim();
+    const tamanhos = limparTamanhos(req.body?.tamanhos);
+    if (!nome) return res.status(400).json({ error: 'Dê um nome ao tipo de produto.' });
+    if (nome.length > 40) return res.status(400).json({ error: 'O nome do tipo pode ter no máximo 40 caracteres.' });
+    if (!tamanhos.length) return res.status(400).json({ error: 'Informe pelo menos um tamanho.' });
+    try {
+        const { count } = await db.from('modelos_variacao').select('id', { count: 'exact', head: true }).eq('mercearia_id', estabelecimentoId);
+        if ((count || 0) >= 100) return res.status(400).json({ error: 'Limite de 100 tipos de produto atingido.' });
+        const { data, error } = await db.from('modelos_variacao')
+            .insert({ mercearia_id: estabelecimentoId, nome, tamanhos, criado_por_nome: req.user.nome || null })
+            .select('id, nome, tamanhos').single();
+        if (error) {
+            if (error.code === '23505') return res.status(409).json({ error: 'Já existe um tipo com esse nome.' });
+            if (error.code === TABELA_AUSENTE) return res.status(503).json({ error: 'Recurso ainda não liberado no banco. Fale com o suporte.' });
+            throw error;
+        }
+        registrar({
+            mercearia_id: estabelecimentoId,
+            operador_id:  req.user.role === 'operator' ? req.user.id : null,
+            usuario_nome: req.user.nome, usuario_email: req.user.email,
+            modulo: 'estoque', acao: 'modelo_variacao_criado',
+            descricao: `Tipo de produto criado: "${nome}" (${tamanhos.length} tamanho(s))`,
+            meta: { modelo_id: data.id, nome, tamanhos },
+        });
+        res.status(201).json(data);
+    } catch (error) {
+        console.error('[ERRO] POST /:id/modelos-variacao:', error.message);
+        res.status(500).json({ error: 'Erro ao salvar o tipo de produto.' });
+    }
+});
+
+router.delete('/:id/modelos-variacao/:modeloId', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_ADICIONAR], [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para mexer nas opções de variação.' }), async (req, res) => {
+    const { id: estabelecimentoId, modeloId } = req.params;
+    try {
+        const { data: antigo } = await db.from('modelos_variacao').select('nome').eq('id', modeloId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        const { error } = await db.from('modelos_variacao').delete().eq('id', modeloId).eq('mercearia_id', estabelecimentoId);
+        if (error) throw error;
+        registrar({
+            mercearia_id: estabelecimentoId,
+            operador_id:  req.user.role === 'operator' ? req.user.id : null,
+            usuario_nome: req.user.nome, usuario_email: req.user.email,
+            modulo: 'estoque', acao: 'modelo_variacao_removido',
+            descricao: `Tipo de produto removido${antigo ? `: "${antigo.nome}"` : ''}`,
+            meta: { modelo_id: modeloId },
+        });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('[ERRO] DELETE /:id/modelos-variacao/:modeloId:', error.message);
+        res.status(500).json({ error: 'Erro ao remover o tipo de produto.' });
+    }
+});
+
 router.get('/:id/produtos', async (req, res) => {
 
     const estabelecimentoId = req.params.id;
