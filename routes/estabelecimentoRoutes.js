@@ -110,6 +110,16 @@ async function erroCodigosEVariacoes(mercearia_id, produtoIdAtual, codigo_barras
     if (vistas.has(k)) return `Há duas variações iguais (${rotuloVariacao(v)}). Mude algum atributo de uma delas.`;
     vistas.set(k, true);
   }
+  // PROVISÓRIO (até o SQL 32, que troca o índice único pela combinação completa): o índice
+  // atual só enxerga tamanho+cor+gênero, então duas variações que só diferem nos atributos
+  // extras seriam recusadas pelo banco e sumiriam em silêncio. Melhor avisar aqui.
+  const triplas = new Set();
+  for (const v of lista) {
+    if (variacaoVazia(v)) continue;
+    const t = ['tamanho', 'cor', 'genero'].map(k => String(v?.[k] || '').trim()).join('\u0001');
+    if (triplas.has(t)) return 'Por enquanto, duas variações do mesmo produto não podem ter o mesmo Tamanho, Cor e Gênero e diferir só nos outros atributos (ex.: Sabor). Preencha também o Tamanho ou a Cor para diferenciá-las — a liberação completa vem na próxima atualização.';
+    triplas.add(t);
+  }
 
   // Códigos repetidos dentro do próprio formulário
   const codigos = [];
