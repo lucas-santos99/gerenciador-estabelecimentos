@@ -819,6 +819,7 @@ router.delete('/:id/opcoes-variacao/:optId', verificarPermissao([PERMISSOES.ESTO
 // --- Tipos de produto (modelos de tamanho) — salvos na conta da loja, valem em
 // qualquer computador. Ex.: "Boné" com tamanhos 56, 58, 60. (SQL 28) ---
 const TABELA_AUSENTE = '42P01';
+const tabelaAusente = (e) => !!e && (e.code === '42P01' || e.code === 'PGRST205' || /schema cache|does not exist/i.test(e.message || ''));
 function limparTamanhos(lista) {
     const vistos = new Set();
     const out = [];
@@ -840,7 +841,7 @@ router.get('/:id/modelos-variacao', async (req, res) => {
             .order('criado_em', { ascending: true })
             .limit(100);
         if (error) {
-            if (error.code === TABELA_AUSENTE) return res.json([]); // antes do SQL 28
+            if (tabelaAusente(error)) return res.json([]); // antes do SQL 28
             throw error;
         }
         res.json(data || []);
@@ -865,7 +866,7 @@ router.post('/:id/modelos-variacao', verificarPermissao([PERMISSOES.ESTOQUE, PER
             .select('id, nome, tamanhos').single();
         if (error) {
             if (error.code === '23505') return res.status(409).json({ error: 'Já existe um tipo com esse nome.' });
-            if (error.code === TABELA_AUSENTE) return res.status(503).json({ error: 'Recurso ainda não liberado no banco. Fale com o suporte.' });
+            if (tabelaAusente(error)) return res.status(503).json({ error: 'Recurso ainda não liberado no banco. Fale com o suporte.' });
             throw error;
         }
         registrar({
