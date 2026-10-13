@@ -326,15 +326,19 @@ async function textoProduto(mid, p) {
   const un = p.unidade_medida;
   const linhas = [`📦 *${p.nome}*${p.marca ? ` · ${p.marca}` : ''}`];
   if (p.tem_variacoes) {
-    const { data: vs, error } = await db.from('produto_variacoes')
-      .select('tamanho, cor, genero, estoque_atual, estoque_minimo, preco_venda')
-      .eq('mercearia_id', mid).eq('produto_id', p.id).eq('ativo', true);
+    const RV = require('./rotulosVariacao');
+    const atributos = await RV.atributosDaLoja(mid);
+    const { data: vs, error } = await RV.selecionarVariacoes((comAtr) => db.from('produto_variacoes')
+      .select(`tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}estoque_atual, estoque_minimo, preco_venda`)
+      .eq('mercearia_id', mid).eq('produto_id', p.id).eq('ativo', true));
     if (error) throw new Error(error.message);
-    const lista = (vs || []).slice().sort((a, b) => [a.tamanho, a.cor, a.genero].join(' ').localeCompare([b.tamanho, b.cor, b.genero].join(' '), 'pt-BR'));
+    const AV = require('./atributosVariacao');
+    const lista = (vs || []).map(v => ({ ...v, _rot: AV.rotuloDaVariacao(v, atributos) }))
+      .sort((a, b) => a._rot.localeCompare(b._rot, 'pt-BR'));
     const total = lista.reduce((s, v) => s + (Number(v.estoque_atual) || 0), 0);
     linhas.push('', `Estoque total: *${qtd(total, un)}* em ${lista.length} variaç${lista.length === 1 ? 'ão' : 'ões'}`);
     lista.slice(0, 20).forEach(v => {
-      const rot = [v.tamanho, v.cor, v.genero].filter(Boolean).join(' · ') || 'Variação';
+      const rot = v._rot || 'Variação';
       const minimo = Number(v.estoque_minimo ?? p.estoque_minimo) || 0;
       const alerta = Number(v.estoque_atual) <= 0 ? ' 🔴' : Number(v.estoque_atual) <= minimo ? ' 🟡' : '';
       const preco = v.preco_venda != null ? ` · ${brl(v.preco_venda)}` : '';

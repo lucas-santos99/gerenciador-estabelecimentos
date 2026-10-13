@@ -376,6 +376,8 @@ async function avisosEstabelecimento(user, prefs, ctx) {
       const { data, error } = await db.rpc('notif_estoque_baixo', { p_mercearia_id: mid, p_limite: 300 });
       if (error) { console.error('[notificacoes] estoque:', error.message); return; }
       const soZerado = prefs.categorias.estoque.nivel_estoque === 'zerado';
+      // Texto da variação na ordem dos atributos da loja (a função SQL só conhece os 3 campos fixos).
+      const rotulos = await require('../utils/rotulosVariacao').rotulosPorId(mid, (data || []).map(p => p.variacao_id));
       (data || []).forEach(p => {
         const zerado = parseFloat(p.estoque) <= 0;
         if (soZerado && !zerado) return;
@@ -383,7 +385,8 @@ async function avisosEstabelecimento(user, prefs, ctx) {
         const qtd = un === 'kg'
           ? `${parseFloat(p.estoque).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} kg`
           : `${parseFloat(p.estoque).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un`;
-        const nome = p.detalhe ? `${p.nome} (${p.detalhe})` : p.nome;
+        const detalhe = (p.variacao_id && rotulos.get(p.variacao_id)) || p.detalhe;
+        const nome = detalhe ? `${p.nome} (${detalhe})` : p.nome;
         itens.push({
           chave: `estoque:${p.variacao_id || p.produto_id}:${zerado ? 'zerado' : 'baixo'}`,
           categoria: 'estoque', tipo: zerado ? 'estoque_zerado' : 'estoque_baixo',

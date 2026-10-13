@@ -10,6 +10,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 const { contemPalavraProibida } = require('../utils/filtroPalavroes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const rotulosVariacao = require('../utils/rotulosVariacao');
 const { erroTeto } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const AV = require('../utils/atributosVariacao');
@@ -1340,6 +1341,7 @@ router.get('/:id/produtos', async (req, res) => {
                 variacoes: variacoesAtivas,
             };
         });
+        await anexarRotulos(estabelecimentoId, produtosFormatados);
 
         res.status(200).json(produtosFormatados);
 
@@ -2195,7 +2197,7 @@ router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPe
             .single();
         if (error) throw error;
 
-        const labelVariacao = [variacao.tamanho, variacao.cor, variacao.genero].filter(Boolean).join(' · ') || 'sem descrição';
+        const labelVariacao = (await rotulosVariacao.rotulosPorId(estabelecimentoId, [variacaoId])).get(variacaoId) || [variacao.tamanho, variacao.cor, variacao.genero].filter(Boolean).join(' · ') || 'sem descrição';
         registrar({
           mercearia_id: estabelecimentoId,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
@@ -2228,7 +2230,7 @@ router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificar
         if (error) throw error;
         if (!data) return res.status(404).json({ error: 'Variação não encontrada.' });
 
-        const labelVariacao = [data.tamanho, data.cor, data.genero].filter(Boolean).join(' · ') || 'sem descrição';
+        const labelVariacao = (await rotulosVariacao.rotulosPorId(estabelecimentoId, [variacaoId])).get(variacaoId) || [data.tamanho, data.cor, data.genero].filter(Boolean).join(' · ') || 'sem descrição';
         registrar({
           mercearia_id: estabelecimentoId,
           operador_id:  req.user.role === 'operator' ? req.user.id : null,
@@ -2306,46 +2308,50 @@ router.get('/:id/produtos/buscar', async (req, res) => {
 
     try {
 
-        const { data, error } = await db
+        const { data, error } = await consultarComAtributos((comAtr) => db
             .from('produtos')
             .select(`
                 id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
                 vendido_por_peso, plu_balanca, tem_variacoes, imagem_url,
-                produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                produto_variacoes ( id, tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
             .or(`codigo_barras.eq.${termo},nome.ilike.${termo}%`)
-            .limit(10);
+            .limit(10));
 
         if (error) throw error;
 
-        const comVariacoes = (rows) => (rows || []).map(p => ({
-            ...p,
-            variacoes: (p.produto_variacoes || []).filter(v => v.ativo),
-        }));
+        const comVariacoes = async (rows) => {
+            const lista = (rows || []).map(p => ({
+                ...p,
+                variacoes: (p.produto_variacoes || []).filter(v => v.ativo),
+            }));
+            await anexarRotulos(estabelecimentoId, lista);
+            return lista;
+        };
 
         // Fallback por PLU, ignorando zeros à esquerda (ex: "18" == "0018")
         if ((!data || data.length === 0) && /^\d+$/.test(termo.trim())) {
             const termoNum = parseInt(termo.trim(), 10);
-            const { data: candidatos } = await db
+            const { data: candidatos } = await consultarComAtributos((comAtr) => db
                 .from('produtos')
                 .select(`
                     id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
                     vendido_por_peso, plu_balanca, tem_variacoes, imagem_url,
-                    produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                    produto_variacoes ( id, tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
                 `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
-                .limit(500);
+                .limit(500));
 
             const porPlu = (candidatos || []).filter(p => {
                 const pluNum = parseInt(String(p.plu_balanca).trim(), 10);
                 return !isNaN(pluNum) && pluNum === termoNum;
             });
-            if (porPlu.length > 0) return res.status(200).json(comVariacoes(porPlu));
+            if (porPlu.length > 0) return res.status(200).json(await comVariacoes(porPlu));
         }
 
-        res.status(200).json(comVariacoes(data));
+        res.status(200).json(await comVariacoes(data));
 
     } catch (error) {
 
