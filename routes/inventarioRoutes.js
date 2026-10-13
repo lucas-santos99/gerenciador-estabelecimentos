@@ -492,7 +492,14 @@ router.get('/movimentacoes/listar', verificarPermissao(PERMISSOES.INVENTARIO), a
     const { data, error, count } = await q;
     if (error) throw error;
 
-    res.json({ movimentacoes: data || [], total: count || 0 });
+    // Movimentação de uma variação: mostra qual (ex.: "Camiseta (P · Azul)"), com o texto atual dos atributos da loja.
+    const RV = require('../utils/rotulosVariacao');
+    const rotulos = await RV.rotulosPorId(mid, (data || []).map(m => m.produto_variacao_id));
+    const movimentacoes = (data || []).map(m => (m.produto_variacao_id && rotulos.get(m.produto_variacao_id)
+      ? { ...m, produto_nome: RV.nomeComVariacao(m.produto_nome, rotulos.get(m.produto_variacao_id)) }
+      : m));
+
+    res.json({ movimentacoes, total: count || 0 });
   } catch (err) {
     console.error('[INVENTÁRIO] Movimentações:', err.message);
     res.status(500).json({ error: 'Erro ao listar movimentações' });

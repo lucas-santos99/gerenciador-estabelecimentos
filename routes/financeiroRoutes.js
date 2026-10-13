@@ -14,6 +14,7 @@ const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, hojeStrTZ, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
+const { rotulosDosItens, nomeComVariacao, selecionarItensVenda } = require('../utils/rotulosVariacao');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 
 // ── Permissões do operador (módulo + ação marcada na tela) ─────────
@@ -460,10 +461,12 @@ router.get('/historico',
         }
 
         const vendasComItens = await Promise.all(vendas.map(async (venda) => {
-            const { data: itens } = await supabaseAdmin
+            const { data: itens } = await selecionarItensVenda((comRot) => supabaseAdmin
                 .from('itens_venda')
-                .select('pagamento_venda_id, quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
-                .eq('venda_id', venda.id);
+                .select(`pagamento_venda_id, produto_variacao_id, ${comRot ? 'variacao_rotulo, ' : ''}quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )`)
+                .eq('venda_id', venda.id));
+            // Variação vendida (tamanho/cor/…): o texto gravado na venda; nas antigas, o atual.
+            const rotulosItens = await rotulosDosItens(req.user.mercearia_id, itens);
 
             return {
                 ...venda,
@@ -477,8 +480,9 @@ router.get('/historico',
                 // null quando foi dividido por valor (sem dono por item) ou
                 // caiu no "resto" sem atribuição. Usado no front pra abrir
                 // o detalhe de itens dentro de cada fatia.
-                itens: (itens || []).map(i => ({
-                    produto_nome:       i.produtos?.nome || 'Produto',
+                itens: (itens || []).map((i, ix) => ({
+                    produto_nome:       nomeComVariacao(i.produtos?.nome || 'Produto', rotulosItens[ix]),
+                    variacao:           rotulosItens[ix] || null,
                     produto_marca:      i.produtos?.marca || null,
                     produto_imagem_url: i.produtos?.imagem_url || null,
                     quantidade:         i.quantidade,

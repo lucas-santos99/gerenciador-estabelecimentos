@@ -8,6 +8,7 @@ const router = express.Router();
 const authUser = require('../middlewares/authUser');
 const createSupabaseUserClient = require('../db/supabaseUser');
 const supabaseAdmin = require('../db/supabaseAdmin');
+const { rotulosDosItens, nomeComVariacao, selecionarItensVenda } = require('../utils/rotulosVariacao');
 const { registrar } = require('./auditoriaRoutes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const { erroTeto } = require('../utils/tetoCadastros');
@@ -409,10 +410,12 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
         }
 
         const resultado = await Promise.all((vendas || []).map(async (venda) => {
-            const { data: itens } = await supabaseAdmin
+            const { data: itens } = await selecionarItensVenda((comRot) => supabaseAdmin
                 .from('itens_venda')
-                .select('pagamento_venda_id, quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )')
-                .eq('venda_id', venda.id);
+                .select(`pagamento_venda_id, produto_variacao_id, ${comRot ? 'variacao_rotulo, ' : ''}quantidade, preco_unitario, produtos ( nome, marca, unidade_medida, imagem_url )`)
+                .eq('venda_id', venda.id));
+            // Variação vendida (tamanho/cor/…): o texto gravado na venda; nas antigas, o atual.
+            const rotulosItens = await rotulosDosItens(req.user.mercearia_id, itens);
 
             return {
                 ...venda,
@@ -424,8 +427,9 @@ router.get('/:clienteId/historico-compras', async (req, res) => {
                 // venda foi dividida por item (Fase 2, item 19) — null se
                 // foi dividido por valor ou o item caiu no "resto" sem
                 // atribuição. Mesmo padrão de financeiroRoutes.js.
-                itens: (itens || []).map(i => ({
-                    produto_nome:       i.produtos?.nome || 'Produto',
+                itens: (itens || []).map((i, ix) => ({
+                    produto_nome:       nomeComVariacao(i.produtos?.nome || 'Produto', rotulosItens[ix]),
+                    variacao:           rotulosItens[ix] || null,
                     produto_marca:      i.produtos?.marca || null,
                     produto_imagem_url: i.produtos?.imagem_url || null,
                     quantidade:         i.quantidade,

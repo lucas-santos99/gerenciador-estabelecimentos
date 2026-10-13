@@ -283,14 +283,34 @@ router.post('/finalizar', async (req, res) => {
       await db.from('vendas').update(updatesPosVenda).eq('id', vendaId);
     }
 
+    // Grava na venda o texto da variação vendida (ex.: "Frozen · P"), pra o histórico não mudar se a
+    // loja renomear/ocultar atributos depois. Best-effort: se falhar (ou a coluna ainda não existir),
+    // o histórico cai no texto atual da variação.
+    let rotulosVenda = new Map();
+    try {
+      const variacaoIdsVenda = [...new Set(carrinho.map(i => i.produto_variacao_id).filter(Boolean))];
+      if (vendaId && variacaoIdsVenda.length) {
+        const rotulos = await require('../utils/rotulosVariacao').rotulosPorId(mercearia_id, variacaoIdsVenda);
+        rotulosVenda = rotulos;
+        for (const [vid, rot] of rotulos) {
+          if (!rot) continue;
+          const { error: errRot } = await db.from('itens_venda').update({ variacao_rotulo: rot.slice(0, 300) })
+            .eq('venda_id', vendaId).eq('produto_variacao_id', vid);
+          if (errRot && errRot.code !== '42703') console.error('[VENDA] rótulo da variação não gravado:', errRot.message);
+        }
+      }
+    } catch (e) {
+      console.error('[VENDA] rótulo da variação não gravado:', e.message);
+    }
+
     // Registrar na auditoria — busca nome do cliente e dos produtos
     // vendidos, pra descrição ficar completa (não só o valor)
     const { data: itensAud } = await db
       .from('itens_venda')
-      .select('quantidade, produtos ( nome )')
+      .select('quantidade, produto_variacao_id, produtos ( nome )')
       .eq('venda_id', vendaId);
     const resumoItens = (itensAud || [])
-      .map(i => `${parseFloat(i.quantidade).toLocaleString('pt-BR', { maximumFractionDigits: 3 })}× ${i.produtos?.nome || 'Produto'}`)
+      .map(i => `${parseFloat(i.quantidade).toLocaleString('pt-BR', { maximumFractionDigits: 3 })}× ${i.produtos?.nome || 'Produto'}${rotulosVenda.get(i.produto_variacao_id) ? ` (${rotulosVenda.get(i.produto_variacao_id)})` : ''}`)
       .join(', ');
 
     let descricaoVenda;
