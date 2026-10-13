@@ -58,6 +58,19 @@ async function consultarComAtributos(montar) {
   return r;
 }
 
+// Acrescenta `rotulo` (valores na ordem dos atributos da loja) em cada variação dos produtos.
+// Se não conseguir ler os atributos da loja, usa a ordem padrão (tamanho · cor · gênero · extras).
+async function anexarRotulos(estabelecimentoId, produtos) {
+  let atributos = [];
+  try { atributos = (await carregarAtributosLoja(estabelecimentoId)).atributos; }
+  catch (e) { console.error('[ERRO] atributos da loja (rótulos das variações):', e.message); }
+  for (const p of produtos || []) {
+    if (!Array.isArray(p?.variacoes)) continue;
+    p.variacoes = p.variacoes.map(v => ({ ...v, rotulo: AV.rotuloDaVariacao(v, atributos) }));
+  }
+  return produtos;
+}
+
 // Confere os atributos EXTRAS enviados nas variações: só atributos que a loja conhece,
 // valores curtos, JSON pequeno e no máximo N atributos diferentes por produto.
 // Só consulta o banco quando alguma variação traz atributo extra.
@@ -390,6 +403,7 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
         });
 
         if (error) throw error;
+        await anexarRotulos(estabelecimentoId, data);
 
         // Fallback: se não achou por nome/código de barras, tenta por PLU
         // da balança — permite digitar o PLU manualmente no PDV quando a
@@ -400,16 +414,16 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
         if ((!data || data.length === 0) && /^\d+$/.test(termo.trim())) {
             const termoNum = parseInt(termo.trim(), 10);
 
-            const { data: candidatos, error: errPlu } = await db
+            const { data: candidatos, error: errPlu } = await consultarComAtributos((comAtr) => db
                 .from('produtos')
                 .select(`
                     id, nome, marca, preco_venda, estoque_atual, unidade_medida, estoque_minimo,
                     vendido_por_peso, plu_balanca, codigo_barras, categoria_id, tem_variacoes, imagem_url,
-                    produto_variacoes ( id, tamanho, cor, genero, codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
+                    produto_variacoes ( id, tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, ativo )
                 `)
                 .eq('mercearia_id', estabelecimentoId)
                 .not('plu_balanca', 'is', null)
-                .limit(500);
+                .limit(500));
 
             if (errPlu) {
                 console.error(`[ERRO] fallback PLU busca-global:`, errPlu.message);
@@ -423,7 +437,7 @@ router.get('/:id/produtos/buscar-global', async (req, res) => {
                         ...p,
                         variacoes: (p.produto_variacoes || []).filter(v => v.ativo),
                     }));
-                if (porPlu.length > 0) return res.status(200).json(porPlu);
+                if (porPlu.length > 0) { await anexarRotulos(estabelecimentoId, porPlu); return res.status(200).json(porPlu); }
             }
         }
 
@@ -453,22 +467,24 @@ router.get('/:id/produtos/por-ids', async (req, res) => {
     if (ids.length === 0) return res.status(200).json([]);
 
     try {
-        const { data, error } = await db
+        const { data, error } = await consultarComAtributos((comAtr) => db
             .from('produtos')
             .select(`
                 id, nome, preco_venda, estoque_atual, estoque_minimo, unidade_medida, tem_variacoes,
-                produto_variacoes ( id, tamanho, cor, genero, preco_venda, estoque_atual, ativo )
+                produto_variacoes ( id, tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}preco_venda, estoque_atual, ativo )
             `)
             .eq('mercearia_id', estabelecimentoId)
-            .in('id', ids);
+            .in('id', ids));
 
         if (error) throw error;
 
-        res.status(200).json((data || []).map(p => ({
+        const lista = (data || []).map(p => ({
             ...p,
             variacoes: (p.produto_variacoes || []).filter(v => v.ativo),
             produto_variacoes: undefined,
-        })));
+        }));
+        await anexarRotulos(estabelecimentoId, lista);
+        res.status(200).json(lista);
     } catch (error) {
         console.error(`[ERRO] GET /api/estabelecimentos/${estabelecimentoId}/produtos/por-ids:`, error.message);
         return res.status(500).json({ error: 'Erro ao buscar produtos.' });

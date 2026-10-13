@@ -145,8 +145,30 @@ function mensagemTeto(error) {
   return msgs[m[1]] || `Limite atingido (${m[1]}).`;
 }
 
+// Texto da variação na ORDEM DOS ATRIBUTOS DA LOJA (ex.: "Frozen · P · Azul"). Só os valores,
+// separados por " · ". `atributos` = lista de montarAtributos (ligados e ocultos). Valores de
+// atributos que a loja não conhece mais entram no fim. Nunca lança.
+function rotuloDaVariacao(v, atributos = []) {
+  const extras = extrasDaVariacao(v);
+  const partes = [];
+  const usados = new Set();
+  for (const a of atributos || []) {
+    const bruto = ehLegado(a.chave) ? v?.[a.chave] : extras[a.chave];
+    const val = bruto == null ? '' : String(bruto).trim();
+    usados.add(a.chave);
+    if (val) partes.push(val);
+  }
+  for (const k of LEGADOS) {
+    if (usados.has(k)) continue;
+    const val = v?.[k] == null ? '' : String(v[k]).trim();
+    if (val) partes.push(val);
+  }
+  for (const [k, val] of Object.entries(extras)) if (!usados.has(k)) partes.push(val);
+  return partes.join(' · ');
+}
+
 module.exports = {
   TETOS_ATRIBUTOS, LEGADOS, NOME_LEGADO, PADRAO_POR_TIPO, MODELOS_PRONTOS,
   normalizarTipoEstabelecimento, chaveDoNome, chaveValida, nomeIgual, ehLegado,
-  montarAtributos, contarParaTeto, mensagemTeto, extrasDaVariacao, chavesUsadas,
+  montarAtributos, contarParaTeto, mensagemTeto, extrasDaVariacao, chavesUsadas, rotuloDaVariacao,
 };
