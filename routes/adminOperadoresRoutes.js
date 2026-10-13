@@ -419,6 +419,21 @@ router.put("/:id/restaurar", authUser, async (req, res) => {
   }
 });
 
+// Auditoria das fotos (13/10/2026): rotas já exigem SuperAdmin logado, então há "quem fez".
+async function registrarFotoOperador(req, id, acao, texto) {
+  const { data: op } = await db.from("operadores").select("nome, mercearia_id").eq("id", id).maybeSingle();
+  await registrar({
+    mercearia_id:  op?.mercearia_id || null,
+    operador_id:   id,
+    usuario_nome:  req.user.nome,
+    usuario_email: req.user.email,
+    modulo:        "operadores",
+    acao,
+    descricao:     `${texto} "${op?.nome || id}"`,
+    escopo:        "admin_global",
+  });
+}
+
 /* ============================================================
    UPLOAD FOTO
 ============================================================ */
@@ -447,6 +462,8 @@ router.post("/:id/upload-foto", upload.single("foto"), async (req, res) => {
       .from("operadores")
       .update({ foto_url: data.publicUrl, ...carimboAlteracao(req) })
       .eq("id", id);
+
+    await registrarFotoOperador(req, id, "operador_foto_enviada", "Enviou a foto do operador");
 
     res.json({ success: true, foto_url: data.publicUrl });
   } catch (err) {
@@ -482,6 +499,8 @@ router.delete("/:id/remover-foto", async (req, res) => {
       .from("operadores")
       .update({ foto_url: null, ...carimboAlteracao(req) })
       .eq("id", id);
+
+    await registrarFotoOperador(req, id, "operador_foto_removida", "Removeu a foto do operador");
 
     res.json({ success: true });
   } catch (err) {

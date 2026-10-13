@@ -140,6 +140,8 @@ app.use((err, req, res, next) => {
 });
 
 // --- INICIAR SERVIDOR ---
+require("./utils/auditoriaManutencao").agendarArquivamento(); // move auditoria antiga para o arquivo (SQL 36)
+
 app.listen(PORT, () => {
   console.log(`\n[INFO] Servidor rodando na porta ${PORT}`);
   console.log(`[STATUS] Acesse: http://localhost:${PORT}`);

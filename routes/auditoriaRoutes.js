@@ -170,42 +170,69 @@ router.get('/resumo', verificarPermissao(PERMISSOES.AUDITORIA), async (req, res)
   try {
     const timezone = await buscarTimezone(mercearia_id);
 
-    // 05/10/2026 — o banco devolve no máximo 1000 linhas por consulta e as
-    // contagens paravam aí. Lê em blocos até acabar (teto: 20 mil registros).
-    const BLOCO = 1000;
-    const MAX_BLOCOS = 20;
-    const data = [];
-    for (let bloco = 0; bloco < MAX_BLOCOS; bloco++) {
-      let query = db
-        .from('auditoria')
-        .select('operador_id, usuario_nome, modulo, acao')
-        .eq('mercearia_id', mercearia_id)
-        // Mesma regra da rota '/': personificação não entra no resumo do estabelecimento.
-        .neq('acao', 'personificar_usuario')
-        .order('criado_em', { ascending: false })
-        .order('id', { ascending: false })
-        .range(data.length, data.length + BLOCO - 1);
-
-      if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
-      if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
-
-      const { data: linhas, error } = await query;
-      if (error) throw error;
-      if (!linhas || linhas.length === 0) break;
-      data.push(...linhas);
-      if (linhas.length < BLOCO) break;
-    }
-
-    // Agrupa por operador
+    // 13/10/2026 — o resumo é calculado no banco (SQL 36: auditoria_resumo). Se a função ainda
+    // não existir, usa o caminho antigo (lê em blocos, teto de 20 mil registros).
     const por_operador = {};
-    (data || []).forEach(r => {
-      const key = r.operador_id || 'merchant';
-      if (!por_operador[key]) {
-        por_operador[key] = { operador_id: r.operador_id, nome: r.usuario_nome || 'Administrador', total: 0, por_modulo: {} };
-      }
-      por_operador[key].total++;
-      por_operador[key].por_modulo[r.modulo] = (por_operador[key].por_modulo[r.modulo] || 0) + 1;
+    const ini = data_inicio ? inicioDiaTZ(data_inicio, timezone).toISOString() : null;
+    const fim = data_fim    ? fimDiaTZ(data_fim, timezone).toISOString() : null;
+    const { data: grupos, error: errRpc } = await db.rpc('auditoria_resumo', {
+      p_mercearia_id: mercearia_id, p_inicio: ini, p_fim: fim,
     });
+
+    if (!errRpc) {
+      const ultimoNome = {};
+      for (const g of grupos || []) {
+        const key = g.operador_id || 'merchant';
+        if (!por_operador[key]) {
+          por_operador[key] = { operador_id: g.operador_id, nome: g.usuario_nome || 'Administrador', total: 0, por_modulo: {} };
+        }
+        por_operador[key].total += Number(g.total);
+        por_operador[key].por_modulo[g.modulo] = (por_operador[key].por_modulo[g.modulo] || 0) + Number(g.total);
+        if (g.usuario_nome && (!ultimoNome[key] || g.ultimo > ultimoNome[key])) {
+          ultimoNome[key] = g.ultimo;
+          por_operador[key].nome = g.usuario_nome;
+        }
+      }
+    } else {
+      if (errRpc.code !== 'PGRST202' && errRpc.code !== '42883') console.error('[AUDITORIA] resumo via banco:', errRpc.message);
+      // 05/10/2026 — o banco devolve no máximo 1000 linhas por consulta e as
+      // contagens paravam aí. Lê em blocos até acabar (teto: 20 mil registros).
+      const BLOCO = 1000;
+      const MAX_BLOCOS = 20;
+      const data = [];
+      for (let bloco = 0; bloco < MAX_BLOCOS; bloco++) {
+        let query = db
+          .from('auditoria')
+          .select('operador_id, usuario_nome, modulo, acao')
+          .eq('mercearia_id', mercearia_id)
+          // Mesma regra da rota '/': personificação não entra no resumo do estabelecimento.
+          .neq('acao', 'personificar_usuario')
+          .order('criado_em', { ascending: false })
+          .order('id', { ascending: false })
+          .range(data.length, data.length + BLOCO - 1);
+
+        if (data_inicio) query = query.gte('criado_em', inicioDiaTZ(data_inicio, timezone).toISOString());
+        if (data_fim)    query = query.lte('criado_em', fimDiaTZ(data_fim, timezone).toISOString());
+
+        const { data: linhas, error } = await query;
+        if (error) throw error;
+        if (!linhas || linhas.length === 0) break;
+        data.push(...linhas);
+        if (linhas.length < BLOCO) break;
+      }
+
+      // Agrupa por operador
+      (data || []).forEach(r => {
+        const key = r.operador_id || 'merchant';
+        if (!por_operador[key]) {
+          por_operador[key] = { operador_id: r.operador_id, nome: r.usuario_nome || 'Administrador', total: 0, por_modulo: {} };
+        }
+        por_operador[key].total++;
+        por_operador[key].por_modulo[r.modulo] = (por_operador[key].por_modulo[r.modulo] || 0) + 1;
+      });
+
+
+    }
 
     res.json(Object.values(por_operador).sort((a, b) => b.total - a.total));
   } catch (err) {
@@ -318,39 +345,44 @@ router.get('/admin/filtros', async (req, res) => {
   const { mercearia_id, escopo } = req.query;
 
   try {
-    // 05/10/2026 — o Supabase devolve no máximo 1000 linhas por consulta
-    // (o .limit(5000) antigo era cortado em 1000 e as listas vinham
-    // incompletas). Lê em blocos com .range() até acabar, do mais novo
-    // para o mais antigo, com ordenação estável (criado_em + id) e um teto
-    // de segurança de 20 blocos (20 mil registros mais recentes).
-    const BLOCO = 1000;
-    const MAX_BLOCOS = 20;
+    // 13/10/2026 — as opções vêm do banco (SQL 36: auditoria_filtros, últimos 180 dias). Se a
+    // função ainda não existir, cai no caminho antigo (blocos de 1000, até 20 mil registros).
     const acoesSet    = new Set();
     const usuariosSet = new Set();
 
-    let inicio = 0;
-    for (let bloco = 0; bloco < MAX_BLOCOS; bloco++) {
-      let query = db
-        .from('auditoria')
-        .select('acao, usuario_nome')
-        .order('criado_em', { ascending: false })
-        .order('id', { ascending: false })
-        .range(inicio, inicio + BLOCO - 1);
+    const { data: opcoes, error: errRpc } = await db.rpc('auditoria_filtros', {
+      p_mercearia_id: mercearia_id || null, p_escopo: escopo || null,
+    });
+    if (!errRpc) {
+      for (const o of opcoes || []) (o.tipo === 'acao' ? acoesSet : usuariosSet).add(o.valor);
+    } else {
+      if (errRpc.code !== 'PGRST202' && errRpc.code !== '42883') console.error('[AUDITORIA] filtros via banco:', errRpc.message);
+      const BLOCO = 1000;
+      const MAX_BLOCOS = 20;
+      let inicio = 0;
+      for (let bloco = 0; bloco < MAX_BLOCOS; bloco++) {
+        let query = db
+          .from('auditoria')
+          .select('acao, usuario_nome')
+          .order('criado_em', { ascending: false })
+          .order('id', { ascending: false })
+          .range(inicio, inicio + BLOCO - 1);
 
-      if (mercearia_id) query = query.eq('mercearia_id', mercearia_id);
-      if (escopo)       query = query.eq('escopo', escopo);
+        if (mercearia_id) query = query.eq('mercearia_id', mercearia_id);
+        if (escopo)       query = query.eq('escopo', escopo);
 
-      const { data: linhas, error } = await query;
-      if (error) throw error;
-      if (!linhas || linhas.length === 0) break;
+        const { data: linhas, error } = await query;
+        if (error) throw error;
+        if (!linhas || linhas.length === 0) break;
 
-      for (const r of linhas) {
-        if (r.acao)         acoesSet.add(r.acao);
-        if (r.usuario_nome) usuariosSet.add(r.usuario_nome);
+        for (const r of linhas) {
+          if (r.acao)         acoesSet.add(r.acao);
+          if (r.usuario_nome) usuariosSet.add(r.usuario_nome);
+        }
+
+        // Avança pelo que realmente veio (o servidor pode devolver menos que o bloco)
+        inicio += linhas.length;
       }
-
-      // Avança pelo que realmente veio (o servidor pode devolver menos que o bloco)
-      inicio += linhas.length;
     }
 
     const acoes    = [...acoesSet].sort();
