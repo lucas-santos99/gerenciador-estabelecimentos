@@ -319,14 +319,17 @@ async function avisosEstabelecimento(user, prefs, ctx) {
         ativa('contas') ? prefs.categorias.contas.antecedencia_dias : 0,
         ativa('fornecedores') ? prefs.categorias.fornecedores.antecedencia_dias : 0,
       );
-      const { data: contas } = await db.from('contas_a_pagar')
-        .select('id, descricao, valor, data_vencimento, status')
+      // valor_confirmado / conta_fixa_id (SQL 39): se ainda não existirem, cai na consulta antiga.
+      const buscarContas = (colunas) => db.from('contas_a_pagar')
+        .select(colunas)
         .eq('mercearia_id', mid)
         .neq('status', 'paga')
         .not('data_vencimento', 'is', null)
-        .lte('data_vencimento', somarDias(hojeStr, maiorAntecedencia))
+        .lte('data_vencimento', somarDias(hojeStr, Math.max(maiorAntecedencia, 10)))
         .order('data_vencimento', { ascending: true })
         .limit(300);
+      let { data: contas, error: erroContas } = await buscarContas('id, descricao, valor, data_vencimento, status, valor_confirmado, conta_fixa_id');
+      if (erroContas) ({ data: contas } = await buscarContas('id, descricao, valor, data_vencimento, status'));
       if (!contas?.length) return;
 
       const { data: compras } = await db.from('compras')
@@ -351,16 +354,19 @@ async function avisosEstabelecimento(user, prefs, ctx) {
         const compra = compraPorConta[c.id];
         const cat = compra ? 'fornecedores' : 'contas';
         if (!ativa(cat)) return;
-        if (c.data_vencimento > limiteVenc(cat)) return;
+        const conferir = !compra && c.conta_fixa_id && c.valor_confirmado === false;   // conta fixa com valor a conferir
+        if (c.data_vencimento > limiteVenc(cat) && !conferir) return;
         const dias = diasEntre(hojeStr, c.data_vencimento);
         const fornecedor = compra ? (nomeForn[compra.fornecedor_id] || 'fornecedor') : null;
         itens.push({
-          chave: `${cat === 'fornecedores' ? 'fornecedor' : 'conta'}:${c.id}:${c.data_vencimento}`,
+          chave: `${cat === 'fornecedores' ? 'fornecedor' : 'conta'}:${c.id}:${c.data_vencimento}${conferir ? ':valor' : ''}`,
           categoria: cat, tipo: cat === 'fornecedores' ? 'fornecedor_pagamento' : 'conta_vencimento',
           titulo: cat === 'fornecedores'
             ? `Pagar ${fornecedor} — ${textoPrazo(dias)}`
-            : `Conta "${c.descricao || 'sem descrição'}" ${textoPrazo(dias)}`,
-          descricao: `${brl(c.valor)} · vencimento ${fmtData(c.data_vencimento)}${compra?.numero_nota ? ` · nota ${compra.numero_nota}` : ''}${cat === 'fornecedores' && c.descricao ? ` · ${c.descricao}` : ''}`,
+            : conferir
+              ? `Confira o valor: "${c.descricao || 'conta fixa'}" ${textoPrazo(dias)}`
+              : `Conta "${c.descricao || 'sem descrição'}" ${textoPrazo(dias)}`,
+          descricao: `${conferir ? 'Valor do mês passado — atualize se mudou · ' : ''}${brl(c.valor)} · vencimento ${fmtData(c.data_vencimento)}${compra?.numero_nota ? ` · nota ${compra.numero_nota}` : ''}${cat === 'fornecedores' && c.descricao ? ` · ${c.descricao}` : ''}`,
           grupo: grupoPorDias(dias), prioridade: prioridadePorDias(dias),
           data_ref: c.data_vencimento, valor: Math.round(parseFloat(c.valor) * 100) / 100,
           meta: { conta_id: c.id, fornecedor, dias },

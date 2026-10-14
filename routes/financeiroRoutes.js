@@ -18,6 +18,7 @@ const { rotulosDosItens, nomeComVariacao, selecionarItensVenda } = require('../u
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { limitarFrequencia } = require('../utils/limiteFrequencia');
+const ContasFixas = require('../utils/contasFixas');
 
 // ── Permissões do operador (módulo + ação marcada na tela) ─────────
 // Dono e super_admin passam sempre.
@@ -69,6 +70,9 @@ router.get('/',
         // dia seguinte e marca contas como atrasadas antes da hora.
         const timezone = await buscarTimezone(req.user.mercearia_id);
         const hojeBR = hojeStrTZ(timezone);
+
+        // Contas fixas: gera a conta do mês / registra pagamentos automáticos que já chegaram
+        await ContasFixas.processarLojaSePreciso(req.user.mercearia_id);
 
         // Contas ligadas a compras de fornecedor ficam de fora daqui —
         // elas têm visão própria agora, dentro do módulo Fornecedores
@@ -417,6 +421,10 @@ router.put('/:contaId/desfazer-pagamento',
         }
         if (error) throw error;
         if (!data) return res.status(409).json({ error: 'Esta conta não está marcada como paga.' });
+        if (data.pago_automaticamente) {
+            await supabaseAdmin.from('contas_a_pagar').update({ pago_automaticamente: false }).eq('id', contaId);
+            data.pago_automaticamente = false;
+        }
 
         registrar({
           mercearia_id: req.user.mercearia_id,
@@ -439,6 +447,183 @@ router.put('/:contaId/desfazer-pagamento',
 
 });
 
+
+
+// ============================================================
+// CONTAS FIXAS (recorrentes) — SQL 39
+// ============================================================
+
+const brl = (v) => parseFloat(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const MODOS_PAGAMENTO = ['manual', 'no_vencimento', 'antes'];
+const semTabelaFixas = (e) => e && (e.code === '42P01' || e.code === 'PGRST205' || e.code === '42703' || e.code === 'PGRST204');
+const AVISO_SQL39 = 'Contas fixas ainda não estão ativas neste sistema (falta aplicar o SQL 39).';
+
+function lerFixa(body) {
+    const descricao = String(body.descricao || '').trim();
+    const valor = Number(body.valor);
+    const pagamento = MODOS_PAGAMENTO.includes(body.pagamento) ? body.pagamento : 'manual';
+    const diasAntes = pagamento === 'antes' ? Math.min(15, Math.max(1, parseInt(body.dias_antes, 10) || 1)) : 0;
+    const lembrar = body.lembrar_valor !== false;
+    return { descricao, valor, pagamento, dias_antes: diasAntes, lembrar_valor: lembrar };
+}
+
+router.get('/fixas',
+    exigeContas('Sem permissão para ver as contas fixas.'),
+    async (req, res) => {
+    const supabaseAdmin = require('../db/supabaseAdmin');
+    const { data, error } = await supabaseAdmin.from('contas_fixas').select('*')
+        .eq('mercearia_id', req.user.mercearia_id).order('descricao', { ascending: true });
+    if (error) {
+        if (semTabelaFixas(error)) return res.status(200).json([]);
+        return res.status(500).json({ error: error.message });
+    }
+    res.status(200).json(data || []);
+});
+
+router.post('/fixas',
+    limitarFrequencia('contas-fixas', 30),
+    exigeContas('Sem permissão para criar contas fixas.'),
+    async (req, res) => {
+    const supabaseAdmin = require('../db/supabaseAdmin');
+    const f = lerFixa(req.body);
+    const venc = String(req.body.data_vencimento || '').slice(0, 10);
+
+    if (!f.descricao || !Number.isFinite(f.valor) || f.valor <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(venc)) {
+        return res.status(400).json({ error: 'Informe descrição, valor e o primeiro vencimento.' });
+    }
+    const erroTamanho = validarTamanhos({ descricao: f.descricao }, { descricao: LIMITES.NOME_FANTASIA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+
+    try {
+        const { data: fixa, error } = await supabaseAdmin.from('contas_fixas').insert({
+            mercearia_id: req.user.mercearia_id, ...f,
+            dia_vencimento: parseInt(venc.slice(8, 10), 10),
+            ...carimboCriacao(req),
+        }).select().single();
+        if (error) {
+            if (semTabelaFixas(error)) return res.status(503).json({ error: AVISO_SQL39 });
+            const t = erroTetoDoBanco(error); if (t) return res.status(400).json({ error: t });
+            throw error;
+        }
+
+        // A primeira conta é exatamente a que a pessoa digitou (valor já conferido).
+        const { data: conta, error: errConta } = await supabaseAdmin.from('contas_a_pagar').insert({
+            mercearia_id: req.user.mercearia_id, descricao: f.descricao, valor: f.valor,
+            data_vencimento: venc, status: 'pendente',
+            conta_fixa_id: fixa.id, competencia: ContasFixas.primeiroDoMes(venc), valor_confirmado: true,
+            ...carimboCriacao(req),
+        }).select().single();
+        if (errConta) {
+            await supabaseAdmin.from('contas_fixas').delete().eq('id', fixa.id);
+            throw errConta;
+        }
+
+        registrar({
+          mercearia_id: req.user.mercearia_id, operador_id: req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome, usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_fixa_criada',
+          descricao: `Conta fixa criada — "${f.descricao}" (${brl(f.valor)}, todo dia ${fixa.dia_vencimento}; ${f.pagamento === 'manual' ? 'pagamento manual' : f.pagamento === 'antes' ? `registrada como paga ${f.dias_antes} dia(s) antes` : 'registrada como paga no vencimento'})`,
+          meta: { conta_fixa_id: fixa.id, valor: f.valor, pagamento: f.pagamento, dias_antes: f.dias_antes },
+        });
+        res.status(201).json({ fixa, conta });
+    } catch (error) {
+        console.error('[ERRO] POST /api/financeiro/fixas:', error.message);
+        const t = erroTetoDoBanco(error); if (t) return res.status(400).json({ error: t });
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.put('/fixas/:id',
+    exigeContas('Sem permissão para editar contas fixas.'),
+    async (req, res) => {
+    const supabaseAdmin = require('../db/supabaseAdmin');
+    const f = lerFixa(req.body);
+    const dia = parseInt(req.body.dia_vencimento, 10);
+    if (!f.descricao || !Number.isFinite(f.valor) || f.valor <= 0 || !(dia >= 1 && dia <= 31)) {
+        return res.status(400).json({ error: 'Informe descrição, valor e o dia do vencimento (1 a 31).' });
+    }
+    const erroTamanho = validarTamanhos({ descricao: f.descricao }, { descricao: LIMITES.NOME_FANTASIA });
+    if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    try {
+        const { data, error } = await supabaseAdmin.from('contas_fixas').update({
+            ...f, dia_vencimento: dia, ativa: req.body.ativa !== false, ...carimboAlteracao(req),
+        }).eq('id', req.params.id).eq('mercearia_id', req.user.mercearia_id).select().maybeSingle();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Conta fixa não encontrada.' });
+        registrar({
+          mercearia_id: req.user.mercearia_id, operador_id: req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome, usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_fixa_editada',
+          descricao: `Conta fixa editada — "${data.descricao}" (${brl(data.valor)}, todo dia ${data.dia_vencimento}${data.ativa ? '' : ', pausada'})`,
+          meta: { conta_fixa_id: data.id },
+        });
+        res.status(200).json(data);
+    } catch (error) {
+        console.error('[ERRO] PUT /api/financeiro/fixas:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.delete('/fixas/:id',
+    exigeContas('Sem permissão para remover contas fixas.'),
+    async (req, res) => {
+    const supabaseAdmin = require('../db/supabaseAdmin');
+    try {
+        const { data, error } = await supabaseAdmin.from('contas_fixas').delete()
+            .eq('id', req.params.id).eq('mercearia_id', req.user.mercearia_id).select().maybeSingle();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Conta fixa não encontrada.' });
+        registrar({
+          mercearia_id: req.user.mercearia_id, operador_id: req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome, usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_fixa_removida',
+          descricao: `Conta fixa removida — "${data.descricao}" (as contas já geradas continuam)`,
+          meta: { conta_fixa_id: data.id },
+        });
+        res.status(200).json({ ok: true });
+    } catch (error) {
+        console.error('[ERRO] DELETE /api/financeiro/fixas:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Conferiu o valor do mês (o mesmo valor, ou um novo — que vale também para os próximos meses).
+router.put('/:contaId/confirmar-valor',
+    async (req, res) => {
+    const supabaseAdmin = require('../db/supabaseAdmin');
+    const { contaId } = req.params;
+    try {
+        if (await negouPelaConta(req, res, contaId,
+            'Sem permissão para editar contas de compras de fornecedor.',
+            'Sem permissão para editar contas a pagar.')) return;
+        const campos = { valor_confirmado: true, ...carimboAlteracao(req) };
+        if (req.body?.valor !== undefined && req.body?.valor !== null && req.body?.valor !== '') {
+            const v = Number(req.body.valor);
+            if (!Number.isFinite(v) || v <= 0) return res.status(400).json({ error: 'Informe um valor válido, maior que zero.' });
+            campos.valor = v;
+        }
+        const { data, error } = await supabaseAdmin.from('contas_a_pagar').update(campos)
+            .eq('id', contaId).eq('mercearia_id', req.user.mercearia_id).eq('status', 'pendente')
+            .not('conta_fixa_id', 'is', null).select().maybeSingle();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Conta não encontrada, já paga ou não é uma conta fixa.' });
+        if (campos.valor) {
+            await supabaseAdmin.from('contas_fixas').update({ valor: campos.valor })
+                .eq('id', data.conta_fixa_id).eq('mercearia_id', req.user.mercearia_id);
+        }
+        registrar({
+          mercearia_id: req.user.mercearia_id, operador_id: req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome, usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_valor_confirmado',
+          descricao: `Valor da conta fixa conferido — "${data.descricao}" (${brl(data.valor)}, vence ${data.data_vencimento})`,
+          meta: { conta_id: data.id, valor: data.valor },
+        });
+        res.status(200).json(data);
+    } catch (error) {
+        console.error(`[ERRO] PUT /api/financeiro/${contaId}/confirmar-valor:`, error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // ============================================================
 // 5) HISTÓRICO DE VENDAS
@@ -731,6 +916,15 @@ router.put('/:contaId',
 
         if (!data) {
             return res.status(404).json({ error: 'Conta não encontrada ou já paga.' });
+        }
+
+        // Conta que veio de uma conta fixa: alterar o valor é "conferir o valor do mês" —
+        // confirma a conta e leva o valor novo para os próximos meses.
+        if (data.conta_fixa_id) {
+            await supabaseAdmin.from('contas_a_pagar').update({ valor_confirmado: true }).eq('id', data.id);
+            await supabaseAdmin.from('contas_fixas').update({ valor: parseFloat(valor), ...carimboAlteracao(req) })
+                .eq('id', data.conta_fixa_id).eq('mercearia_id', req.user.mercearia_id);
+            data.valor_confirmado = true;
         }
 
         registrar({

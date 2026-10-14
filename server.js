@@ -141,6 +141,7 @@ app.use((err, req, res, next) => {
 
 // --- INICIAR SERVIDOR ---
 require("./utils/auditoriaManutencao").agendarArquivamento(); // move auditoria antiga para o arquivo (SQL 36)
+require("./utils/contasFixas").agendar(); // gera as contas fixas do mês e registra os pagamentos automáticos (SQL 39)
 
 app.listen(PORT, () => {
   console.log(`\n[INFO] Servidor rodando na porta ${PORT}`);
