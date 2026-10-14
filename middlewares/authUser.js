@@ -20,7 +20,19 @@ async function validarToken(token) {
   if (emCache) cacheTokens.delete(token);
 
   const { data, error } = await supabaseAdmin.auth.getUser(token);
-  if (error || !data?.user?.id) return null;
+  if (error || !data?.user?.id) {
+    // Só é "token inválido" se o Auth respondeu 4xx (token vencido,
+    // sessão encerrada...). Falha de rede / 429 / 5xx do Supabase NÃO
+    // pode derrubar o usuário com 401 — vira 503 (o front tenta de novo).
+    const st = error?.status;
+    if (error && (!st || st === 429 || st >= 500)) {
+      console.error('authUser: Auth indisponível ao validar token:', error.message || error);
+      const e = new Error('auth_indisponivel');
+      e.authIndisponivel = true;
+      throw e;
+    }
+    return null;
+  }
 
   // `exp` só é lido DEPOIS da validação acima — aqui já é seguro.
   const exp = jwt.decode(token)?.exp;
@@ -48,7 +60,15 @@ module.exports = async function authUser(req, res, next) {
     // usuário conseguia montar um token falso e ser aceito como ele.
     // Agora o token é validado de verdade no Supabase Auth (com cache
     // curto em memória pra não pagar uma ida ao Auth a cada requisição).
-    const userId = await validarToken(token);
+    let userId;
+    try {
+      userId = await validarToken(token);
+    } catch (e) {
+      if (e.authIndisponivel) {
+        return res.status(503).json({ error: 'Serviço de autenticação indisponível. Tente novamente.' });
+      }
+      throw e;
+    }
     if (!userId) return res.status(401).json({ error: 'Token inválido ou expirado' });
 
     req.supabase  = createSupabaseUserClient(token);
