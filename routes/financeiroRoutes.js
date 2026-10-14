@@ -359,6 +359,88 @@ router.put('/:contaId/pagar',
 
 
 // ============================================================
+// 4b) DESFAZER PAGAMENTO (marcada como paga por engano)
+//     Motivo obrigatório. A conta volta a "pendente", sai do DRE
+//     (que só conta despesas pagas) e o fato fica registrado.
+// ============================================================
+
+router.put('/:contaId/desfazer-pagamento',
+    limitarFrequencia('contas-desfazer', 30),
+    async (req, res) => {
+
+    const supabaseAdmin = require('../db/supabaseAdmin');
+    const { contaId } = req.params;
+    const motivo = String(req.body?.motivo || '').trim().slice(0, 200);
+
+    try {
+
+        if (motivo.length < 3) {
+            return res.status(400).json({ error: 'Informe o motivo de desfazer o pagamento (mínimo 3 letras).' });
+        }
+
+        if (await negouPelaConta(req, res, contaId,
+            'Sem permissão para desfazer o pagamento de compras.',
+            'Sem permissão para desfazer o pagamento de contas.')) return;
+
+        const { data: atual, error: errAtual } = await supabaseAdmin
+            .from('contas_a_pagar')
+            .select('id, descricao, valor, status, data_pagamento')
+            .eq('id', contaId)
+            .eq('mercearia_id', req.user.mercearia_id)
+            .maybeSingle();
+        if (errAtual) throw errAtual;
+        if (!atual) return res.status(404).json({ error: 'Conta não encontrada.' });
+        if (atual.status !== 'paga') {
+            return res.status(409).json({ error: 'Esta conta não está marcada como paga.' });
+        }
+
+        const base = { status: 'pendente', data_pagamento: null, ...carimboAlteracao(req) };
+        const rastro = {
+            pagamento_desfeito_motivo: motivo,
+            pagamento_desfeito_em:     new Date().toISOString(),
+            pagamento_desfeito_por:    req.user.nome || req.user.email || null,
+        };
+
+        const gravar = (campos) => supabaseAdmin
+            .from('contas_a_pagar')
+            .update(campos)
+            .eq('id', contaId)
+            .eq('mercearia_id', req.user.mercearia_id)
+            .eq('status', 'paga')
+            .select()
+            .maybeSingle();
+
+        let { data, error } = await gravar({ ...base, ...rastro });
+        // SQL 38 ainda não aplicado: desfaz do mesmo jeito (o motivo fica na auditoria)
+        if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+            ({ data, error } = await gravar(base));
+        }
+        if (error) throw error;
+        if (!data) return res.status(409).json({ error: 'Esta conta não está marcada como paga.' });
+
+        registrar({
+          mercearia_id: req.user.mercearia_id,
+          operador_id:  req.user.role === 'operator' ? req.user.id : null,
+          usuario_nome: req.user.nome,
+          usuario_email: req.user.email,
+          modulo: 'financeiro', acao: 'conta_pagamento_desfeito',
+          descricao: `Pagamento desfeito — "${atual.descricao}" (${parseFloat(atual.valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}). Motivo: ${motivo}`,
+          meta: { conta_id: atual.id, valor: atual.valor, data_pagamento: atual.data_pagamento, motivo },
+        });
+
+        res.status(200).json(data);
+
+    } catch (error) {
+
+        console.error(`[ERRO] PUT /api/financeiro/${contaId}/desfazer-pagamento:`, error.message);
+        res.status(500).json({ error: error.message, detalhe: error });
+
+    }
+
+});
+
+
+// ============================================================
 // 5) HISTÓRICO DE VENDAS
 // ============================================================
 
