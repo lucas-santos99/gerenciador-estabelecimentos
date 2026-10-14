@@ -121,6 +121,12 @@ async function processarLojaSePreciso(mid) {
   try { await processarLoja(mid); } catch (e) { console.error('[CONTAS FIXAS]', e.message); }
 }
 
+// Depois de criar/editar/confirmar: processa já (ignora o intervalo de 5 min) e nunca derruba a rota.
+async function processarAgora(mid) {
+  ultimaRodada.set(mid, Date.now());
+  try { await processarLoja(mid); } catch (e) { console.error('[CONTAS FIXAS]', e.message); }
+}
+
 async function processarTodas() {
   const fixas = await fixasAtivas(null);
   const lojas = [...new Set(fixas.map(f => f.mercearia_id))];
@@ -138,4 +144,4 @@ function agendar() {
   setInterval(rodar, 6 * 60 * 60 * 1000).unref();
 }
 
-module.exports = { gerarContas, processarLoja, processarLojaSePreciso, processarTodas, agendar, vencimentoDoMes, primeiroDoMes };
+module.exports = { gerarContas, processarLoja, processarLojaSePreciso, processarAgora, processarTodas, agendar, vencimentoDoMes, primeiroDoMes };

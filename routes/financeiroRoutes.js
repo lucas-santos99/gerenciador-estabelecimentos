@@ -525,6 +525,7 @@ router.post('/fixas',
           descricao: `Conta fixa criada — "${f.descricao}" (${brl(f.valor)}, todo dia ${fixa.dia_vencimento}; ${f.pagamento === 'manual' ? 'pagamento manual' : f.pagamento === 'antes' ? `registrada como paga ${f.dias_antes} dia(s) antes` : 'registrada como paga no vencimento'})`,
           meta: { conta_fixa_id: fixa.id, valor: f.valor, pagamento: f.pagamento, dias_antes: f.dias_antes },
         });
+        await ContasFixas.processarAgora(req.user.mercearia_id);   // ex.: vence hoje + pagamento automático
         res.status(201).json({ fixa, conta });
     } catch (error) {
         console.error('[ERRO] POST /api/financeiro/fixas:', error.message);
@@ -557,6 +558,7 @@ router.put('/fixas/:id',
           descricao: `Conta fixa editada — "${data.descricao}" (${brl(data.valor)}, todo dia ${data.dia_vencimento}${data.ativa ? '' : ', pausada'})`,
           meta: { conta_fixa_id: data.id },
         });
+        await ContasFixas.processarAgora(req.user.mercearia_id);
         res.status(200).json(data);
     } catch (error) {
         console.error('[ERRO] PUT /api/financeiro/fixas:', error.message);
@@ -618,6 +620,7 @@ router.put('/:contaId/confirmar-valor',
           descricao: `Valor da conta fixa conferido — "${data.descricao}" (${brl(data.valor)}, vence ${data.data_vencimento})`,
           meta: { conta_id: data.id, valor: data.valor },
         });
+        await ContasFixas.processarAgora(req.user.mercearia_id);   // valor conferido → pagamento automático pode valer já
         res.status(200).json(data);
     } catch (error) {
         console.error(`[ERRO] PUT /api/financeiro/${contaId}/confirmar-valor:`, error.message);
