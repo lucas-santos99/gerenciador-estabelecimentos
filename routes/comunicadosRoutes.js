@@ -17,6 +17,7 @@
 // (mercearias.tipo_estabelecimento), ou só pra um ou mais estabelecimentos
 // específicos (a mesma tabela de junção cobre "um" e "vários").
 const express  = require('express');
+const { apagarAnterior } = require('../utils/storageLimpeza');
 const { otimizarImagem } = require('../utils/otimizarImagem');
 const router   = express.Router();
 const multer   = require('multer');
@@ -401,6 +402,7 @@ router.put('/admin/:id', async (req, res) => {
 
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Comunicado não encontrado.' });
+    await apagarAnterior(antesCom?.imagem_url, [`comunicados/${id}/`], url);
 
     await sincronizarEstabelecimentosAlvo(id, alvo_tipo, estabelecimento_ids);
 
@@ -461,6 +463,7 @@ router.post('/admin/:id/upload-imagem', upload.single('imagem'), async (req, res
   try {
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, 'banner');
     if (otim.erro) return res.status(400).json({ error: otim.erro });
+    const { data: antesCom } = await db.from('comunicados').select('imagem_url').eq('id', id).maybeSingle();
     const nomeArquivo = `comunicados/${id}/${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage

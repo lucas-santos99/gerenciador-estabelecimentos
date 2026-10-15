@@ -1,4 +1,5 @@
 const express = require("express");
+const { apagarAnterior } = require("../utils/storageLimpeza");
 const { otimizarImagem } = require("../utils/otimizarImagem");
 const router = express.Router();
 const db = require("../db/supabaseAdmin"); // Cliente SUPABASE ADMIN (service_role)
@@ -946,6 +947,7 @@ router.post("/:id/upload-logo", authUser, upload.single("logo"), async (req, res
     if (!req.file.mimetype?.startsWith("image/")) return res.status(400).json({ error: "Envie um arquivo de imagem." });
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, "logo");
     if (otim.erro) return res.status(400).json({ error: otim.erro });
+    const { data: antesLogo } = await db.from("mercearias").select("logo_url").eq("id", id).maybeSingle();
     const nomeArquivo = `logos/${id}/${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage
@@ -963,6 +965,7 @@ router.post("/:id/upload-logo", authUser, upload.single("logo"), async (req, res
     const url = urlData.publicUrl;
 
     await db.from("mercearias").update({ logo_url: url, ...carimboAlteracao(req) }).eq("id", id);
+    await apagarAnterior(antesLogo?.logo_url, [`logos/${id}/`, `public/${id}`], url);
 
     await registrar({
       mercearia_id:  id,

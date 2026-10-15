@@ -12,6 +12,12 @@ const { LIMITES, validarTamanhos } = require("../utils/limitesTexto");
 const { erroSenhaFraca } = require("../utils/senha");
 const { erroEmail } = require("../utils/emailValido");
 const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
+const multer = require("multer");
+const { otimizarImagem } = require("../utils/otimizarImagem");
+const { apagarAnterior } = require("../utils/storageLimpeza");
+
+// Foto do operador: teto de 5 MB na entrada; o servidor reduz pra ~400 px / ≤ 80 KB.
+const uploadFoto = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 
 // Todas as rotas deste arquivo exigem autenticação
 router.use(authUser);
@@ -345,6 +351,85 @@ router.delete("/:id", async (req, res) => {
   } catch (err) {
     console.error("Erro excluir operador:", err);
     res.status(500).json({ error: err.message || "Erro ao excluir operador" });
+  }
+});
+
+/* ============================================================
+   FOTO DO OPERADOR (dono da loja)
+   POST   /api/operadores/:id/foto   (multipart, campo "foto")
+   DELETE /api/operadores/:id/foto
+============================================================ */
+router.post("/:id/foto", (req, res, next) => {
+  uploadFoto.single("foto")(req, res, (err) => {
+    if (err) {
+      const msg = err.code === "LIMIT_FILE_SIZE" ? "Imagem maior que 5 MB." : "Erro ao receber a imagem.";
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const op = await garantirDono(id, req.user.mercearia_id).catch(() => null);
+    if (!op) return res.status(404).json({ error: "Operador não encontrado." });
+    if (!req.file) return res.status(400).json({ error: "Arquivo não enviado." });
+    if (!req.file.mimetype?.startsWith("image/")) return res.status(400).json({ error: "Envie um arquivo de imagem." });
+
+    const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, "avatar");
+    if (otim.erro) return res.status(400).json({ error: otim.erro });
+
+    const { data: antes } = await db.from("operadores").select("foto_url").eq("id", id).maybeSingle();
+    const nomeArquivo = `operadores/${id}/${Date.now()}.${otim.ext}`;
+    const { error: upErr } = await db.storage.from("logos")
+      .upload(nomeArquivo, otim.buffer, { upsert: true, contentType: otim.mimetype, cacheControl: "31536000" });
+    if (upErr) return res.status(400).json({ error: upErr.message });
+    const foto_url = db.storage.from("logos").getPublicUrl(nomeArquivo).data.publicUrl;
+
+    const { error } = await db.from("operadores").update({ foto_url, ...carimboAlteracao(req) }).eq("id", id);
+    if (error) throw error;
+    await apagarAnterior(antes?.foto_url, [`operadores/${id}/`], foto_url);
+
+    registrar({
+      mercearia_id:  req.user.mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: "operadores", acao: "operador_foto_enviada",
+      descricao: `Enviou a foto do operador "${op.nome}"`,
+      meta: { operador_id: id },
+    });
+    res.json({ success: true, foto_url });
+  } catch (err) {
+    console.error("Erro upload foto operador:", err);
+    res.status(500).json({ error: "Erro ao enviar a foto." });
+  }
+});
+
+router.delete("/:id/foto", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const op = await garantirDono(id, req.user.mercearia_id).catch(() => null);
+    if (!op) return res.status(404).json({ error: "Operador não encontrado." });
+    const { data: antes } = await db.from("operadores").select("foto_url").eq("id", id).maybeSingle();
+    if (!antes?.foto_url) return res.status(400).json({ error: "Não há foto para remover." });
+
+    const { error } = await db.from("operadores").update({ foto_url: null, ...carimboAlteracao(req) }).eq("id", id);
+    if (error) throw error;
+    await apagarAnterior(antes.foto_url, [`operadores/${id}/`]);
+
+    registrar({
+      mercearia_id:  req.user.mercearia_id,
+      operador_id:   quemFez(req),
+      usuario_nome:  req.user.nome,
+      usuario_email: req.user.email,
+      modulo: "operadores", acao: "operador_foto_removida",
+      descricao: `Removeu a foto do operador "${op.nome}"`,
+      meta: { operador_id: id },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Erro remover foto operador:", err);
+    res.status(500).json({ error: "Erro ao remover a foto." });
   }
 });
 

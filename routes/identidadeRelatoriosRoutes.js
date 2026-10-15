@@ -21,6 +21,7 @@
 // aqui — é o mesmo texto que sai impresso no papel.
 // ============================================================
 const express = require('express');
+const { apagarAnterior } = require('../utils/storageLimpeza');
 const { otimizarImagem } = require('../utils/otimizarImagem');
 const multer  = require('multer');
 
@@ -188,10 +189,15 @@ router.put('/', somenteSuperAdmin, async (req, res) => {
     const { config, erros } = limparConfig(req.body);
     if (erros.length) return res.status(400).json({ error: erros[0], erros });
 
+    const anterior = await lerConfig(db).catch(() => ({}));
     const { error } = await db
       .from('config_sistema')
       .upsert({ chave: CHAVE, valor: JSON.stringify(config) }, { onConflict: 'chave' });
     if (error) throw error;
+    // só agora (troca confirmada no "Salvar") é seguro apagar a logo anterior
+    for (const campo of ['marca_logo_url', 'sistema_logo_url']) {
+      if (anterior?.[campo] && anterior[campo] !== config[campo]) await apagarAnterior(anterior[campo], ['relatorios/'], config[campo]);
+    }
 
     await registrar({
       usuario_nome:  req.user?.nome,

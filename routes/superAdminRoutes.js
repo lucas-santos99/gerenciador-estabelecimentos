@@ -1,4 +1,5 @@
 const express = require('express');
+const { apagarAnterior } = require('../utils/storageLimpeza');
 const { otimizarImagem } = require('../utils/otimizarImagem');
 const router = express.Router();
 const multer = require('multer');
@@ -347,6 +348,7 @@ router.post('/config-cobranca/imagem', onlyMaster, upload.single('imagem'), asyn
     if (!req.file.mimetype?.startsWith('image/')) return res.status(400).json({ error: 'Envie um arquivo de imagem.' });
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, 'banner');
     if (otim.erro) return res.status(400).json({ error: otim.erro });
+    const { data: antesCob } = await db.from('config_sistema').select('valor').eq('chave', 'cobranca_imagem_url').maybeSingle();
     const nomeArquivo = `cobranca/imagem-${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage
@@ -359,6 +361,7 @@ router.post('/config-cobranca/imagem', onlyMaster, upload.single('imagem'), asyn
     const url = urlData.publicUrl;
 
     await db.from('config_sistema').upsert({ chave: 'cobranca_imagem_url', valor: url }, { onConflict: 'chave' });
+    await apagarAnterior(antesCob?.valor, ['cobranca/'], url);
 
     await registrar({
       usuario_nome:  req.user?.nome,

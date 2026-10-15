@@ -1,5 +1,6 @@
 // ===== routes/adminOperadoresRoutes.js =====
 const express = require("express");
+const { apagarAnterior } = require("../utils/storageLimpeza");
 const { otimizarImagem } = require("../utils/otimizarImagem");
 const router = express.Router();
 const db = require("../db/supabaseAdmin"); // cliente SUPABASE ADMIN
@@ -448,6 +449,7 @@ router.post("/:id/upload-foto", upload.single("foto"), async (req, res) => {
     if (!req.file.mimetype?.startsWith("image/")) return res.status(400).json({ error: "Envie um arquivo de imagem." });
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, "avatar");
     if (otim.erro) return res.status(400).json({ error: otim.erro });
+    const { data: antesOp } = await db.from("operadores").select("foto_url").eq("id", id).maybeSingle();
     const filename = `operadores/${id}/${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage
@@ -466,6 +468,7 @@ router.post("/:id/upload-foto", upload.single("foto"), async (req, res) => {
       .from("operadores")
       .update({ foto_url: data.publicUrl, ...carimboAlteracao(req) })
       .eq("id", id);
+    await apagarAnterior(antesOp?.foto_url, [`operadores/${id}/`], data.publicUrl);
 
     await registrarFotoOperador(req, id, "operador_foto_enviada", "Enviou a foto do operador");
 
