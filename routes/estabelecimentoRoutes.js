@@ -1115,6 +1115,47 @@ router.put('/:id/atributos-variacao/:chave', limitarFrequencia('atributos-variac
     }
 });
 
+// Exclui de vez um atributo CRIADO pela loja (os padrão — tamanho/cor/gênero — só podem ser
+// ocultados). Só deixa se nenhuma variação da loja usa o atributo; apaga junto os valores
+// sugeridos dele.
+router.delete('/:id/atributos-variacao/:chave', limitarFrequencia('atributos-variacao', 30), verificarPermissao(...PERMISSAO_ATRIBUTOS), async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const chave = req.params.chave;
+    if (!AV.chaveValida(chave)) return res.status(400).json({ error: 'Atributo inválido.' });
+    if (AV.ehLegado(chave)) return res.status(409).json({ error: 'Este atributo já vem com o sistema e não pode ser excluído. Use "Ocultar".' });
+
+    try {
+        const r = await carregarAtributosLoja(estabelecimentoId);
+        if (!r.tabelaPronta) return res.status(503).json({ error: MSG_SQL31_PENDENTE });
+        const atual = r.atributos.find(a => a.chave === chave && a.personalizado);
+        if (!atual) return res.status(404).json({ error: 'Atributo não encontrado.' });
+
+        if (atual.ativo && !r.atributos.some(a => a.chave !== chave && a.ativo)) {
+            return res.status(409).json({ error: 'A loja precisa manter pelo menos um atributo ligado.' });
+        }
+
+        const { count, error: eUso } = await db.from('produto_variacoes')
+            .select('id, produtos!inner(mercearia_id)', { count: 'exact', head: true })
+            .eq('produtos.mercearia_id', estabelecimentoId)
+            .filter(`atributos->>${chave}`, 'not.is', null);
+        if (eUso) throw eUso;
+        if (count > 0) {
+            return res.status(409).json({ error: `"${atual.nome}" está preenchido em ${count} variação(ões) de produtos. Para não perder esses dados, use "Ocultar" em vez de excluir.` });
+        }
+
+        const { error: eVal } = await db.from('opcoes_variacao').delete().eq('mercearia_id', estabelecimentoId).eq('tipo', chave);
+        if (eVal) throw eVal;
+        const { error } = await db.from('atributos_variacao').delete().eq('mercearia_id', estabelecimentoId).eq('chave', chave);
+        if (error) throw error;
+
+        auditarAtributo(req, 'atributo_variacao_excluido', `Atributo de variação excluído: "${atual.nome}"`, { chave, nome: atual.nome });
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('[ERRO] DELETE /:id/atributos-variacao/:chave:', error.message);
+        res.status(500).json({ error: 'Erro ao excluir o atributo.' });
+    }
+});
+
 // --- Tipos de produto (modelos de tamanho) — salvos na conta da loja, valem em
 // qualquer computador. Ex.: "Boné" com tamanhos 56, 58, 60. (SQL 28) ---
 const TABELA_AUSENTE = '42P01';
