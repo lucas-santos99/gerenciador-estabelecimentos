@@ -1421,6 +1421,7 @@ router.get('/:id/produtos', async (req, res) => {
                 plu_balanca,
                 tem_variacoes,
                 imagem_url,
+                imagem_extra_url,
                 categorias ( nome ),
                 produto_variacoes ( id, tamanho, cor, genero, ${comAtr ? 'atributos, ' : ''}codigo_barras, preco_custo, preco_venda, estoque_atual, estoque_minimo, imagem_url, imagem_origem, ativo )
             `)
@@ -2201,9 +2202,15 @@ router.post('/:id/produtos/:produtoId/imagem', LIM_FOTO, verificarPermissao(PERM
 router.delete('/:id/produtos/:produtoId/imagem', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId } = req.params;
     try {
-        const { data: antes } = await db.from('produtos').select('imagem_url').eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        let { data: antes, error: eAntes } = await db.from('produtos').select('imagem_url, imagem_extra_url').eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        if (eAntes && eAntes.code === '42703') ({ data: antes } = await db.from('produtos').select('imagem_url').eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle());
+        // Se existe a 2ª foto, ela vira a principal (o produto não fica sem foto na lista/PDV)
+        const promover = antes?.imagem_extra_url || null;
+        const novo = promover
+            ? { imagem_url: promover, imagem_origem: 'upload', imagem_extra_url: null }
+            : { imagem_url: null, imagem_origem: null };
         const { data, error } = await db.from('produtos')
-            .update({ imagem_url: null, imagem_origem: null, ...carimboAlteracao(req) })
+            .update({ ...novo, ...carimboAlteracao(req) })
             .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).select().single();
         if (error) throw error;
         if (!data) return res.status(404).json({ error: 'Produto não encontrado.' });
