@@ -2152,66 +2152,45 @@ router.put('/:id/produtos/:produtoId', verificarPermissao([PERMISSOES.ESTOQUE, P
     }
 });
 
-// --- Rota POST: /:id/produtos/:produtoId/imagem — foto própria do lojista ---
-// Recebe a imagem já comprimida pelo navegador (canvas, ~400x400px) como
-// data URL base64. Fica só nesse estabelecimento — nunca vai pro catálogo
-// global (diferente da imagem sugerida do Open Food Facts/catálogo).
-router.post('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
+// ── Fotos do produto e das variações (utils/fotosProduto.js) ─────────────────
+// Principal (produtos.imagem_url) + 1 extra (produtos.imagem_extra_url, SQL 41) por produto,
+// e 1 por variação. A imagem chega já comprimida pelo navegador (WebP/JPEG ≤ ~120 KB); o
+// servidor recusa o que passar de 300 KB, confere o tipo real do arquivo e APAGA do Storage
+// a foto antiga quando ela é trocada ou removida. Fica só nesta loja — nunca vai pro catálogo global.
+const Fotos = require('../utils/fotosProduto');
+const PERM_FOTO = [PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR];
+const LIM_FOTO = limitarFrequencia('produto-foto', 60);
+const MSG_SQL41 = 'Esta função ainda será liberada: falta atualizar o banco de dados. Avise o suporte.';
+
+function auditarFoto(req, acao, descricao, meta) {
+    registrar({
+        mercearia_id: req.params.id,
+        operador_id: req.user.role === 'operator' ? req.user.id : null,
+        usuario_nome: req.user.nome, usuario_email: req.user.email,
+        modulo: 'estoque', acao, descricao, meta,
+    });
+}
+
+// Foto PRINCIPAL do produto
+router.post('/:id/produtos/:produtoId/imagem', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId } = req.params;
-    const { imagem_base64 } = req.body;
-
-    if (!imagem_base64 || !imagem_base64.startsWith('data:image/')) {
-        return res.status(400).json({ error: 'Envie uma imagem válida.' });
-    }
-
+    const img = Fotos.lerImagemBase64(req.body?.imagem_base64);
+    if (img.erro) return res.status(400).json({ error: img.erro });
     try {
-        const { data: produto } = await db
-            .from('produtos')
-            .select('id, nome')
-            .eq('id', produtoId)
-            .eq('mercearia_id', estabelecimentoId)
-            .single();
+        const { data: produto } = await db.from('produtos').select('id, nome, imagem_url')
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).single();
         if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
 
-        const match = imagem_base64.match(/^data:image\/(\w+);base64,(.+)$/);
-        if (!match) return res.status(400).json({ error: 'Formato de imagem inválido.' });
-        const [, extensao, base64Puro] = match;
-        const buffer = Buffer.from(base64Puro, 'base64');
+        const up = await Fotos.subirFoto({ pasta: `produtos/${estabelecimentoId}`, nomeBase: produtoId, buffer: img.buffer, tipo: img.tipo });
+        if (up.erro) return res.status(400).json({ error: up.erro });
 
-        // Limite de segurança — a compressão no navegador já deveria
-        // deixar bem menor que isso, mas evita abuso/erro de implementação
-        if (buffer.length > 2 * 1024 * 1024) {
-            return res.status(400).json({ error: 'Imagem muito grande (máx. 2MB).' });
-        }
-
-        const nomeArquivo = `produtos/${estabelecimentoId}/${produtoId}-${Date.now()}.${extensao}`;
-        const { error: uploadErr } = await db.storage
-            .from('logos')
-            .upload(nomeArquivo, buffer, { upsert: true, contentType: `image/${extensao}` });
-        if (uploadErr) return res.status(400).json({ error: uploadErr.message });
-
-        const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
-        const url = urlData.publicUrl;
-
-        const { data: atualizado, error } = await db
-            .from('produtos')
-            .update({ imagem_url: url, imagem_origem: 'upload', ...carimboAlteracao(req) })
-            .eq('id', produtoId)
-            .eq('mercearia_id', estabelecimentoId)
-            .select()
-            .single();
+        const { data: atualizado, error } = await db.from('produtos')
+            .update({ imagem_url: up.url, imagem_origem: 'upload', ...carimboAlteracao(req) })
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).select().single();
         if (error) throw error;
 
-        registrar({
-          mercearia_id: estabelecimentoId,
-          operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.nome,
-          usuario_email: req.user.email,
-          modulo: 'estoque', acao: 'produto_imagem_enviada',
-          descricao: `Foto enviada pro produto "${produto.nome}"`,
-          meta: { produto_id: produtoId },
-        });
-
+        await Fotos.apagarFoto(produto.imagem_url, estabelecimentoId); // não deixa a antiga órfã no Storage
+        auditarFoto(req, 'produto_imagem_enviada', `Foto enviada pro produto "${produto.nome}"`, { produto_id: produtoId });
         res.status(200).json(atualizado);
     } catch (error) {
         console.error(`[ERRO] POST .../produtos/${produtoId}/imagem:`, error.message);
@@ -2219,32 +2198,17 @@ router.post('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.ES
     }
 });
 
-// --- Rota DELETE: /:id/produtos/:produtoId/imagem — remove a imagem atual ---
-// Volta pro estado "sem imagem" — o lojista pode buscar a sugestão de
-// novo depois, se quiser.
-router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
+router.delete('/:id/produtos/:produtoId/imagem', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId } = req.params;
     try {
-        const { data, error } = await db
-            .from('produtos')
+        const { data: antes } = await db.from('produtos').select('imagem_url').eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        const { data, error } = await db.from('produtos')
             .update({ imagem_url: null, imagem_origem: null, ...carimboAlteracao(req) })
-            .eq('id', produtoId)
-            .eq('mercearia_id', estabelecimentoId)
-            .select()
-            .single();
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).select().single();
         if (error) throw error;
         if (!data) return res.status(404).json({ error: 'Produto não encontrado.' });
-
-        registrar({
-          mercearia_id: estabelecimentoId,
-          operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.nome,
-          usuario_email: req.user.email,
-          modulo: 'estoque', acao: 'produto_imagem_removida',
-          descricao: `Foto removida do produto "${data.nome}"`,
-          meta: { produto_id: produtoId },
-        });
-
+        await Fotos.apagarFoto(antes?.imagem_url, estabelecimentoId);
+        auditarFoto(req, 'produto_imagem_removida', `Foto removida do produto "${data.nome}"`, { produto_id: produtoId });
         res.status(200).json(data);
     } catch (error) {
         console.error(`[ERRO] DELETE .../produtos/${produtoId}/imagem:`, error.message);
@@ -2252,66 +2216,96 @@ router.delete('/:id/produtos/:produtoId/imagem', verificarPermissao([PERMISSOES.
     }
 });
 
-// --- Rota POST: /:id/produtos/:produtoId/variacoes/:variacaoId/imagem ---
-// Foto própria de uma variação específica (ex: a mesma camiseta em cores
-// diferentes) — mesma lógica da imagem do produto, mas por variação.
-router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
-    const { id: estabelecimentoId, produtoId, variacaoId } = req.params;
-    const { imagem_base64 } = req.body;
-
-    if (!imagem_base64 || !imagem_base64.startsWith('data:image/')) {
-        return res.status(400).json({ error: 'Envie uma imagem válida.' });
-    }
-
+// Foto EXTRA (a 2ª) do produto — só lida quando o produto é aberto para editar, não pesa na lista/PDV.
+router.get('/:id/produtos/:produtoId/imagem-extra', async (req, res) => {
+    const { id: estabelecimentoId, produtoId } = req.params;
     try {
-        const { data: variacao } = await db
-            .from('produto_variacoes')
-            .select('id, tamanho, cor, genero, produtos ( nome )')
-            .eq('id', variacaoId)
-            .eq('produto_id', produtoId)
-            .eq('mercearia_id', estabelecimentoId)
-            .single();
-        if (!variacao) return res.status(404).json({ error: 'Variação não encontrada.' });
-
-        const match = imagem_base64.match(/^data:image\/(\w+);base64,(.+)$/);
-        if (!match) return res.status(400).json({ error: 'Formato de imagem inválido.' });
-        const [, extensao, base64Puro] = match;
-        const buffer = Buffer.from(base64Puro, 'base64');
-
-        if (buffer.length > 2 * 1024 * 1024) {
-            return res.status(400).json({ error: 'Imagem muito grande (máx. 2MB).' });
+        const { data, error } = await db.from('produtos').select('imagem_extra_url')
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        if (error) {
+            if (error.code === '42703') return res.json({ imagem_extra_url: null, pronto: false }); // antes do SQL 41
+            throw error;
         }
+        res.json({ imagem_extra_url: data?.imagem_extra_url || null, pronto: true });
+    } catch (error) {
+        console.error('[ERRO] GET imagem-extra:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar a foto.' });
+    }
+});
 
-        const nomeArquivo = `produtos/${estabelecimentoId}/variacoes/${variacaoId}-${Date.now()}.${extensao}`;
-        const { error: uploadErr } = await db.storage
-            .from('logos')
-            .upload(nomeArquivo, buffer, { upsert: true, contentType: `image/${extensao}` });
-        if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+router.post('/:id/produtos/:produtoId/imagem-extra', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
+    const { id: estabelecimentoId, produtoId } = req.params;
+    const img = Fotos.lerImagemBase64(req.body?.imagem_base64);
+    if (img.erro) return res.status(400).json({ error: img.erro });
+    try {
+        const { data: produto, error: eLer } = await db.from('produtos').select('id, nome, imagem_extra_url')
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        if (eLer) {
+            if (eLer.code === '42703') return res.status(503).json({ error: MSG_SQL41 });
+            throw eLer;
+        }
+        if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
 
-        const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
-        const url = urlData.publicUrl;
+        const up = await Fotos.subirFoto({ pasta: `produtos/${estabelecimentoId}`, nomeBase: `${produtoId}-extra`, buffer: img.buffer, tipo: img.tipo });
+        if (up.erro) return res.status(400).json({ error: up.erro });
 
-        const { data: atualizado, error } = await db
-            .from('produto_variacoes')
-            .update({ imagem_url: url, imagem_origem: 'upload' })
-            .eq('id', variacaoId)
-            .eq('produto_id', produtoId)
-            .eq('mercearia_id', estabelecimentoId)
-            .select()
-            .single();
+        const { error } = await db.from('produtos').update({ imagem_extra_url: up.url, ...carimboAlteracao(req) })
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId);
         if (error) throw error;
 
-        const labelVariacao = (await rotulosVariacao.rotulosPorId(estabelecimentoId, [variacaoId])).get(variacaoId) || [variacao.tamanho, variacao.cor, variacao.genero].filter(Boolean).join(' · ') || 'sem descrição';
-        registrar({
-          mercearia_id: estabelecimentoId,
-          operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.nome,
-          usuario_email: req.user.email,
-          modulo: 'estoque', acao: 'variacao_imagem_enviada',
-          descricao: `Foto enviada pra variação "${labelVariacao}" do produto "${variacao.produtos?.nome || 'Produto'}"`,
-          meta: { produto_id: produtoId, variacao_id: variacaoId },
-        });
+        await Fotos.apagarFoto(produto.imagem_extra_url, estabelecimentoId);
+        auditarFoto(req, 'produto_imagem_enviada', `Segunda foto enviada pro produto "${produto.nome}"`, { produto_id: produtoId, extra: true });
+        res.json({ imagem_extra_url: up.url });
+    } catch (error) {
+        console.error('[ERRO] POST imagem-extra:', error.message);
+        res.status(500).json({ error: 'Erro ao enviar imagem.' });
+    }
+});
 
+router.delete('/:id/produtos/:produtoId/imagem-extra', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
+    const { id: estabelecimentoId, produtoId } = req.params;
+    try {
+        const { data: produto, error: eLer } = await db.from('produtos').select('nome, imagem_extra_url')
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        if (eLer) {
+            if (eLer.code === '42703') return res.status(503).json({ error: MSG_SQL41 });
+            throw eLer;
+        }
+        if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
+        const { error } = await db.from('produtos').update({ imagem_extra_url: null, ...carimboAlteracao(req) })
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId);
+        if (error) throw error;
+        await Fotos.apagarFoto(produto.imagem_extra_url, estabelecimentoId);
+        auditarFoto(req, 'produto_imagem_removida', `Segunda foto removida do produto "${produto.nome}"`, { produto_id: produtoId, extra: true });
+        res.json({ imagem_extra_url: null });
+    } catch (error) {
+        console.error('[ERRO] DELETE imagem-extra:', error.message);
+        res.status(500).json({ error: 'Erro ao remover imagem.' });
+    }
+});
+
+// Foto de uma VARIAÇÃO (ex.: a mesma camiseta em cores diferentes)
+router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
+    const { id: estabelecimentoId, produtoId, variacaoId } = req.params;
+    const img = Fotos.lerImagemBase64(req.body?.imagem_base64);
+    if (img.erro) return res.status(400).json({ error: img.erro });
+    try {
+        const { data: variacao } = await db.from('produto_variacoes')
+            .select('id, tamanho, cor, genero, imagem_url, produtos ( nome )')
+            .eq('id', variacaoId).eq('produto_id', produtoId).eq('mercearia_id', estabelecimentoId).single();
+        if (!variacao) return res.status(404).json({ error: 'Variação não encontrada.' });
+
+        const up = await Fotos.subirFoto({ pasta: `produtos/${estabelecimentoId}/variacoes`, nomeBase: variacaoId, buffer: img.buffer, tipo: img.tipo });
+        if (up.erro) return res.status(400).json({ error: up.erro });
+
+        const { data: atualizado, error } = await db.from('produto_variacoes')
+            .update({ imagem_url: up.url, imagem_origem: 'upload' })
+            .eq('id', variacaoId).eq('produto_id', produtoId).eq('mercearia_id', estabelecimentoId).select().single();
+        if (error) throw error;
+
+        await Fotos.apagarFoto(variacao.imagem_url, estabelecimentoId);
+        const labelVariacao = (await rotulosVariacao.rotulosPorId(estabelecimentoId, [variacaoId])).get(variacaoId) || [variacao.tamanho, variacao.cor, variacao.genero].filter(Boolean).join(' · ') || 'sem descrição';
+        auditarFoto(req, 'variacao_imagem_enviada', `Foto enviada pra variação "${labelVariacao}" do produto "${variacao.produtos?.nome || 'Produto'}"`, { produto_id: produtoId, variacao_id: variacaoId });
         res.status(200).json(atualizado);
     } catch (error) {
         console.error(`[ERRO] POST .../variacoes/${variacaoId}/imagem:`, error.message);
@@ -2319,32 +2313,19 @@ router.post('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPe
     }
 });
 
-// --- Rota DELETE: /:id/produtos/:produtoId/variacoes/:variacaoId/imagem ---
-router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', verificarPermissao([PERMISSOES.ESTOQUE, PERMISSOES.ESTOQUE_EDITAR], { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
+router.delete('/:id/produtos/:produtoId/variacoes/:variacaoId/imagem', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId, variacaoId } = req.params;
     try {
-        const { data, error } = await db
-            .from('produto_variacoes')
+        const { data: antes } = await db.from('produto_variacoes').select('imagem_url')
+            .eq('id', variacaoId).eq('produto_id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        const { data, error } = await db.from('produto_variacoes')
             .update({ imagem_url: null, imagem_origem: null })
-            .eq('id', variacaoId)
-            .eq('produto_id', produtoId)
-            .eq('mercearia_id', estabelecimentoId)
-            .select()
-            .single();
+            .eq('id', variacaoId).eq('produto_id', produtoId).eq('mercearia_id', estabelecimentoId).select().single();
         if (error) throw error;
         if (!data) return res.status(404).json({ error: 'Variação não encontrada.' });
-
+        await Fotos.apagarFoto(antes?.imagem_url, estabelecimentoId);
         const labelVariacao = (await rotulosVariacao.rotulosPorId(estabelecimentoId, [variacaoId])).get(variacaoId) || [data.tamanho, data.cor, data.genero].filter(Boolean).join(' · ') || 'sem descrição';
-        registrar({
-          mercearia_id: estabelecimentoId,
-          operador_id:  req.user.role === 'operator' ? req.user.id : null,
-          usuario_nome: req.user.nome,
-          usuario_email: req.user.email,
-          modulo: 'estoque', acao: 'variacao_imagem_removida',
-          descricao: `Foto removida da variação "${labelVariacao}"`,
-          meta: { produto_id: produtoId, variacao_id: variacaoId },
-        });
-
+        auditarFoto(req, 'variacao_imagem_removida', `Foto removida da variação "${labelVariacao}"`, { produto_id: produtoId, variacao_id: variacaoId });
         res.status(200).json(data);
     } catch (error) {
         console.error(`[ERRO] DELETE .../variacoes/${variacaoId}/imagem:`, error.message);
@@ -2363,6 +2344,15 @@ router.delete('/:id/produtos/:produtoId', verificarPermissao([PERMISSOES.ESTOQUE
         // Produto em contagem de inventário não pode ser excluído
         if (await negarSeEmContagem(req, res, [produtoId], 'excluir este produto')) return;
 
+        // Guarda as fotos para apagar do Storage depois que o produto for excluído (sem deixar órfãs)
+        let fotosParaApagar = [];
+        try {
+            let { data: pf, error: ef } = await db.from('produtos').select('imagem_url, imagem_extra_url').eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+            if (ef && ef.code === '42703') ({ data: pf } = await db.from('produtos').select('imagem_url').eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle());
+            const { data: vf } = await db.from('produto_variacoes').select('imagem_url').eq('produto_id', produtoId).eq('mercearia_id', estabelecimentoId);
+            fotosParaApagar = [pf?.imagem_url, pf?.imagem_extra_url, ...(vf || []).map(v => v.imagem_url)].filter(Boolean);
+        } catch (e) { console.error('[FOTOS] não listou fotos do produto a excluir:', e.message); }
+
         const { data, error } = await db.rpc('deletar_produto', {
             p_produto_id: produtoId,
             p_mercearia_id: estabelecimentoId
@@ -2378,6 +2368,7 @@ router.delete('/:id/produtos/:produtoId', verificarPermissao([PERMISSOES.ESTOQUE
         }
 
         console.log(`[INFO] Produto excluído: ${data[0].nome}`);
+        for (const u of fotosParaApagar) await require('../utils/fotosProduto').apagarFoto(u, estabelecimentoId);
 
         registrar({
           mercearia_id: estabelecimentoId,
