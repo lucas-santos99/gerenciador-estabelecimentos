@@ -402,7 +402,6 @@ router.put('/admin/:id', async (req, res) => {
 
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Comunicado não encontrado.' });
-    await apagarAnterior(antesCom?.imagem_url, [`comunicados/${id}/`], url);
 
     await sincronizarEstabelecimentosAlvo(id, alvo_tipo, estabelecimento_ids);
 
@@ -482,6 +481,7 @@ router.post('/admin/:id/upload-imagem', upload.single('imagem'), async (req, res
       .single();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Comunicado não encontrado.' });
+    await apagarAnterior(antesCom?.imagem_url, [`comunicados/${id}/`], url);
 
     res.json({ success: true, imagem_url: url });
   } catch (err) {
