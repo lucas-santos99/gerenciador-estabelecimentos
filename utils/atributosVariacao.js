@@ -81,13 +81,24 @@ const ehLegado = (chave) => LEGADOS.includes(chave);
 
 // Junta o padrão do tipo de estabelecimento com o que a loja personalizou.
 // `linhas` = linhas da tabela atributos_variacao (pode ser vazio).
-function montarAtributos(tipoEstabelecimento, linhas = []) {
+//
+// modeloNovo = true (SQL 40 aplicado, 15/10/2026): tamanho/cor/gênero NÃO são automáticos.
+//   • linha existe e não está `removido` → é um atributo da loja;
+//   • sem linha → aparece só como SUGESTÃO (se o tipo de estabelecimento sugere);
+//   • linha `removido` → sugestão dispensada (não aparece em lugar nenhum).
+// modeloNovo = false (antes do SQL 40): comportamento antigo — sem linha vale o padrão do tipo.
+function montarAtributos(tipoEstabelecimento, linhas = [], modeloNovo = false) {
   const padrao = PADRAO_POR_TIPO[normalizarTipoEstabelecimento(tipoEstabelecimento)];
   const porChave = new Map((linhas || []).map(l => [l.chave, l]));
   const lista = [];
 
   for (const chave of LEGADOS) {
     const l = porChave.get(chave);
+    if (modeloNovo) {
+      if (!l || l.removido) continue;
+      lista.push({ chave, nome: l.nome, ordem: l.ordem, ativo: !!l.ativo, legado: true, personalizado: true });
+      continue;
+    }
     const nomePadrao = padrao[chave] || NOME_LEGADO[chave];
     lista.push({
       chave,
@@ -99,10 +110,23 @@ function montarAtributos(tipoEstabelecimento, linhas = []) {
     });
   }
   for (const l of linhas || []) {
-    if (ehLegado(l.chave)) continue;
+    if (ehLegado(l.chave) || l.removido) continue;
     lista.push({ chave: l.chave, nome: l.nome, ordem: l.ordem, ativo: !!l.ativo, legado: false, personalizado: true });
   }
   return lista.sort((a, b) => (a.ordem - b.ordem) || a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
+// Sugestões do tipo de estabelecimento que a loja ainda não adicionou nem dispensou.
+function sugestoesDoTipo(tipoEstabelecimento, linhas = []) {
+  const padrao = PADRAO_POR_TIPO[normalizarTipoEstabelecimento(tipoEstabelecimento)];
+  const porChave = new Map((linhas || []).map(l => [l.chave, l]));
+  return LEGADOS.filter(c => padrao[c] && !porChave.has(c)).map(c => ({ chave: c, nome: padrao[c] }));
+}
+
+// Nome sugerido para uma chave legada neste tipo de estabelecimento (ou o nome geral).
+function nomeSugerido(tipoEstabelecimento, chave) {
+  const padrao = PADRAO_POR_TIPO[normalizarTipoEstabelecimento(tipoEstabelecimento)];
+  return padrao[chave] || NOME_LEGADO[chave];
 }
 
 // Quantos atributos contam para o teto da loja: os ligados + os que a loja mexeu.
@@ -170,5 +194,5 @@ function rotuloDaVariacao(v, atributos = []) {
 module.exports = {
   TETOS_ATRIBUTOS, LEGADOS, NOME_LEGADO, PADRAO_POR_TIPO, MODELOS_PRONTOS,
   normalizarTipoEstabelecimento, chaveDoNome, chaveValida, nomeIgual, ehLegado,
-  montarAtributos, contarParaTeto, mensagemTeto, extrasDaVariacao, chavesUsadas, rotuloDaVariacao,
+  montarAtributos, sugestoesDoTipo, nomeSugerido, contarParaTeto, mensagemTeto, extrasDaVariacao, chavesUsadas, rotuloDaVariacao,
 };

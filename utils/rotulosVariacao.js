@@ -16,8 +16,14 @@ async function atributosDaLoja(mid) {
 async function lerAtributosDaLoja(mid) {
   try {
     const { data: loja } = await db.from('mercearias').select('tipo_estabelecimento').eq('id', mid).maybeSingle();
-    const { data, error } = await db.from('atributos_variacao').select('chave, nome, ordem, ativo').eq('mercearia_id', mid).limit(100);
-    return AV.montarAtributos(loja?.tipo_estabelecimento, error ? [] : (data || []));
+    // SQL 40 (coluna `removido`): se ainda não existe, volta ao modelo antigo (padrão automático).
+    let modeloNovo = true;
+    let { data, error } = await db.from('atributos_variacao').select('chave, nome, ordem, ativo, removido').eq('mercearia_id', mid).limit(100);
+    if (error && error.code === '42703') {
+      modeloNovo = false;
+      ({ data, error } = await db.from('atributos_variacao').select('chave, nome, ordem, ativo').eq('mercearia_id', mid).limit(100));
+    }
+    return AV.montarAtributos(loja?.tipo_estabelecimento, error ? [] : (data || []), modeloNovo && !error);
   } catch (e) {
     console.error('[rotulosVariacao] atributos da loja:', e.message);
     return [];

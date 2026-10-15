@@ -924,8 +924,15 @@ async function carregarAtributosLoja(estabelecimentoId) {
     const { data: loja } = await db.from('mercearias').select('tipo_estabelecimento').eq('id', estabelecimentoId).maybeSingle();
     let linhas = [];
     let tabelaPronta = true;
-    const { data, error } = await db.from('atributos_variacao')
-        .select('chave, nome, ordem, ativo').eq('mercearia_id', estabelecimentoId).limit(100);
+    // SQL 40 (coluna `removido`): sem ela vale o modelo antigo (padrão automático por tipo).
+    let modeloNovo = true;
+    let { data, error } = await db.from('atributos_variacao')
+        .select('chave, nome, ordem, ativo, removido').eq('mercearia_id', estabelecimentoId).limit(100);
+    if (error && error.code === '42703') {
+        modeloNovo = false;
+        ({ data, error } = await db.from('atributos_variacao')
+            .select('chave, nome, ordem, ativo').eq('mercearia_id', estabelecimentoId).limit(100));
+    }
     if (error) {
         if (tabelaAusente(error)) tabelaPronta = false;
         else throw error;
@@ -934,7 +941,10 @@ async function carregarAtributosLoja(estabelecimentoId) {
     }
     return {
         tipo_estabelecimento: loja?.tipo_estabelecimento || null,
-        atributos: AV.montarAtributos(loja?.tipo_estabelecimento, linhas),
+        atributos: AV.montarAtributos(loja?.tipo_estabelecimento, linhas, modeloNovo && tabelaPronta),
+        sugestoes: modeloNovo && tabelaPronta ? AV.sugestoesDoTipo(loja?.tipo_estabelecimento, linhas) : [],
+        linhas,
+        modeloNovo: modeloNovo && tabelaPronta,
         tabelaPronta,
     };
 }
@@ -987,6 +997,8 @@ router.get('/:id/atributos-variacao', async (req, res) => {
             tipo_estabelecimento: r.tipo_estabelecimento,
             pronto: r.tabelaPronta, // false = SQL 31 ainda não rodou (só leitura dos padrões)
             atributos: r.atributos,
+            sugestoes: r.sugestoes,
+            modelo_novo: r.modeloNovo,
             modelos_prontos: AV.MODELOS_PRONTOS,
             limites: {
                 atributos_loja: AV.TETOS_ATRIBUTOS.ATRIBUTOS_LOJA,
@@ -1025,12 +1037,19 @@ router.post('/:id/atributos-variacao', limitarFrequencia('atributos-variacao', 3
         const usadas = new Set(r.atributos.map(a => a.chave));
         const base = AV.chaveDoNome(v.nome);
         let chave = base;
-        for (let i = 2; usadas.has(chave); i++) chave = `${base.slice(0, 30 - String(i).length - 1)}_${i}`;
-
         const ordem = Math.min(1000, Math.max(...r.atributos.map(a => a.ordem), 30) + 10);
-        const { data, error } = await db.from('atributos_variacao')
-            .insert({ mercearia_id: estabelecimentoId, chave, nome: v.nome, ordem, ativo: true, ...carimboCriacao(req) })
-            .select('chave, nome, ordem, ativo').single();
+
+        // Nome igual a tamanho/cor/gênero (livres) → usa a chave legada (fica nas colunas antigas).
+        // Se havia uma linha (sugestão dispensada), reaproveita em vez de colidir.
+        const linhaLegada = r.modeloNovo && AV.ehLegado(base) && !usadas.has(base);
+        if (!linhaLegada) {
+            for (let i = 2; usadas.has(chave) || r.linhas.some(l => l.chave === chave); i++) chave = `${base.slice(0, 30 - String(i).length - 1)}_${i}`;
+        }
+        const reg = { mercearia_id: estabelecimentoId, chave, nome: v.nome, ordem, ativo: true, ...(r.modeloNovo ? { removido: false } : {}), ...carimboCriacao(req) };
+        const { data, error } = await (linhaLegada && r.linhas.some(l => l.chave === chave)
+            ? db.from('atributos_variacao').update({ nome: v.nome, ordem, ativo: true, removido: false, ...carimboAlteracao(req) })
+                .eq('mercearia_id', estabelecimentoId).eq('chave', chave).select('chave, nome, ordem, ativo').single()
+            : db.from('atributos_variacao').insert(reg).select('chave, nome, ordem, ativo').single());
         if (error) {
             const teto = AV.mensagemTeto(error);
             if (teto) return res.status(409).json({ error: teto });
@@ -1039,7 +1058,7 @@ router.post('/:id/atributos-variacao', limitarFrequencia('atributos-variacao', 3
         }
 
         auditarAtributo(req, 'atributo_variacao_criado', `Atributo de variação criado: "${v.nome}"`, { chave, nome: v.nome });
-        res.status(201).json({ ...data, legado: false, personalizado: true });
+        res.status(201).json({ ...data, legado: AV.ehLegado(data.chave), personalizado: true });
     } catch (error) {
         console.error('[ERRO] POST /:id/atributos-variacao:', error.message);
         res.status(500).json({ error: 'Erro ao criar o atributo.' });
@@ -1086,7 +1105,7 @@ router.put('/:id/atributos-variacao/:chave', limitarFrequencia('atributos-variac
             return res.status(409).json({ error: 'Já existe outro atributo com esse nome.' });
         }
         // A loja precisa de pelo menos um atributo ligado, senão não dá para criar variações
-        if (!ativo && atual.ativo && !r.atributos.some(a => a.chave !== chave && a.ativo)) {
+        if (!r.modeloNovo && !ativo && atual.ativo && !r.atributos.some(a => a.chave !== chave && a.ativo)) {
             return res.status(409).json({ error: 'A loja precisa manter pelo menos um atributo ligado.' });
         }
 
@@ -1115,29 +1134,28 @@ router.put('/:id/atributos-variacao/:chave', limitarFrequencia('atributos-variac
     }
 });
 
-// Exclui de vez um atributo CRIADO pela loja (os padrão — tamanho/cor/gênero — só podem ser
-// ocultados). Só deixa se nenhuma variação da loja usa o atributo; apaga junto os valores
-// sugeridos dele.
+// Exclui um atributo da loja (inclusive tamanho/cor/gênero). Só deixa se nenhuma variação da
+// loja usa o atributo; apaga junto os valores sugeridos dele. Tamanho/cor/gênero excluídos
+// voltam a aparecer como SUGESTÃO (se o tipo de estabelecimento sugere) — dá para dispensar.
 router.delete('/:id/atributos-variacao/:chave', limitarFrequencia('atributos-variacao', 30), verificarPermissao(...PERMISSAO_ATRIBUTOS), async (req, res) => {
     const estabelecimentoId = req.params.id;
     const chave = req.params.chave;
     if (!AV.chaveValida(chave)) return res.status(400).json({ error: 'Atributo inválido.' });
-    if (AV.ehLegado(chave)) return res.status(409).json({ error: 'Este atributo já vem com o sistema e não pode ser excluído. Use "Ocultar".' });
 
     try {
         const r = await carregarAtributosLoja(estabelecimentoId);
         if (!r.tabelaPronta) return res.status(503).json({ error: MSG_SQL31_PENDENTE });
+        if (AV.ehLegado(chave) && !r.modeloNovo) return res.status(503).json({ error: MSG_SQL31_PENDENTE });
         const atual = r.atributos.find(a => a.chave === chave && a.personalizado);
         if (!atual) return res.status(404).json({ error: 'Atributo não encontrado.' });
 
-        if (atual.ativo && !r.atributos.some(a => a.chave !== chave && a.ativo)) {
-            return res.status(409).json({ error: 'A loja precisa manter pelo menos um atributo ligado.' });
-        }
-
-        const { count, error: eUso } = await db.from('produto_variacoes')
+        let uso = db.from('produto_variacoes')
             .select('id, produtos!inner(mercearia_id)', { count: 'exact', head: true })
-            .eq('produtos.mercearia_id', estabelecimentoId)
-            .filter(`atributos->>${chave}`, 'not.is', null);
+            .eq('produtos.mercearia_id', estabelecimentoId);
+        uso = AV.ehLegado(chave)
+            ? uso.not(chave, 'is', null).neq(chave, '')
+            : uso.filter(`atributos->>${chave}`, 'not.is', null);
+        const { count, error: eUso } = await uso;
         if (eUso) throw eUso;
         if (count > 0) {
             return res.status(409).json({ error: `"${atual.nome}" está preenchido em ${count} variação(ões) de produtos. Para não perder esses dados, use "Ocultar" em vez de excluir.` });
@@ -1153,6 +1171,49 @@ router.delete('/:id/atributos-variacao/:chave', limitarFrequencia('atributos-var
     } catch (error) {
         console.error('[ERRO] DELETE /:id/atributos-variacao/:chave:', error.message);
         res.status(500).json({ error: 'Erro ao excluir o atributo.' });
+    }
+});
+
+// Sugestão do tipo de estabelecimento: "adicionar" (vira atributo da loja) ou "dispensar" (some).
+router.post('/:id/atributos-variacao/sugestoes/:chave', limitarFrequencia('atributos-variacao', 30), verificarPermissao(...PERMISSAO_ATRIBUTOS), async (req, res) => {
+    const estabelecimentoId = req.params.id;
+    const chave = req.params.chave;
+    const acao = req.body?.acao;
+    if (!AV.ehLegado(chave) || !['adicionar', 'dispensar'].includes(acao)) return res.status(400).json({ error: 'Pedido inválido.' });
+
+    try {
+        const r = await carregarAtributosLoja(estabelecimentoId);
+        if (!r.tabelaPronta || !r.modeloNovo) return res.status(503).json({ error: MSG_SQL31_PENDENTE });
+        const sug = r.sugestoes.find(x => x.chave === chave);
+        if (!sug) return res.status(404).json({ error: 'Essa sugestão não está mais disponível.' });
+
+        if (acao === 'adicionar') {
+            if (r.atributos.some(a => AV.nomeIgual(a.nome, sug.nome))) {
+                return res.status(409).json({ error: `Já existe um atributo chamado "${sug.nome}".` });
+            }
+            const ordem = Math.min(1000, Math.max(...r.atributos.map(a => a.ordem), 0) + 10);
+            const { error } = await db.from('atributos_variacao')
+                .insert({ mercearia_id: estabelecimentoId, chave, nome: sug.nome, ordem, ativo: true, removido: false, ...carimboCriacao(req) });
+            if (error) {
+                const teto = AV.mensagemTeto(error);
+                if (teto) return res.status(409).json({ error: teto });
+                throw error;
+            }
+            auditarAtributo(req, 'atributo_variacao_criado', `Atributo de variação criado (sugestão): "${sug.nome}"`, { chave, nome: sug.nome });
+        } else {
+            const { error } = await db.from('atributos_variacao')
+                .insert({ mercearia_id: estabelecimentoId, chave, nome: sug.nome, ordem: 0, ativo: false, removido: true, ...carimboCriacao(req) });
+            if (error) {
+                const teto = AV.mensagemTeto(error);
+                if (teto) return res.status(409).json({ error: teto });
+                throw error;
+            }
+            auditarAtributo(req, 'atributo_variacao_alterado', `Sugestão de atributo dispensada: "${sug.nome}"`, { chave, nome: sug.nome });
+        }
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('[ERRO] POST /:id/atributos-variacao/sugestoes:', error.message);
+        res.status(500).json({ error: 'Erro ao salvar a sugestão.' });
     }
 });
 
