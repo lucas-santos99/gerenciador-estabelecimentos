@@ -535,6 +535,7 @@ router.put("/:id", authUser, async (req, res) => {
 
     const {
       nome_fantasia,
+      dono_nome,
       cnpj,
       telefone,
       telefones_extras,
@@ -551,9 +552,10 @@ router.put("/:id", authUser, async (req, res) => {
     } = req.body;
 
     const erroTamanho = validarTamanhos(
-      { nome_fantasia, telefone, email_contato, endereco_completo, tipo_estabelecimento, cnpj },
+      { nome_fantasia, dono_nome, telefone, email_contato, endereco_completo, tipo_estabelecimento, cnpj },
       {
         nome_fantasia: LIMITES.NOME_FANTASIA,
+        dono_nome: LIMITES.NOME_FANTASIA,
         telefone: LIMITES.TELEFONE,
         email_contato: LIMITES.EMAIL,
         endereco_completo: LIMITES.ENDERECO,
@@ -584,6 +586,9 @@ router.put("/:id", authUser, async (req, res) => {
       data_vencimento: data_vencimento === "" ? null : data_vencimento,
       logo_url,
     };
+
+    // Nome do dono (quem usa o sistema): só altera se vier no corpo; vazio apaga.
+    if (typeof dono_nome === "string") updateData.dono_nome = dono_nome.trim() || null;
 
     // Tipo: só altera se vier no corpo (e não vazio).
     if (typeof tipo_estabelecimento === "string" && tipo_estabelecimento.trim()) {
@@ -692,12 +697,23 @@ router.put("/:id", authUser, async (req, res) => {
       }
     }
 
-    const { data, error } = await db
+    let { data, error } = await db
       .from("mercearias")
       .update({ ...updateData, ...carimboAlteracao(req) })
       .eq("id", id)
       .select()
       .single();
+
+    // Coluna dono_nome ainda não criada no banco (SQL 42) → grava o resto sem ela.
+    if (error && /dono_nome/.test(error.message || "") && "dono_nome" in updateData) {
+      delete updateData.dono_nome;
+      ({ data, error } = await db
+        .from("mercearias")
+        .update({ ...updateData, ...carimboAlteracao(req) })
+        .eq("id", id)
+        .select()
+        .single());
+    }
 
     if (error) {
       // Gravação do cadastro falhou depois de trocar o login → desfaz a
@@ -797,6 +813,7 @@ router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
 
     const {
       nome_fantasia,
+      dono_nome,
       cnpj,
       telefone,
       telefones_extras,
@@ -829,9 +846,10 @@ router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
     if (erroSenha) return res.status(400).json({ error: erroSenha });
 
     const erroTamanho = validarTamanhos(
-      { nome_fantasia, telefone, email_contato, endereco_completo, senha, tipo_estabelecimento, motivo_periodo_teste, cnpj },
+      { nome_fantasia, dono_nome, telefone, email_contato, endereco_completo, senha, tipo_estabelecimento, motivo_periodo_teste, cnpj },
       {
         nome_fantasia: LIMITES.NOME_FANTASIA,
+        dono_nome: LIMITES.NOME_FANTASIA,
         telefone: LIMITES.TELEFONE,
         email_contato: LIMITES.EMAIL,
         endereco_completo: LIMITES.ENDERECO,
@@ -861,10 +879,10 @@ router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
     const userId = userData.user.id;
 
     // 2️⃣ Criar estabelecimento (✅ AGORA SALVA ENDEREÇO)
-    const { data: mercData, error: mercErr } = await db
-      .from("mercearias")
-      .insert({
+    const donoNomeFinal = typeof dono_nome === "string" && dono_nome.trim() ? dono_nome.trim() : null;
+    const novaLoja = {
         nome_fantasia,
+        dono_nome: donoNomeFinal,
         cnpj,
         telefone,
         telefones_extras:     telefonesExtrasFinal,
@@ -881,9 +899,13 @@ router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
         timezone:             timezoneFinal,
         motivo_periodo_teste: motivo_periodo_teste || null,
         ...carimboCriacao(req),
-      })
-      .select()
-      .single();
+    };
+    let { data: mercData, error: mercErr } = await db.from("mercearias").insert(novaLoja).select().single();
+    // Coluna dono_nome ainda não criada no banco (SQL 42) → cadastra sem ela.
+    if (mercErr && /dono_nome/.test(mercErr.message || "")) {
+      delete novaLoja.dono_nome;
+      ({ data: mercData, error: mercErr } = await db.from("mercearias").insert(novaLoja).select().single());
+    }
 
     if (mercErr) {
       return res.status(400).json({ error: mercErr.message });

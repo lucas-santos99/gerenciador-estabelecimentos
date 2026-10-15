@@ -20,6 +20,7 @@ router.use(authUser);
 // só de contexto pro admin, sem alteração automática no cadastro.
 const CAMPO_PARA_COLUNA = {
   nome_fantasia:     'nome_fantasia',
+  dono_nome:         'dono_nome',
   cnpj:              'cnpj',
   telefone:          'telefone',
   email_contato:     'email_contato',
