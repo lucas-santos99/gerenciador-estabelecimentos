@@ -2269,6 +2269,27 @@ router.post('/:id/produtos/:produtoId/imagem-extra', LIM_FOTO, verificarPermissa
     }
 });
 
+// Troca qual das 2 fotos é a principal (a que aparece na grade do estoque e no PDV).
+router.post('/:id/produtos/:produtoId/imagem-extra/principal', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
+    const { id: estabelecimentoId, produtoId } = req.params;
+    try {
+        const { data: p, error: eLer } = await db.from('produtos').select('nome, imagem_url, imagem_origem, imagem_extra_url')
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId).maybeSingle();
+        if (eLer) { if (eLer.code === '42703') return res.status(409).json({ error: MSG_SQL41 }); throw eLer; }
+        if (!p) return res.status(404).json({ error: 'Produto não encontrado.' });
+        if (!p.imagem_extra_url) return res.status(400).json({ error: 'Este produto não tem segunda foto.' });
+        const { error } = await db.from('produtos')
+            .update({ imagem_url: p.imagem_extra_url, imagem_origem: 'upload', imagem_extra_url: p.imagem_url || null, ...carimboAlteracao(req) })
+            .eq('id', produtoId).eq('mercearia_id', estabelecimentoId);
+        if (error) throw error;
+        auditarFoto(req, 'produto_imagem_enviada', `Foto principal trocada no produto "${p.nome}"`, { produto_id: produtoId, trocou_principal: true });
+        res.json({ imagem_url: p.imagem_extra_url, imagem_extra_url: p.imagem_url || null });
+    } catch (error) {
+        console.error('[ERRO] POST imagem-extra/principal:', error.message);
+        res.status(500).json({ error: 'Erro ao trocar a foto principal.' });
+    }
+});
+
 router.delete('/:id/produtos/:produtoId/imagem-extra', LIM_FOTO, verificarPermissao(PERM_FOTO, { mensagem: 'Sem permissão para editar produtos.' }), async (req, res) => {
     const { id: estabelecimentoId, produtoId } = req.params;
     try {
