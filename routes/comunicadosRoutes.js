@@ -17,6 +17,7 @@
 // (mercearias.tipo_estabelecimento), ou só pra um ou mais estabelecimentos
 // específicos (a mesma tabela de junção cobre "um" e "vários").
 const express  = require('express');
+const { otimizarImagem } = require('../utils/otimizarImagem');
 const router   = express.Router();
 const multer   = require('multer');
 const db       = require('../db/supabaseAdmin');
@@ -458,12 +459,12 @@ router.post('/admin/:id/upload-imagem', upload.single('imagem'), async (req, res
   }
 
   try {
-    const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
-    const nomeArquivo = `comunicados/${id}/${Date.now()}.${ext}`;
+    const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, 'banner');
+    const nomeArquivo = `comunicados/${id}/${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage
       .from('logos')
-      .upload(nomeArquivo, req.file.buffer, { upsert: true, contentType: req.file.mimetype });
+      .upload(nomeArquivo, otim.buffer, { upsert: true, contentType: otim.mimetype, cacheControl: '31536000' });
     if (uploadErr) return res.status(400).json({ error: uploadErr.message });
 
     const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);

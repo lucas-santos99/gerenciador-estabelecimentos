@@ -1,4 +1,5 @@
 const express = require("express");
+const { otimizarImagem } = require("../utils/otimizarImagem");
 const router = express.Router();
 const db = require("../db/supabaseAdmin"); // Cliente SUPABASE ADMIN (service_role)
 const multer = require("multer");
@@ -942,14 +943,16 @@ router.post("/:id/upload-logo", authUser, upload.single("logo"), async (req, res
 
     if (!req.file) return res.status(400).json({ error: "Arquivo não enviado." });
 
-    const ext = req.file.originalname.split(".").pop();
-    const nomeArquivo = `logos/${id}/${Date.now()}.${ext}`;
+    if (!req.file.mimetype?.startsWith("image/")) return res.status(400).json({ error: "Envie um arquivo de imagem." });
+    const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, "logo");
+    const nomeArquivo = `logos/${id}/${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage
       .from("logos")
-      .upload(nomeArquivo, req.file.buffer, {
+      .upload(nomeArquivo, otim.buffer, {
         upsert: true,
-        contentType: req.file.mimetype,
+        contentType: otim.mimetype,
+        cacheControl: "31536000",
       });
 
     if (uploadErr) return res.status(400).json({ error: uploadErr.message });

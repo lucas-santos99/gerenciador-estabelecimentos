@@ -11,6 +11,7 @@ const { TIMEZONE_PADRAO, hojeStrTZ } = require('../utils/fusoHorario');
 const { contemPalavraProibida } = require('../utils/filtroPalavroes');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const rotulosVariacao = require('../utils/rotulosVariacao');
+const { otimizarImagem } = require('../utils/otimizarImagem');
 const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
 const AV = require('../utils/atributosVariacao');
@@ -1587,13 +1588,17 @@ async function rehospedarImagemCatalogo(urlOriginal, codigoBarras) {
     });
     if (!resp.ok) return urlOriginal;
 
-    const buffer = Buffer.from(await resp.arrayBuffer());
+    const bufferOriginal = Buffer.from(await resp.arrayBuffer());
     // Limite de segurança — a foto de capa do OFF/OPF nunca deveria chegar
     // perto disso, mas evita guardar algo anormalmente grande no storage.
-    if (buffer.length > 3 * 1024 * 1024) return urlOriginal;
+    if (bufferOriginal.length > 3 * 1024 * 1024) return urlOriginal;
 
-    const contentType = (resp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
-    const extensao = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+    // Padrão do sistema: redimensiona e comprime antes de guardar (≤ ~150 KB)
+    const tipoOriginal = (resp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+    const otim = await otimizarImagem(bufferOriginal, tipoOriginal, 'catalogo');
+    const buffer = otim.buffer;
+    const contentType = otim.mimetype;
+    const extensao = otim.ext;
     // Nome do arquivo = o próprio código de barras — como o catálogo é
     // global, existe uma imagem só por código (nunca uma por loja), e
     // upsert:true faz uma nova tentativa pro mesmo código sobrescrever
@@ -2555,11 +2560,13 @@ router.post('/dados/:id/logo', async (req, res) => {
     const { imagem_base64 } = req.body || {};
     const match = typeof imagem_base64 === 'string' && imagem_base64.match(/^data:image\/(png|jpe?g|webp);base64,(.+)$/i);
     if (!match) return res.status(400).json({ error: 'Formato inválido. Use PNG, JPG ou WEBP.' });
-    const extensao = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
-    const buffer = Buffer.from(match[2], 'base64');
-    if (buffer.length > 2 * 1024 * 1024) {
+    const bufferBruto = Buffer.from(match[2], 'base64');
+    if (bufferBruto.length > 2 * 1024 * 1024) {
       return res.status(400).json({ error: 'Arquivo muito grande. Tamanho máximo: 2MB.' });
     }
+    const otim = await otimizarImagem(bufferBruto, `image/${match[1].toLowerCase() === 'jpg' ? 'jpeg' : match[1].toLowerCase()}`, 'logo');
+    const buffer = otim.buffer;
+    const extensao = otim.ext;
 
     const { data: antes } = await db.from('mercearias').select('logo_url').eq('id', mercearia_id).single();
 

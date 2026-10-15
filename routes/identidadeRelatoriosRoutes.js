@@ -21,6 +21,7 @@
 // aqui — é o mesmo texto que sai impresso no papel.
 // ============================================================
 const express = require('express');
+const { otimizarImagem } = require('../utils/otimizarImagem');
 const multer  = require('multer');
 
 const somenteSuperAdmin = require('../middlewares/somenteSuperAdmin');
@@ -229,10 +230,11 @@ router.post('/logo', somenteSuperAdmin, (req, res, next) => {
       return res.status(400).json({ error: 'Formato não aceito. Use PNG, JPG, WEBP ou GIF.' });
     }
 
-    const nomeArquivo = `relatorios/${campo}-${Date.now()}.${EXTENSAO[req.file.mimetype]}`;
+    const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, 'logo');
+    const nomeArquivo = `relatorios/${campo}-${Date.now()}.${otim.ext}`;
     const { error: uploadErr } = await db.storage
       .from('logos')
-      .upload(nomeArquivo, req.file.buffer, { upsert: false, contentType: req.file.mimetype });
+      .upload(nomeArquivo, otim.buffer, { upsert: false, contentType: otim.mimetype, cacheControl: '31536000' });
     if (uploadErr) return res.status(400).json({ error: uploadErr.message });
 
     const { data: urlData } = db.storage.from('logos').getPublicUrl(nomeArquivo);
