@@ -1596,6 +1596,7 @@ async function rehospedarImagemCatalogo(urlOriginal, codigoBarras) {
     // Padrão do sistema: redimensiona e comprime antes de guardar (≤ ~150 KB)
     const tipoOriginal = (resp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
     const otim = await otimizarImagem(bufferOriginal, tipoOriginal, 'catalogo');
+    if (otim.erro) return urlOriginal; // não passou pela otimização: não guarda no nosso storage
     const buffer = otim.buffer;
     const contentType = otim.mimetype;
     const extensao = otim.ext;
@@ -2565,6 +2566,7 @@ router.post('/dados/:id/logo', async (req, res) => {
       return res.status(400).json({ error: 'Arquivo muito grande. Tamanho máximo: 2MB.' });
     }
     const otim = await otimizarImagem(bufferBruto, `image/${match[1].toLowerCase() === 'jpg' ? 'jpeg' : match[1].toLowerCase()}`, 'logo');
+    if (otim.erro) return res.status(400).json({ error: otim.erro });
     const buffer = otim.buffer;
     const extensao = otim.ext;
 

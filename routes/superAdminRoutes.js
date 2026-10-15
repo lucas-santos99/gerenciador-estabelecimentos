@@ -2,7 +2,7 @@ const express = require('express');
 const { otimizarImagem } = require('../utils/otimizarImagem');
 const router = express.Router();
 const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 const { createClient } = require('@supabase/supabase-js');
 
 const authUser = require('../middlewares/authUser');
@@ -346,6 +346,7 @@ router.post('/config-cobranca/imagem', onlyMaster, upload.single('imagem'), asyn
 
     if (!req.file.mimetype?.startsWith('image/')) return res.status(400).json({ error: 'Envie um arquivo de imagem.' });
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, 'banner');
+    if (otim.erro) return res.status(400).json({ error: otim.erro });
     const nomeArquivo = `cobranca/imagem-${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage

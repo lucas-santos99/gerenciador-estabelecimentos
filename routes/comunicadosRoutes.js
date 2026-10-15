@@ -460,6 +460,7 @@ router.post('/admin/:id/upload-imagem', upload.single('imagem'), async (req, res
 
   try {
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, 'banner');
+    if (otim.erro) return res.status(400).json({ error: otim.erro });
     const nomeArquivo = `comunicados/${id}/${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage

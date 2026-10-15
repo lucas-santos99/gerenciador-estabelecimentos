@@ -4,7 +4,7 @@
 // Redimensiona (maior lado limitado), comprime e respeita a transparência do PNG.
 // Mantém o mesmo formato de entrada (JPEG→JPEG, PNG→PNG, WebP→WebP) pra não quebrar
 // quem consome a imagem (PDF de relatório, e-mail, etc.). GIF/SVG passam direto.
-// Falhou ou ficou maior que o original? Devolve o original — otimizar nunca quebra um upload.
+// Devolve { buffer, mimetype, ext } ou { erro } — quem chama responde 400 com a mensagem.
 
 const sharp = require('sharp');
 
@@ -23,27 +23,45 @@ async function codificar(img, tipo, qualidade) {
   return img.png({ palette: true, quality: qualidade, compressionLevel: 9, effort: 7 }).toBuffer();
 }
 
+// Limite DURO: se mesmo depois de otimizar passar de MAX_FINAL × alvo, a imagem é RECUSADA.
+// Falhou de verdade (arquivo corrompido, formato falso, gigante demais)? Também recusa —
+// nunca grava no Storage algo que não passou pela otimização.
+const MAX_ENTRADA = 8 * 1024 * 1024;        // nada acima de 8 MB nem é processado
+const MAX_PIXELS  = 40 * 1000 * 1000;       // ~40 megapixels (protege a memória do servidor)
+const MAX_GIF     = 300 * 1024;             // GIF não é recomprimido: só aceita se já for leve
+const MAX_FINAL   = 2;                      // resultado ≤ 2× o alvo do perfil
+
 async function otimizarImagem(buffer, mimetype, perfil = 'logo') {
   const tipo = mimetype === 'image/jpg' ? 'image/jpeg' : mimetype;
-  const original = { buffer, mimetype: tipo, ext: EXT[tipo] || 'jpg' };
-  if (!EXT[tipo] || tipo === 'image/gif') return original; // gif/outros: não mexe
+  if (!EXT[tipo]) return { erro: 'Formato de imagem não aceito. Use PNG, JPG ou WEBP.' };
+  if (!buffer || !buffer.length) return { erro: 'Arquivo vazio.' };
+  if (buffer.length > MAX_ENTRADA) return { erro: 'Imagem muito grande (máximo 8 MB).' };
+  if (tipo === 'image/gif') {
+    if (buffer.length > MAX_GIF) return { erro: 'GIF muito pesado (máximo 300 KB). Use PNG, JPG ou WEBP.' };
+    return { buffer, mimetype: tipo, ext: 'gif' };
+  }
   const cfg = PERFIS[perfil] || PERFIS.logo;
   try {
     let lado = cfg.lado;
     let melhor = null;
-    for (const q of [82, 72, 62, 50]) {
-      const img = sharp(buffer, { failOn: 'none' }).rotate() // respeita a orientação da foto do celular
+    for (const q of [82, 72, 62, 50, 40]) {
+      const img = sharp(buffer, { failOn: 'error', limitInputPixels: MAX_PIXELS }).rotate() // respeita a orientação da foto do celular
         .resize({ width: lado, height: lado, fit: 'inside', withoutEnlargement: true });
       const out = await codificar(img, tipo, q);
       melhor = out;
       if (out.length <= cfg.bytes) break;
       if (q === 62) lado = Math.round(lado * 0.8); // ainda grande: diminui também as dimensões
+      if (q === 50) lado = Math.round(lado * 0.7);
     }
-    if (!melhor || melhor.length >= buffer.length) return original;
+    if (melhor.length > cfg.bytes * MAX_FINAL) {
+      return { erro: 'Não foi possível reduzir esta imagem para um tamanho aceitável. Tente uma imagem mais simples ou menor.' };
+    }
+    // otimizado ficou maior que o original (imagem já minúscula)? mantém o original, que já é leve
+    if (melhor.length >= buffer.length && buffer.length <= cfg.bytes) return { buffer, mimetype: tipo, ext: EXT[tipo] };
     return { buffer: melhor, mimetype: tipo, ext: EXT[tipo] };
   } catch (err) {
-    console.error('[IMAGEM] Falha ao otimizar, usando o original:', err.message);
-    return original;
+    console.error('[IMAGEM] Imagem recusada:', err.message);
+    return { erro: 'Imagem inválida, corrompida ou grande demais. Tente outra (PNG, JPG ou WEBP).' };
   }
 }
 

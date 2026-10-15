@@ -231,6 +231,7 @@ router.post('/logo', somenteSuperAdmin, (req, res, next) => {
     }
 
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, 'logo');
+    if (otim.erro) return res.status(400).json({ error: otim.erro });
     const nomeArquivo = `relatorios/${campo}-${Date.now()}.${otim.ext}`;
     const { error: uploadErr } = await db.storage
       .from('logos')

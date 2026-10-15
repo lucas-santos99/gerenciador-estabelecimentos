@@ -945,6 +945,7 @@ router.post("/:id/upload-logo", authUser, upload.single("logo"), async (req, res
 
     if (!req.file.mimetype?.startsWith("image/")) return res.status(400).json({ error: "Envie um arquivo de imagem." });
     const otim = await otimizarImagem(req.file.buffer, req.file.mimetype, "logo");
+    if (otim.erro) return res.status(400).json({ error: otim.erro });
     const nomeArquivo = `logos/${id}/${Date.now()}.${otim.ext}`;
 
     const { error: uploadErr } = await db.storage
