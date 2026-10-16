@@ -31,6 +31,9 @@ router.use(authUser);
 // qualquer SuperAdmin (ver o próprio arquivo).
 router.use('/identidade-relatorios', require('./identidadeRelatoriosRoutes'));
 
+// Barra inferior do sistema (marca, link, tamanho) — 16/10/2026.
+router.use('/barra-sistema', require('./barraSistemaRoutes'));
+
 // ============================================================
 // 🔥 PERFIL (IMPORTANTE PRO LOGIN)
 // ============================================================
