@@ -22,7 +22,14 @@ const { apagarAnterior } = require('../utils/storageLimpeza');
 const CHAVE = 'barra_sistema';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 
-const BLOCOS = ['licenca', 'boas_vindas', 'marca', 'redes', 'livre', 'versao'];
+const BLOCOS = ['licenca', 'boas_vindas', 'marca', 'redes', 'livre', 'versao', 'whatsapp'];
+const ESTILOS_WA = ['verde', 'roxo', 'azul', 'laranja', 'escuro'];
+const CTA_PADRAO = () => ({
+  ativo: false, animar: true,
+  contratar: { ativa: true, texto: 'Contrate o assistente de WhatsApp', estilo: 'verde' },
+  pendente:  { ativa: true, texto: 'Conclua seu WhatsApp', estilo: 'laranja' },
+  assinante: { ativa: true, texto: 'Agente de WhatsApp', estilo: 'roxo' },
+});
 const FONTES = ['padrao', 'serifada', 'mono', 'cursiva', 'arredondada', 'condensada'];
 const TEXTO_PADRAO = (t) => ({ ativa: false, texto: t, link: '', fonte: 'padrao', tamanho: 12, negrito: false, italico: false, sublinhado: false, cor: '', cor_escuro: '' });
 // Mensagens livres da barra: 'boas_vindas' (aceita {nome}) e 'livre' (texto e/ou link).
@@ -39,11 +46,12 @@ const PADRAO = {
   mostrar_prefixo: true, // "Desenvolvido por" antes da marca
   prefixo: 'Desenvolvido por',
   redes: { instagram: '', facebook: '', whatsapp: '', twitter: '' },
-  ordem_blocos: ['licenca', 'boas_vindas', 'marca', 'redes', 'livre', 'versao'],
+  ordem_blocos: ['licenca', 'boas_vindas', 'marca', 'redes', 'livre', 'versao', 'whatsapp'],
+  whatsapp_cta: CTA_PADRAO(),
   ordem_redes: ['instagram', 'facebook', 'whatsapp', 'twitter'],
   ordem_botoes: ['fale_conosco', 'tema', 'sair'],
   textos: { boas_vindas: TEXTO_PADRAO('Bem-vindo, {nome}!'), livre: TEXTO_PADRAO('') },
-  posicoes: { licenca: 'esq', boas_vindas: 'esq', marca: 'esq', redes: 'esq', livre: 'esq', versao: 'esq' }, // 'esq' | 'centro' | 'dir'
+  posicoes: { licenca: 'esq', boas_vindas: 'esq', marca: 'esq', redes: 'esq', livre: 'esq', versao: 'esq', whatsapp: 'centro' }, // 'esq' | 'centro' | 'dir'
   mostrar_versao: false,
   versao: '', // vazio = usa a identificação automática do build
 };
@@ -93,7 +101,7 @@ function normalizarRede(rede, bruto) {
 function limpar(entrada) {
   const e = entrada && typeof entrada === 'object' ? entrada : {};
   const erros = [];
-  const cfg = { ...PADRAO, redes: { ...PADRAO.redes }, ordem_blocos: [...PADRAO.ordem_blocos], ordem_redes: [...PADRAO.ordem_redes], ordem_botoes: [...PADRAO.ordem_botoes], posicoes: { ...PADRAO.posicoes }, textos: { boas_vindas: { ...PADRAO.textos.boas_vindas }, livre: { ...PADRAO.textos.livre } } };
+  const cfg = { ...PADRAO, redes: { ...PADRAO.redes }, ordem_blocos: [...PADRAO.ordem_blocos], ordem_redes: [...PADRAO.ordem_redes], ordem_botoes: [...PADRAO.ordem_botoes], posicoes: { ...PADRAO.posicoes }, whatsapp_cta: CTA_PADRAO(), textos: { boas_vindas: { ...PADRAO.textos.boas_vindas }, livre: { ...PADRAO.textos.livre } } };
   if ('mostrar_marca' in e) cfg.mostrar_marca = e.mostrar_marca === true || e.mostrar_marca === 'true';
   if ('nome' in e) cfg.nome = texto(e.nome, 60);
   if ('link' in e) {
@@ -122,6 +130,17 @@ function limpar(entrada) {
   if (e.posicoes && typeof e.posicoes === 'object') {
     cfg.posicoes = { ...cfg.posicoes };
     for (const b of BLOCOS) if (['esq', 'centro', 'dir'].includes(e.posicoes[b])) cfg.posicoes[b] = e.posicoes[b];
+  }
+  if (e.whatsapp_cta && typeof e.whatsapp_cta === 'object') {
+    const w = e.whatsapp_cta, cta = CTA_PADRAO();
+    cta.ativo = bool(w.ativo); cta.animar = !('animar' in w) || bool(w.animar);
+    for (const k of ['contratar', 'pendente', 'assinante']) {
+      const t = w[k] && typeof w[k] === 'object' ? w[k] : {};
+      if ('ativa' in t) cta[k].ativa = bool(t.ativa);
+      if ('texto' in t) cta[k].texto = texto(t.texto, 50) || cta[k].texto;
+      if (ESTILOS_WA.includes(t.estilo)) cta[k].estilo = t.estilo;
+    }
+    cfg.whatsapp_cta = cta;
   }
   if ('mostrar_versao' in e) cfg.mostrar_versao = bool(e.mostrar_versao);
   if ('versao' in e) cfg.versao = texto(e.versao, 30);

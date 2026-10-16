@@ -113,6 +113,18 @@ function vinculoPublico(v, pessoas = []) {
 }
 
 /* ── GET / ─────────────────────────────────────────────────── */
+// Leve: só diz se a loja tem WhatsApp (usado pela barra inferior). Não mexe no ciclo.
+router.get('/status', async (req, res) => {
+  try {
+    const { ativa, pendente } = await assinaturasAbertas(req.user.mercearia_id);
+    res.set('Cache-Control', 'no-store');
+    res.json({ situacao: ativa ? 'ativo' : (pendente ? 'pendente' : 'nenhum') });
+  } catch (err) {
+    console.error('[WHATSAPP LOJA] status:', err.message);
+    res.status(500).json({ error: 'Erro ao ver o status do WhatsApp.' });
+  }
+});
+
 router.get('/', async (req, res) => {
   const mid = req.user.mercearia_id;
   try {
