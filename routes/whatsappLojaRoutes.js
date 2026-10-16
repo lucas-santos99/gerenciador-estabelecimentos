@@ -113,12 +113,26 @@ function vinculoPublico(v, pessoas = []) {
 }
 
 /* ── GET / ─────────────────────────────────────────────────── */
+// Número do assistente (o da API), só dígitos — guardado por 6 h para não consultar a Meta toda vez.
+let numeroCache = { v: '', ate: 0 };
+async function numeroDoAssistente() {
+  if (numeroCache.v && Date.now() < numeroCache.ate) return numeroCache.v;
+  try {
+    const M = require('../utils/whatsappMeta');
+    const r = await M.statusNumero();
+    const n = String(r?.display_phone_number || '').replace(/\D/g, '');
+    if (n.length >= 10) { numeroCache = { v: n, ate: Date.now() + 6 * 3600 * 1000 }; return n; }
+  } catch (e) { console.error('[WHATSAPP LOJA] número do assistente:', e.message); }
+  return numeroCache.v || '';
+}
+
 // Leve: só diz se a loja tem WhatsApp (usado pela barra inferior). Não mexe no ciclo.
 router.get('/status', async (req, res) => {
   try {
     const { ativa, pendente } = await assinaturasAbertas(req.user.mercearia_id);
     res.set('Cache-Control', 'no-store');
-    res.json({ situacao: ativa ? 'ativo' : (pendente ? 'pendente' : 'nenhum') });
+    const situacao = ativa ? 'ativo' : (pendente ? 'pendente' : 'nenhum');
+    res.json({ situacao, numero: ativa ? await numeroDoAssistente() : '' });
   } catch (err) {
     console.error('[WHATSAPP LOJA] status:', err.message);
     res.status(500).json({ error: 'Erro ao ver o status do WhatsApp.' });
