@@ -43,6 +43,7 @@ const PADRAO = {
   ordem_redes: ['instagram', 'facebook', 'whatsapp', 'twitter'],
   ordem_botoes: ['fale_conosco', 'tema', 'sair'],
   textos: { boas_vindas: TEXTO_PADRAO('Bem-vindo, {nome}!'), livre: TEXTO_PADRAO('') },
+  posicoes: { licenca: 'esq', boas_vindas: 'esq', marca: 'esq', redes: 'esq', livre: 'esq', versao: 'esq' }, // 'esq' | 'centro' | 'dir'
   mostrar_versao: false,
   versao: '', // vazio = usa a identificação automática do build
 };
@@ -92,7 +93,7 @@ function normalizarRede(rede, bruto) {
 function limpar(entrada) {
   const e = entrada && typeof entrada === 'object' ? entrada : {};
   const erros = [];
-  const cfg = { ...PADRAO, redes: { ...PADRAO.redes }, ordem_blocos: [...PADRAO.ordem_blocos], ordem_redes: [...PADRAO.ordem_redes], ordem_botoes: [...PADRAO.ordem_botoes], textos: { boas_vindas: { ...PADRAO.textos.boas_vindas }, livre: { ...PADRAO.textos.livre } } };
+  const cfg = { ...PADRAO, redes: { ...PADRAO.redes }, ordem_blocos: [...PADRAO.ordem_blocos], ordem_redes: [...PADRAO.ordem_redes], ordem_botoes: [...PADRAO.ordem_botoes], posicoes: { ...PADRAO.posicoes }, textos: { boas_vindas: { ...PADRAO.textos.boas_vindas }, livre: { ...PADRAO.textos.livre } } };
   if ('mostrar_marca' in e) cfg.mostrar_marca = e.mostrar_marca === true || e.mostrar_marca === 'true';
   if ('nome' in e) cfg.nome = texto(e.nome, 60);
   if ('link' in e) {
@@ -118,6 +119,10 @@ function limpar(entrada) {
   cfg.ordem_blocos = ordenar(e.ordem_blocos, BLOCOS);
   cfg.ordem_redes = ordenar(e.ordem_redes, REDES);
   cfg.ordem_botoes = ordenar(e.ordem_botoes, BOTOES);
+  if (e.posicoes && typeof e.posicoes === 'object') {
+    cfg.posicoes = { ...cfg.posicoes };
+    for (const b of BLOCOS) if (['esq', 'centro', 'dir'].includes(e.posicoes[b])) cfg.posicoes[b] = e.posicoes[b];
+  }
   if ('mostrar_versao' in e) cfg.mostrar_versao = bool(e.mostrar_versao);
   if ('versao' in e) cfg.versao = texto(e.versao, 30);
   if (e.textos && typeof e.textos === 'object') {
