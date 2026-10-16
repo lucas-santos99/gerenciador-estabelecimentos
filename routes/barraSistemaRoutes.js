@@ -29,7 +29,11 @@ const PADRAO = {
   logo_url: '',
   exibicao: 'nome',      // 'nome' | 'logo' | 'logo_e_nome'
   tamanho: 'medio',      // 'pequeno' | 'medio' | 'grande'
+  mostrar_prefixo: true, // "Desenvolvido por" antes da marca
+  prefixo: 'Desenvolvido por',
+  redes: { instagram: '', facebook: '', whatsapp: '', twitter: '' },
 };
+const REDES = ['instagram', 'facebook', 'whatsapp', 'twitter'];
 const EXIBICOES = ['nome', 'logo', 'logo_e_nome'];
 const TAMANHOS  = ['pequeno', 'medio', 'grande'];
 
@@ -48,10 +52,28 @@ function urlHttp(v) {
   } catch { return null; }
 }
 
+// Aceita o endereço completo, o @usuário ou só o nome/número e devolve o link https.
+// Retorna '' (vazio), um link, ou null (inválido).
+function normalizarRede(rede, bruto) {
+  const t = texto(bruto, 300);
+  if (!t) return '';
+  if (rede === 'whatsapp') {
+    if (/^https?:\/\//i.test(t) || /^(wa\.me|api\.whatsapp\.com|chat\.whatsapp\.com)/i.test(t)) return urlHttp(t);
+    const d = t.replace(/\D/g, '');
+    if (d.length < 10 || d.length > 15) return null;
+    return `https://wa.me/${d.length <= 11 ? '55' + d : d}`;
+  }
+  if (/^https?:\/\//i.test(t) || /^(www\.)?[a-z0-9-]+\.[a-z]{2,}\//i.test(t)) return urlHttp(t);
+  const usuario = t.replace(/^@/, '');
+  if (!/^[A-Za-z0-9._-]{1,60}$/.test(usuario)) return null;
+  const base = { instagram: 'https://www.instagram.com/', facebook: 'https://www.facebook.com/', twitter: 'https://x.com/' }[rede];
+  return base + usuario;
+}
+
 function limpar(entrada) {
   const e = entrada && typeof entrada === 'object' ? entrada : {};
   const erros = [];
-  const cfg = { ...PADRAO };
+  const cfg = { ...PADRAO, redes: { ...PADRAO.redes } };
   if ('mostrar_marca' in e) cfg.mostrar_marca = e.mostrar_marca === true || e.mostrar_marca === 'true';
   if ('nome' in e) cfg.nome = texto(e.nome, 60);
   if ('link' in e) {
@@ -72,6 +94,16 @@ function limpar(entrada) {
     if (!TAMANHOS.includes(e.tamanho)) erros.push('Tamanho inválido.');
     else cfg.tamanho = e.tamanho;
   }
+  if ('mostrar_prefixo' in e) cfg.mostrar_prefixo = e.mostrar_prefixo === true || e.mostrar_prefixo === 'true';
+  if ('prefixo' in e) cfg.prefixo = texto(e.prefixo, 30);
+  if (e.redes && typeof e.redes === 'object') {
+    for (const r of REDES) {
+      if (!(r in e.redes)) continue;
+      const v = normalizarRede(r, e.redes[r]);
+      if (v === null) erros.push(`Endereço de ${r === 'twitter' ? 'X (Twitter)' : r[0].toUpperCase() + r.slice(1)} inválido.`);
+      else cfg.redes = { ...cfg.redes, [r]: v };
+    }
+  }
   // Mostrar "só logo" sem logo, ou "só nome" sem nome, deixaria a marca vazia.
   if (cfg.exibicao === 'logo' && !cfg.logo_url) cfg.exibicao = 'nome';
   if (cfg.exibicao === 'logo_e_nome' && !cfg.logo_url) cfg.exibicao = 'nome';
@@ -80,7 +112,7 @@ function limpar(entrada) {
 
 async function ler(db) {
   const { data } = await db.from('config_sistema').select('valor').eq('chave', CHAVE).maybeSingle();
-  if (!data?.valor) return { ...PADRAO };
+  if (!data?.valor) return { ...PADRAO, redes: { ...PADRAO.redes } };
   try { return limpar(JSON.parse(data.valor)).config; } catch { return { ...PADRAO }; }
 }
 
