@@ -22,6 +22,13 @@ const { apagarAnterior } = require('../utils/storageLimpeza');
 const CHAVE = 'barra_sistema';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 
+const BLOCOS = ['licenca', 'boas_vindas', 'marca', 'redes', 'livre', 'versao'];
+const FONTES = ['padrao', 'serifada', 'mono', 'cursiva', 'arredondada', 'condensada'];
+const TEXTO_PADRAO = (t) => ({ ativa: false, texto: t, link: '', fonte: 'padrao', tamanho: 12, negrito: false, italico: false, sublinhado: false, cor: '', cor_escuro: '' });
+// Mensagens livres da barra: 'boas_vindas' (aceita {nome}) e 'livre' (texto e/ou link).
+const TEXTOS = { boas_vindas: 'Bem-vindo, {nome}!', livre: '' };
+const COR = /^#[0-9a-f]{6}$/i;
+const bool = (v) => v === true || v === 'true';
 const PADRAO = {
   mostrar_marca: true,
   nome: 'Lucas J. Systems',
@@ -32,12 +39,14 @@ const PADRAO = {
   mostrar_prefixo: true, // "Desenvolvido por" antes da marca
   prefixo: 'Desenvolvido por',
   redes: { instagram: '', facebook: '', whatsapp: '', twitter: '' },
-  ordem_blocos: ['licenca', 'marca', 'redes'],
+  ordem_blocos: ['licenca', 'boas_vindas', 'marca', 'redes', 'livre', 'versao'],
   ordem_redes: ['instagram', 'facebook', 'whatsapp', 'twitter'],
   ordem_botoes: ['fale_conosco', 'tema', 'sair'],
+  textos: { boas_vindas: TEXTO_PADRAO('Bem-vindo, {nome}!'), livre: TEXTO_PADRAO('') },
+  mostrar_versao: false,
+  versao: '', // vazio = usa a identificação automática do build
 };
 const BOTOES = ['fale_conosco', 'tema', 'sair'];
-const BLOCOS = ['licenca', 'marca', 'redes'];
 // Aceita só itens válidos, sem repetir, e completa o que faltar no fim.
 function ordenar(lista, validos) {
   const l = Array.isArray(lista) ? lista.filter((x, i) => validos.includes(x) && lista.indexOf(x) === i) : [];
@@ -83,7 +92,7 @@ function normalizarRede(rede, bruto) {
 function limpar(entrada) {
   const e = entrada && typeof entrada === 'object' ? entrada : {};
   const erros = [];
-  const cfg = { ...PADRAO, redes: { ...PADRAO.redes }, ordem_blocos: [...PADRAO.ordem_blocos], ordem_redes: [...PADRAO.ordem_redes], ordem_botoes: [...PADRAO.ordem_botoes] };
+  const cfg = { ...PADRAO, redes: { ...PADRAO.redes }, ordem_blocos: [...PADRAO.ordem_blocos], ordem_redes: [...PADRAO.ordem_redes], ordem_botoes: [...PADRAO.ordem_botoes], textos: { boas_vindas: { ...PADRAO.textos.boas_vindas }, livre: { ...PADRAO.textos.livre } } };
   if ('mostrar_marca' in e) cfg.mostrar_marca = e.mostrar_marca === true || e.mostrar_marca === 'true';
   if ('nome' in e) cfg.nome = texto(e.nome, 60);
   if ('link' in e) {
@@ -109,6 +118,32 @@ function limpar(entrada) {
   cfg.ordem_blocos = ordenar(e.ordem_blocos, BLOCOS);
   cfg.ordem_redes = ordenar(e.ordem_redes, REDES);
   cfg.ordem_botoes = ordenar(e.ordem_botoes, BOTOES);
+  if ('mostrar_versao' in e) cfg.mostrar_versao = bool(e.mostrar_versao);
+  if ('versao' in e) cfg.versao = texto(e.versao, 30);
+  if (e.textos && typeof e.textos === 'object') {
+    const textos = {};
+    for (const k of Object.keys(TEXTOS)) {
+      const t = e.textos[k] && typeof e.textos[k] === 'object' ? e.textos[k] : {};
+      const item = TEXTO_PADRAO(TEXTOS[k]);
+      if ('ativa' in t) item.ativa = bool(t.ativa);
+      if ('texto' in t) item.texto = texto(t.texto, 140);
+      if ('link' in t) {
+        const l = urlHttp(t.link);
+        if (l === null) erros.push('Link da mensagem inválido. Use um endereço http:// ou https://.');
+        else item.link = l;
+      }
+      if ('fonte' in t) item.fonte = FONTES.includes(t.fonte) ? t.fonte : 'padrao';
+      if ('tamanho' in t) { const n = parseInt(t.tamanho, 10); item.tamanho = n >= 10 && n <= 20 ? n : 12; }
+      item.negrito = bool(t.negrito); item.italico = bool(t.italico); item.sublinhado = bool(t.sublinhado);
+      for (const c of ['cor', 'cor_escuro']) {
+        const v = texto(t[c], 7);
+        if (v && !COR.test(v)) erros.push('Cor inválida. Use o formato #RRGGBB.');
+        else item[c] = v.toLowerCase();
+      }
+      textos[k] = item;
+    }
+    cfg.textos = textos;
+  }
   if (e.redes && typeof e.redes === 'object') {
     for (const r of REDES) {
       if (!(r in e.redes)) continue;
