@@ -32,7 +32,15 @@ const PADRAO = {
   mostrar_prefixo: true, // "Desenvolvido por" antes da marca
   prefixo: 'Desenvolvido por',
   redes: { instagram: '', facebook: '', whatsapp: '', twitter: '' },
+  ordem_blocos: ['licenca', 'marca', 'redes'],
+  ordem_redes: ['instagram', 'facebook', 'whatsapp', 'twitter'],
 };
+const BLOCOS = ['licenca', 'marca', 'redes'];
+// Aceita só itens válidos, sem repetir, e completa o que faltar no fim.
+function ordenar(lista, validos) {
+  const l = Array.isArray(lista) ? lista.filter((x, i) => validos.includes(x) && lista.indexOf(x) === i) : [];
+  return [...l, ...validos.filter(x => !l.includes(x))];
+}
 const REDES = ['instagram', 'facebook', 'whatsapp', 'twitter'];
 const EXIBICOES = ['nome', 'logo', 'logo_e_nome'];
 const TAMANHOS  = ['pequeno', 'medio', 'grande'];
@@ -73,7 +81,7 @@ function normalizarRede(rede, bruto) {
 function limpar(entrada) {
   const e = entrada && typeof entrada === 'object' ? entrada : {};
   const erros = [];
-  const cfg = { ...PADRAO, redes: { ...PADRAO.redes } };
+  const cfg = { ...PADRAO, redes: { ...PADRAO.redes }, ordem_blocos: [...PADRAO.ordem_blocos], ordem_redes: [...PADRAO.ordem_redes] };
   if ('mostrar_marca' in e) cfg.mostrar_marca = e.mostrar_marca === true || e.mostrar_marca === 'true';
   if ('nome' in e) cfg.nome = texto(e.nome, 60);
   if ('link' in e) {
@@ -96,6 +104,8 @@ function limpar(entrada) {
   }
   if ('mostrar_prefixo' in e) cfg.mostrar_prefixo = e.mostrar_prefixo === true || e.mostrar_prefixo === 'true';
   if ('prefixo' in e) cfg.prefixo = texto(e.prefixo, 30);
+  cfg.ordem_blocos = ordenar(e.ordem_blocos, BLOCOS);
+  cfg.ordem_redes = ordenar(e.ordem_redes, REDES);
   if (e.redes && typeof e.redes === 'object') {
     for (const r of REDES) {
       if (!(r in e.redes)) continue;
