@@ -15,6 +15,7 @@ const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
 const multer = require("multer");
 const { otimizarImagem } = require("../utils/otimizarImagem");
 const { apagarAnterior } = require("../utils/storageLimpeza");
+const { erroTelefone, erroTelefones, erroFormatoEmail } = require('../utils/contato');
 
 // Foto do operador: teto de 5 MB na entrada; o servidor reduz pra ~400 px / ≤ 80 KB.
 const uploadFoto = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
@@ -100,6 +101,8 @@ router.post("/criar", limiteAcaoSensivel, async (req, res) => {
       { nome: LIMITES.NOME, email: LIMITES.EMAIL, telefone: LIMITES.TELEFONE, senha: LIMITES.SENHA }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone');
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     const erroDominio = await erroEmail(email);
     if (erroDominio) return res.status(400).json({ error: erroDominio });
@@ -214,6 +217,8 @@ router.put("/:id", async (req, res) => {
       { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, email: LIMITES.EMAIL }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone');
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     // O e-mail do operador é o e-mail com que ele ENTRA no sistema.
     // 05/10/2026: antes só o cadastro mudava e ele seguia entrando com o

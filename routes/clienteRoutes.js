@@ -17,6 +17,8 @@ const { verificarPermissao } = require('../middlewares/verificarPermissao');
 const { PERMISSOES } = require('../utils/permissoes');
 const { buscarTimezone, inicioDiaTZ, fimDiaTZ } = require('../utils/fusoHorario');
 const { renovarVencimentos } = require('../utils/vencimentoRecorrente');
+const { erroTelefone, erroTelefones, erroFormatoEmail } = require('../utils/contato');
+
 
 // Colunas novas (SQL 27) — enquanto a migration não rodou, o Postgres devolve
 // 42703 (coluna inexistente) e as rotas caem pro comportamento antigo.
@@ -238,6 +240,8 @@ router.post('/criar', verificarPermissao(
         { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, cpf: LIMITES.CPF_CNPJ }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone');
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     const erroLimite = await erroTeto(supabaseAdmin, 'clientes', req.user.mercearia_id);
     if (erroLimite) return res.status(400).json({ error: erroLimite });
@@ -687,6 +691,8 @@ router.put('/atualizar/:clienteId', verificarPermissao([PERMISSOES.CLIENTES, PER
         { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, cpf: LIMITES.CPF_CNPJ }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone');
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     try {
 

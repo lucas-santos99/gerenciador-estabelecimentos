@@ -10,6 +10,7 @@ const { buscarTimezone, hojeStrTZ } = require('../utils/fusoHorario');
 const { LIMITES, validarTamanhos } = require('../utils/limitesTexto');
 const { erroTeto, erroTetoDoBanco } = require('../utils/tetoCadastros');
 const { carimboCriacao, carimboAlteracao } = require('../utils/rastro');
+const { erroTelefone, erroTelefones, erroFormatoEmail } = require('../utils/contato');
 
 console.log('🔥 FORNECEDORES ROUTES ATUALIZADO 🔥');
 
@@ -304,6 +305,8 @@ router.post('/', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_ADICIONAR], 
     }
   );
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+  const erroContato = erroTelefone(telefone, 'Telefone') || erroTelefone(whatsapp, 'WhatsApp') || erroFormatoEmail(email, 'E-mail');
+  if (erroContato) return res.status(400).json({ error: erroContato });
 
   try {
     const { data, error } = await db
@@ -379,6 +382,8 @@ router.put('/:id', verificarPermissao([F.FORNECEDORES, F.FORNECEDORES_EDITAR], {
     }
   );
   if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+  const erroContato = erroTelefone(telefone, 'Telefone') || erroTelefone(whatsapp, 'WhatsApp') || erroFormatoEmail(email, 'E-mail');
+  if (erroContato) return res.status(400).json({ error: erroContato });
 
   try {
     const { data, error } = await db

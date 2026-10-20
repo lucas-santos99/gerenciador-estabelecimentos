@@ -17,6 +17,7 @@ const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
 const { erroEmail } = require("../utils/emailValido");
 const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
+const { erroTelefone, erroTelefones, erroFormatoEmail } = require('../utils/contato');
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
 // super_admin. Antes, listar operadores, detalhes, permissões (GET),
@@ -98,6 +99,8 @@ router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
       { nome: LIMITES.NOME, email: LIMITES.EMAIL, telefone: LIMITES.TELEFONE, senha: LIMITES.SENHA }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone');
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     const erroDominio = await erroEmail(email);
     if (erroDominio) return res.status(400).json({ error: erroDominio });
@@ -223,6 +226,8 @@ router.put("/:id", authUser, async (req, res) => {
       { nome: LIMITES.NOME, telefone: LIMITES.TELEFONE, email: LIMITES.EMAIL }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone');
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     const { data: atual, error: atualErr } = await db
       .from("operadores")

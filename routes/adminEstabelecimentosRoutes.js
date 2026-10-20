@@ -17,6 +17,7 @@ const somenteSuperAdmin = require("../middlewares/somenteSuperAdmin");
 const { erroSenhaFraca } = require("../utils/senha");
 const { erroEmail } = require("../utils/emailValido");
 const { carimboCriacao, carimboAlteracao } = require("../utils/rastro");
+const { erroTelefone, erroTelefones, erroFormatoEmail } = require('../utils/contato');
 
 // 🔒 22/09/2026 — TODAS as rotas deste arquivo exigem login + role
 // super_admin. Antes: listar, excluidas, /:id, /:id/liberacoes e
@@ -564,6 +565,8 @@ router.put("/:id", authUser, async (req, res) => {
       }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone principal') || erroTelefones(telefones_extras);
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     const { data: lojaAtual, error: errLojaAtual } = await db
       .from("mercearias")
@@ -860,6 +863,8 @@ router.post("/criar", authUser, limiteAcaoSensivel, async (req, res) => {
       }
     );
     if (erroTamanho) return res.status(400).json({ error: erroTamanho });
+    const erroContato = erroTelefone(telefone, 'Telefone principal') || erroTelefones(telefones_extras);
+    if (erroContato) return res.status(400).json({ error: erroContato });
 
     const erroDominio = await erroEmail(email_contato);
     if (erroDominio) return res.status(400).json({ error: erroDominio });
